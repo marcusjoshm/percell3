@@ -1,0 +1,98 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "percell3"
+version = "0.1.0"
+description = "Single-cell microscopy analysis platform built on OME-Zarr and SQLite"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Lee Lab"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # Core data layer
+    "zarr>=2.16,<3",
+    "ome-zarr>=0.8",
+    "numpy>=1.24",
+    "dask[array]>=2023.1",
+
+    # Image processing
+    "scikit-image>=0.21",
+    "scipy>=1.10",
+    "tifffile>=2023.7",
+
+    # Segmentation
+    "cellpose>=3.0",
+
+    # CLI
+    "click>=8.1",
+    "rich>=13.0",
+
+    # Data export
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+lif = [
+    "readlif>=0.6.4",
+]
+czi = [
+    "aicspylibczi>=3.1",
+]
+workflow = [
+    "networkx>=3.0",
+    "pyyaml>=6.0",
+]
+all = [
+    "percell3[lif,czi,workflow]",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "pytest-tmp-files>=0.0.2",
+    "ruff>=0.1",
+    "mypy>=1.5",
+    "percell3[all]",
+]
+
+[project.scripts]
+percell3 = "percell3.cli.main:cli"
+
+[project.entry-points."percell3.plugins"]
+intensity_grouping = "percell3.plugins.builtin.intensity_grouping:IntensityGroupingPlugin"
+colocalization = "percell3.plugins.builtin.colocalization:ColocalizationPlugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
