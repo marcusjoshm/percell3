@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+_MAX_PATTERN_LENGTH = 200
 
 
 @dataclass(frozen=True)
@@ -18,6 +21,24 @@ class TokenConfig:
     timepoint: str = r"_t(\d+)"
     z_slice: str = r"_z(\d+)"
     region: str | None = None
+
+    def __post_init__(self) -> None:
+        """Validate regex patterns are compilable and not excessively long."""
+        for field_name in ("channel", "timepoint", "z_slice", "region"):
+            pattern = getattr(self, field_name)
+            if pattern is None:
+                continue
+            if len(pattern) > _MAX_PATTERN_LENGTH:
+                raise ValueError(
+                    f"Token pattern '{field_name}' exceeds max length "
+                    f"{_MAX_PATTERN_LENGTH}"
+                )
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                raise ValueError(
+                    f"Invalid regex for '{field_name}': {e}"
+                ) from e
 
 
 @dataclass(frozen=True)
@@ -55,12 +76,25 @@ class ChannelMapping:
     color: str | None = None
 
 
+_VALID_Z_METHODS = frozenset({"mip", "sum", "mean", "keep", "slice"})
+
+
 @dataclass(frozen=True)
 class ZTransform:
     """How to handle Z-stacks."""
 
     method: str  # "mip", "sum", "mean", "keep", "slice"
     slice_index: int | None = None
+
+    def __post_init__(self) -> None:
+        """Validate method and slice_index at construction time."""
+        if self.method not in _VALID_Z_METHODS:
+            raise ValueError(
+                f"Invalid Z-transform method: {self.method!r}. "
+                f"Must be one of {sorted(_VALID_Z_METHODS)}"
+            )
+        if self.method == "slice" and self.slice_index is None:
+            raise ValueError("slice_index is required when method is 'slice'")
 
 
 @dataclass

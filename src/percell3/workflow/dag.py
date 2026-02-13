@@ -167,18 +167,6 @@ class WorkflowDAG:
 
         return order
 
-    def steps_ready(self, store: Any) -> list[str]:
-        """Return steps whose inputs are available in the store.
-
-        Args:
-            store: Object passed to step.can_run().
-        """
-        return [
-            name
-            for name, step in self._steps.items()
-            if step.can_run(store)
-        ]
-
     def get_step(self, name: str) -> WorkflowStep:
         """Get a step by name.
 

@@ -33,6 +33,22 @@ class TestTokenConfig:
         with pytest.raises(AttributeError):
             tc.channel = "new"  # type: ignore[misc]
 
+    def test_invalid_regex_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="Invalid regex"):
+            TokenConfig(channel=r"_ch([\d+")
+
+    def test_excessively_long_pattern_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="exceeds max length"):
+            TokenConfig(channel="a" * 201)
+
+    def test_none_region_skips_validation(self):
+        tc = TokenConfig(region=None)
+        assert tc.region is None
+
 
 class TestDiscoveredFile:
     def test_construction(self):
@@ -84,6 +100,27 @@ class TestZTransform:
     def test_slice(self):
         zt = ZTransform(method="slice", slice_index=5)
         assert zt.slice_index == 5
+
+    def test_all_valid_methods(self):
+        import pytest
+
+        for method in ("mip", "sum", "mean", "keep"):
+            zt = ZTransform(method=method)
+            assert zt.method == method
+        zt = ZTransform(method="slice", slice_index=0)
+        assert zt.method == "slice"
+
+    def test_invalid_method_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="Invalid Z-transform method"):
+            ZTransform(method="invalid")
+
+    def test_slice_without_index_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="slice_index is required"):
+            ZTransform(method="slice")
 
 
 class TestImportPlan:

@@ -36,6 +36,7 @@ class WorkflowState:
 
     def __init__(self, store: Any) -> None:
         self._db_path = Path(store.db_path)
+        self._conn = sqlite3.connect(str(self._db_path))
         self._ensure_table()
 
     @classmethod
@@ -52,11 +53,18 @@ class WorkflowState:
         holder = _Holder(db_path=Path(db_path))
         return cls(holder)
 
+    def close(self) -> None:
+        """Close the cached database connection."""
+        if self._conn:
+            self._conn.close()
+            self._conn = None  # type: ignore[assignment]
+
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(self._db_path))
+        return self._conn
 
     def _ensure_table(self) -> None:
-        with self._connect() as conn:
+        conn = self._connect()
+        with conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS workflow_steps (
@@ -90,7 +98,8 @@ class WorkflowState:
         """
         now = datetime.now().isoformat()
         started = started_at or now
-        with self._connect() as conn:
+        conn = self._connect()
+        with conn:
             conn.execute(
                 """
                 INSERT INTO workflow_steps
@@ -111,16 +120,16 @@ class WorkflowState:
 
     def get_step_history(self, step_name: str) -> list[StepExecution]:
         """Get execution history for a step, ordered newest first."""
-        with self._connect() as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                """
-                SELECT * FROM workflow_steps
-                WHERE step_name = ?
-                ORDER BY id DESC
-                """,
-                (step_name,),
-            ).fetchall()
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT * FROM workflow_steps
+            WHERE step_name = ?
+            ORDER BY id DESC
+            """,
+            (step_name,),
+        ).fetchall()
 
         return [self._row_to_execution(row) for row in rows]
 

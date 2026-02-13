@@ -93,6 +93,43 @@ class TestScanEdgeCases:
         assert any("Inconsistent shapes" in w for w in result.warnings)
 
 
+class TestSymlinkGuard:
+    def test_symlinked_tiff_file_skipped(self, tmp_path):
+        d = tmp_path / "data"
+        d.mkdir()
+        tifffile.imwrite(str(d / "real_ch00.tif"), np.zeros((32, 32), dtype=np.uint16))
+
+        # Create symlink to a TIFF outside the directory
+        external = tmp_path / "external.tif"
+        tifffile.imwrite(str(external), np.zeros((32, 32), dtype=np.uint16))
+        (d / "link_ch01.tif").symlink_to(external)
+
+        scanner = FileScanner()
+        result = scanner.scan(d)
+        # Only the real file, not the symlink
+        assert len(result.files) == 1
+        assert result.channels == ["00"]
+
+    def test_symlinked_directory_not_followed(self, tmp_path):
+        d = tmp_path / "data"
+        d.mkdir()
+        tifffile.imwrite(str(d / "img_ch00.tif"), np.zeros((32, 32), dtype=np.uint16))
+
+        # Create subdirectory with a TIFF, then symlink it
+        external_dir = tmp_path / "external_dir"
+        external_dir.mkdir()
+        tifffile.imwrite(
+            str(external_dir / "extra_ch01.tif"),
+            np.zeros((32, 32), dtype=np.uint16),
+        )
+        (d / "linked_dir").symlink_to(external_dir)
+
+        scanner = FileScanner()
+        result = scanner.scan(d)
+        # Should only find the real file, not files through symlinked dir
+        assert len(result.files) == 1
+
+
 class TestCustomTokenConfig:
     def test_custom_channel_pattern(self, tmp_path):
         d = tmp_path / "custom"

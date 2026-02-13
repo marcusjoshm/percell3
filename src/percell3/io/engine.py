@@ -19,7 +19,7 @@ from percell3.io.models import (
 )
 from percell3.io.scanner import FileScanner
 from percell3.io.tiff import read_tiff
-from percell3.io.transforms import apply_z_transform
+from percell3.io.transforms import apply_z_transform, project_mip, project_mean, project_sum
 
 
 class ImportEngine:
@@ -78,7 +78,7 @@ class ImportEngine:
             pass
 
         # Group files by region
-        region_files = self._group_by_region(scan_result.files)
+        region_files = _group_by_token(scan_result.files, "region", "default")
 
         # Determine pixel size
         pixel_size = plan.pixel_size_um or scan_result.pixel_size_um
@@ -104,7 +104,7 @@ class ImportEngine:
                 continue
 
             # Group by channel
-            channel_files = self._group_by_channel(files)
+            channel_files = _group_by_token(files, "channel", "0")
 
             # Determine image dimensions from first file
             first_file = files[0]
@@ -134,7 +134,7 @@ class ImportEngine:
                     data = read_tiff(ch_files[0].path)
                     if data.ndim > 2:
                         # Multi-page TIFF — apply projection
-                        data = apply_z_transform_array(data, plan.z_transform)
+                        data = _project_array(data, plan.z_transform)
 
                 store.write_image(region_name, condition, ch_name, data)
                 images_written += 1
@@ -167,26 +167,6 @@ class ImportEngine:
                 return m
         return None
 
-    def _group_by_region(
-        self, files: list[DiscoveredFile]
-    ) -> dict[str, list[DiscoveredFile]]:
-        """Group discovered files by region token."""
-        groups: dict[str, list[DiscoveredFile]] = defaultdict(list)
-        for f in files:
-            region = f.tokens.get("region", "default")
-            groups[region].append(f)
-        return dict(groups)
-
-    def _group_by_channel(
-        self, files: list[DiscoveredFile]
-    ) -> dict[str, list[DiscoveredFile]]:
-        """Group files by channel token."""
-        groups: dict[str, list[DiscoveredFile]] = defaultdict(list)
-        for f in files:
-            channel = f.tokens.get("channel", "0")
-            groups[channel].append(f)
-        return dict(groups)
-
     def _group_by_z(
         self, files: list[DiscoveredFile]
     ) -> dict[str, Path]:
@@ -199,12 +179,29 @@ class ImportEngine:
         return z_map
 
 
-def apply_z_transform_array(data: "np.ndarray", transform: ZTransform) -> "np.ndarray":
-    """Apply Z-transform to an already-loaded 3D array."""
-    import numpy as np
+def _group_by_token(
+    files: list[DiscoveredFile], key: str, default: str,
+) -> dict[str, list[DiscoveredFile]]:
+    """Group discovered files by a token key."""
+    groups: dict[str, list[DiscoveredFile]] = defaultdict(list)
+    for f in files:
+        groups[f.tokens.get(key, default)].append(f)
+    return dict(groups)
 
-    from percell3.io.transforms import project_mean, project_mip, project_sum
 
+def _project_array(data: "np.ndarray", transform: ZTransform) -> "np.ndarray":
+    """Apply Z-transform to an already-loaded 3D array.
+
+    Args:
+        data: 3D array (Z, Y, X).
+        transform: How to combine the Z-slices.
+
+    Returns:
+        2D array (Y, X).
+
+    Raises:
+        ValueError: If transform method is unknown or slice_index is invalid.
+    """
     if transform.method == "mip":
         return project_mip(data)
     if transform.method == "sum":
@@ -212,7 +209,12 @@ def apply_z_transform_array(data: "np.ndarray", transform: ZTransform) -> "np.nd
     if transform.method == "mean":
         return project_mean(data)
     if transform.method == "slice":
-        idx = transform.slice_index or 0
-        return data[idx]
-    # Default: MIP
-    return project_mip(data)
+        if transform.slice_index is None:
+            raise ValueError("slice_index is required when method is 'slice'")
+        if transform.slice_index < 0 or transform.slice_index >= data.shape[0]:
+            raise ValueError(
+                f"slice_index {transform.slice_index} out of range "
+                f"(0-{data.shape[0] - 1})"
+            )
+        return data[transform.slice_index]
+    raise ValueError(f"Unknown Z-transform method: {transform.method!r}")

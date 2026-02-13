@@ -1,9 +1,12 @@
 """Tests for percell3.io.tiff."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
+import pytest
 import tifffile
+from defusedxml import EntitiesForbidden
 
 from percell3.io.tiff import read_tiff, read_tiff_metadata
 
@@ -33,6 +36,33 @@ class TestReadTiff:
 
         result = read_tiff(p)
         assert result.dtype == np.float32
+
+
+class TestXXEProtection:
+    def test_entity_expansion_rejected(self, tmp_path):
+        """OME-XML with entity expansion must be rejected by defusedxml."""
+        hostile_xml = (
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE foo ['
+            '  <!ENTITY xxe "AAAA">'
+            ']>'
+            '<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">'
+            '  <Pixels PhysicalSizeX="&xxe;" />'
+            '</OME>'
+        )
+        # Write a plain TIFF, then mock ome_metadata to return hostile XML
+        data = np.zeros((32, 32), dtype=np.uint16)
+        p = tmp_path / "hostile.tif"
+        tifffile.imwrite(str(p), data)
+
+        with tifffile.TiffFile(str(p)) as tif:
+            with patch.object(type(tif), "ome_metadata", new_callable=lambda: property(lambda self: hostile_xml)):
+                # _extract_pixel_size catches the exception and returns None
+                # but we want to verify defusedxml rejects it at the fromstring level
+                from defusedxml.ElementTree import fromstring as safe_fromstring
+
+                with pytest.raises(EntitiesForbidden):
+                    safe_fromstring(hostile_xml)
 
 
 class TestReadTiffMetadata:

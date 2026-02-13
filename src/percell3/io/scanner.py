@@ -105,9 +105,14 @@ class FileScanner:
         )
 
     def _find_tiffs(self, path: Path) -> list[Path]:
-        """Walk directory tree for TIFF files."""
+        """Walk directory tree for TIFF files.
+
+        Symlinks are skipped to prevent directory escape and circular loops.
+        """
         results = []
         for child in path.rglob("*"):
+            if child.is_symlink():
+                continue
             if child.is_file() and child.suffix.lower() in self.TIFF_EXTENSIONS:
                 results.append(child)
         return results

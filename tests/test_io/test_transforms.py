@@ -37,8 +37,21 @@ class TestProjectSum:
             [[5, 6], [7, 8]],
         ], dtype=np.uint16)
         result = project_sum(stack)
-        expected = np.array([[6, 8], [10, 12]], dtype=np.uint16)
+        expected = np.array([[6, 8], [10, 12]], dtype=np.int64)
         np.testing.assert_array_equal(result, expected)
+        assert result.dtype == np.int64
+
+    def test_no_overflow_uint16(self):
+        """Sum of uint16 values that would overflow without int64 accumulator."""
+        stack = np.full((100, 2, 2), 60000, dtype=np.uint16)
+        result = project_sum(stack)
+        assert result[0, 0] == 6_000_000
+        assert result.dtype == np.int64
+
+    def test_float_preserves_dtype(self):
+        stack = np.ones((3, 4, 4), dtype=np.float32) * 1.5
+        result = project_sum(stack)
+        assert result.dtype == np.float32
 
 
 class TestProjectMean:
@@ -88,19 +101,13 @@ class TestApplyZTransform:
         with pytest.raises(ValueError, match="out of range"):
             apply_z_transform([p], ZTransform(method="slice", slice_index=5))
 
-    def test_slice_requires_index(self, tmp_path):
-        p = tmp_path / "z00.tif"
-        tifffile.imwrite(str(p), np.zeros((8, 8), dtype=np.uint16))
-
+    def test_slice_requires_index(self):
         with pytest.raises(ValueError, match="slice_index is required"):
-            apply_z_transform([p], ZTransform(method="slice"))
+            ZTransform(method="slice")
 
-    def test_unknown_method_raises(self, tmp_path):
-        p = tmp_path / "z00.tif"
-        tifffile.imwrite(str(p), np.zeros((8, 8), dtype=np.uint16))
-
-        with pytest.raises(ValueError, match="Unknown"):
-            apply_z_transform([p], ZTransform(method="invalid"))
+    def test_unknown_method_raises(self):
+        with pytest.raises(ValueError, match="Invalid Z-transform method"):
+            ZTransform(method="invalid")
 
     def test_mean(self, tmp_path):
         slices = []

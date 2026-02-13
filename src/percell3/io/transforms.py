@@ -29,9 +29,10 @@ def project_sum(stack: np.ndarray) -> np.ndarray:
         stack: 3D array (Z, Y, X).
 
     Returns:
-        2D array (Y, X). dtype matches input for integer types,
-        uses larger type to avoid overflow.
+        2D array (Y, X). Uses int64 for integer inputs to prevent overflow.
     """
+    if np.issubdtype(stack.dtype, np.integer):
+        return np.sum(stack, axis=0, dtype=np.int64)
     return np.sum(stack, axis=0)
 
 
@@ -73,15 +74,25 @@ def apply_z_transform(
             )
         return read_tiff(z_files[transform.slice_index])
 
-    # Load all slices into a 3D stack
-    slices = [read_tiff(p) for p in z_files]
-    stack = np.stack(slices, axis=0)
+    # Streaming accumulation: only one slice in memory at a time
+    first = read_tiff(z_files[0])
 
     if transform.method == "mip":
-        return project_mip(stack)
+        result = first.copy()
+        for p in z_files[1:]:
+            np.maximum(result, read_tiff(p), out=result)
+        return result
+
     if transform.method == "sum":
-        return project_sum(stack)
+        acc = first.astype(np.int64) if np.issubdtype(first.dtype, np.integer) else first.astype(np.float64)
+        for p in z_files[1:]:
+            acc += read_tiff(p)
+        return acc
+
     if transform.method == "mean":
-        return project_mean(stack)
+        acc = first.astype(np.float64)
+        for p in z_files[1:]:
+            acc += read_tiff(p)
+        return (acc / len(z_files)).astype(first.dtype)
 
     raise ValueError(f"Unknown Z-transform method: {transform.method!r}")

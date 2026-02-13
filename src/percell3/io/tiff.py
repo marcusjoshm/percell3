@@ -54,9 +54,9 @@ def _extract_pixel_size(tif: tifffile.TiffFile) -> float | None:
     # 1. Try OME-XML
     if tif.ome_metadata:
         try:
-            import xml.etree.ElementTree as ET
+            from defusedxml.ElementTree import fromstring as safe_fromstring
 
-            root = ET.fromstring(tif.ome_metadata)
+            root = safe_fromstring(tif.ome_metadata)
             ns = {"ome": "http://www.openmicroscopy.org/Schemas/OME/2016-06"}
             pixels = root.find(".//ome:Pixels", ns)
             if pixels is None:
