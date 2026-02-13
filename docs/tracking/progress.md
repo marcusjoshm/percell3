@@ -4,8 +4,8 @@
 
 | Sprint | Module | Status | Milestone |
 |--------|--------|--------|-----------|
-| 1 | Core (ExperimentStore) | Not Started | Can store and retrieve images |
-| 2 | IO (Format Readers) | Not Started | Can import real data |
+| 1 | Core (ExperimentStore) | Complete | Can store and retrieve images |
+| 2 | IO (Format Readers) | Complete | Can import real data |
 | 3 | Segment (Cellpose) | Not Started | Can segment cells |
 | 4 | Measure (Metrics) | Not Started | Can measure anything |
 | 5a | Plugins | Not Started | Can extend with plugins |
@@ -16,18 +16,18 @@
 ## Milestone Checklists
 
 ### M1: Can store and retrieve images
-- [ ] ExperimentStore.create() works
-- [ ] ExperimentStore.open() works
-- [ ] Can add channels, conditions, regions
-- [ ] Can write numpy array as OME-Zarr
-- [ ] Can read back as dask array
-- [ ] SQLite schema created with WAL mode
+- [x] ExperimentStore.create() works
+- [x] ExperimentStore.open() works
+- [x] Can add channels, conditions, regions
+- [x] Can write numpy array as OME-Zarr
+- [x] Can read back as dask array
+- [x] SQLite schema created with WAL mode
 
 ### M2: Can import real data
 - [ ] LIF reader imports multi-series files
-- [ ] TIFF directory reader imports PerCell 2 layout
-- [ ] Channel names and pixel sizes extracted from metadata
-- [ ] All data written via ExperimentStore API
+- [x] TIFF directory reader imports PerCell 2 layout
+- [x] Channel names and pixel sizes extracted from metadata
+- [x] All data written via ExperimentStore API
 
 ### M3: Can segment cells
 - [ ] Cellpose adapter runs on any channel

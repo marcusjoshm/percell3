@@ -273,34 +273,34 @@ Files: `__init__.py`, `conftest.py`
 ## Acceptance Criteria
 
 ### Functional
-- [ ] `FileScanner.scan()` discovers TIFF files and parses tokens correctly
-- [ ] `ScanResult` shows channels, regions, timepoints, z-slices found
-- [ ] `ImportEngine.execute()` writes all images into ExperimentStore
-- [ ] Channel mapping works (rename ch00 → "DAPI")
-- [ ] Region renaming works
-- [ ] Z-projection (MIP, sum, mean, slice) produces correct 2D output
-- [ ] Incremental imports: add regions/timepoints to existing experiment
-- [ ] Duplicate detection: skip existing regions with warning
-- [ ] `ImportPlan.to_yaml()` / `from_yaml()` round-trips correctly
-- [ ] Progress callback fires with correct counts
+- [x] `FileScanner.scan()` discovers TIFF files and parses tokens correctly
+- [x] `ScanResult` shows channels, regions, timepoints, z-slices found
+- [x] `ImportEngine.execute()` writes all images into ExperimentStore
+- [x] Channel mapping works (rename ch00 → "DAPI")
+- [x] Region renaming works
+- [x] Z-projection (MIP, sum, mean, slice) produces correct 2D output
+- [x] Incremental imports: add regions/timepoints to existing experiment
+- [x] Duplicate detection: skip existing regions with warning
+- [x] `ImportPlan.to_yaml()` / `from_yaml()` round-trips correctly
+- [x] Progress callback fires with correct counts
 
 ### Data Safety
-- [ ] Names sanitized before passing to ExperimentStore
-- [ ] 3D arrays never passed to `write_image()` — always projected first
-- [ ] Invalid source paths raise clear errors early
-- [ ] Empty directories produce meaningful error, not crash
+- [x] Names sanitized before passing to ExperimentStore
+- [x] 3D arrays never passed to `write_image()` — always projected first
+- [x] Invalid source paths raise clear errors early
+- [x] Empty directories produce meaningful error, not crash
 
 ### Quality
-- [ ] Type hints on all public functions
-- [ ] Google-style docstrings
-- [ ] Frozen dataclasses for value objects
-- [ ] All `X | None` style (no `Optional[X]`)
-- [ ] No direct Zarr/SQLite access — all through ExperimentStore
+- [x] Type hints on all public functions
+- [x] Google-style docstrings
+- [x] Frozen dataclasses for value objects
+- [x] All `X | None` style (no `Optional[X]`)
+- [x] No direct Zarr/SQLite access — all through ExperimentStore
 
 ### Testing
-- [ ] All existing 204 tests still pass
-- [ ] ~60 new IO module tests
-- [ ] Total test count ~265
+- [x] All existing 204 tests still pass
+- [x] ~60 new IO module tests (80 actual)
+- [x] Total test count ~265 (284 actual)
 
 ## Dependencies & Risks
 
