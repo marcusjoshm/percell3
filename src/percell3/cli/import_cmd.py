@@ -1,0 +1,164 @@
+"""percell3 import — import TIFF images into an experiment."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import click
+from rich.table import Table
+
+from percell3.cli.utils import console, error_handler, make_progress, open_experiment
+from percell3.io import (
+    ChannelMapping,
+    FileScanner,
+    ImportEngine,
+    ImportPlan,
+    TokenConfig,
+    ZTransform,
+)
+
+
+@click.command("import")
+@click.argument("source", type=click.Path(exists=True))
+@click.option(
+    "-e", "--experiment", required=True, type=click.Path(),
+    help="Path to the .percell experiment.",
+)
+@click.option(
+    "-c", "--condition", default="default",
+    help="Condition name for imported images.",
+)
+@click.option(
+    "--channel-map", multiple=True,
+    help="Channel mapping, e.g. '00:DAPI'. Can be repeated.",
+)
+@click.option(
+    "--z-projection",
+    type=click.Choice(["mip", "sum", "mean", "keep"]),
+    default="mip",
+    help="Z-stack projection method.",
+)
+@click.option(
+    "--yes", "-y", is_flag=True,
+    help="Skip confirmation prompt.",
+)
+@error_handler
+def import_cmd(
+    source: str,
+    experiment: str,
+    condition: str,
+    channel_map: tuple[str, ...],
+    z_projection: str,
+    yes: bool,
+) -> None:
+    """Import TIFF images into an experiment."""
+    store = open_experiment(experiment)
+    try:
+        _run_import(store, source, condition, channel_map, z_projection, yes)
+    finally:
+        store.close()
+
+
+def _run_import(
+    store: "ExperimentStore",
+    source: str,
+    condition: str,
+    channel_map: tuple[str, ...],
+    z_projection: str,
+    yes: bool,
+) -> None:
+    """Core import logic shared by CLI and interactive menu."""
+    # Scan source directory
+    scanner = FileScanner()
+    scan_result = scanner.scan(Path(source))
+
+    # Show preview
+    _show_preview(scan_result, source)
+
+    # Confirm
+    if not yes:
+        if not click.confirm("Proceed with import?"):
+            console.print("[yellow]Import cancelled.[/yellow]")
+            return
+
+    # Build channel mappings
+    mappings = _parse_channel_maps(channel_map)
+
+    # Build import plan
+    plan = ImportPlan(
+        source_path=Path(source),
+        condition=condition,
+        channel_mappings=mappings,
+        region_names={},
+        z_transform=ZTransform(method=z_projection),
+        pixel_size_um=scan_result.pixel_size_um,
+        token_config=TokenConfig(),
+    )
+
+    # Execute with progress
+    engine = ImportEngine()
+    with make_progress() as progress:
+        task = progress.add_task("Importing images...", total=None)
+
+        def on_progress(current: int, total: int, region_name: str) -> None:
+            progress.update(task, total=total, completed=current,
+                            description=f"Importing {region_name}")
+
+        result = engine.execute(plan, store, progress_callback=on_progress)
+
+    # Show result
+    console.print(f"\n[green]Import complete![/green]")
+    console.print(f"  Regions imported: {result.regions_imported}")
+    console.print(f"  Channels registered: {result.channels_registered}")
+    console.print(f"  Images written: {result.images_written}")
+    if result.skipped:
+        console.print(f"  Skipped: {result.skipped}")
+    if result.warnings:
+        for w in result.warnings:
+            console.print(f"  [yellow]Warning:[/yellow] {w}")
+    console.print(f"  Elapsed: {result.elapsed_seconds}s")
+
+
+def _show_preview(scan_result: "ScanResult", source: str) -> None:
+    """Display a preview table of what will be imported."""
+    console.print(f"\n[bold]Scan results for[/bold] {source}\n")
+
+    table = Table(show_header=True)
+    table.add_column("Property", style="bold")
+    table.add_column("Value")
+
+    table.add_row("Files found", str(len(scan_result.files)))
+    table.add_row("Channels", ", ".join(scan_result.channels) or "none")
+    table.add_row("Regions", ", ".join(scan_result.regions) or "default")
+    table.add_row("Timepoints", ", ".join(scan_result.timepoints) or "none")
+    table.add_row("Z-slices", ", ".join(scan_result.z_slices) or "none")
+
+    if scan_result.files:
+        first = scan_result.files[0]
+        table.add_row("Image shape", f"{first.shape[0]} x {first.shape[1]}")
+        table.add_row("Data type", first.dtype)
+
+    if scan_result.pixel_size_um:
+        table.add_row("Pixel size", f"{scan_result.pixel_size_um} \u00b5m")
+
+    console.print(table)
+
+    if scan_result.warnings:
+        for w in scan_result.warnings:
+            console.print(f"  [yellow]Warning:[/yellow] {w}")
+    console.print()
+
+
+def _parse_channel_maps(maps: tuple[str, ...]) -> list[ChannelMapping]:
+    """Parse channel map strings like '00:DAPI' into ChannelMapping objects."""
+    mappings: list[ChannelMapping] = []
+    for m in maps:
+        if ":" not in m:
+            console.print(
+                f"[red]Error:[/red] Invalid channel map '{m}'. "
+                "Expected format: 'token:name' (e.g., '00:DAPI')"
+            )
+            raise SystemExit(1)
+        token, name = m.split(":", 1)
+        mappings.append(ChannelMapping(token_value=token.strip(), name=name.strip()))
+    return mappings
