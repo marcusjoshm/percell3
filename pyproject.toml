@@ -54,7 +54,6 @@ czi = [
     "aicspylibczi>=3.1",
 ]
 workflow = [
-    "networkx>=3.0",
     "pyyaml>=6.0",
 ]
 all = [
