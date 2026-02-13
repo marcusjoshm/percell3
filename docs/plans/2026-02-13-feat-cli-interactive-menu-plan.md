@@ -166,7 +166,7 @@ In interactive menu mode, import follows this flow:
 - [x] Implement preview table showing scan results (Rich Table)
 - [x] Implement progress callback for Rich Progress bar
 - [x] Parse `--channel-map` format (`"00:DAPI"` → `ChannelMapping`)
-- [ ] Add optional folder picker via `tkinter.filedialog.askdirectory()`
+- [x] Add optional folder picker via `tkinter.filedialog.askdirectory()`
 - [x] Create `tests/test_cli/test_import.py` — success, no TIFFs, bad path, help text
 - [x] Test channel mapping parsing
 
@@ -235,11 +235,11 @@ def workflow_run(name, experiment):
     """Run a preset or custom workflow."""
 ```
 
-- [ ] Create `src/percell3/cli/workflow.py` with `list` and `run` subcommands
-- [ ] List preset workflows from `percell3.workflow.defaults`
-- [ ] Execute workflows with Rich progress (step-by-step status)
-- [ ] Show workflow results table when complete
-- [ ] Create `tests/test_cli/test_workflow.py` — list, run import workflow
+- [x] Create `src/percell3/cli/workflow.py` with `list` and `run` subcommands
+- [x] List preset workflows from `percell3.workflow.defaults`
+- [x] Execute workflows with Rich progress (step-by-step status)
+- [x] Show workflow results table when complete
+- [x] Create `tests/test_cli/test_workflow.py` — list, run import workflow
 
 #### Phase 5: Interactive Menu (`main.py` menu loop)
 
@@ -280,15 +280,15 @@ def run_interactive_menu():
 
 Each `_interactive` function handles the prompts (experiment selection, confirmations) and then calls the Click command's underlying logic.
 
-- [ ] Implement `run_interactive_menu()` in `main.py`
-- [ ] Implement `show_menu_header()` showing current experiment info
-- [ ] Implement `select_experiment()` — open existing or create new
-- [ ] Wire menu items to interactive wrappers for each command
-- [ ] Implement folder picker integration (`tkinter.filedialog.askdirectory`)
-- [ ] Implement import preview/confirm flow in interactive mode
-- [ ] Implement channel rename prompts in interactive mode
-- [ ] Create `tests/test_cli/test_menu.py` — menu display, disabled items, quit
-- [ ] Test `percell3` launches menu (invoke_without_command)
+- [x] Implement `run_interactive_menu()` in `main.py`
+- [x] Implement `show_menu_header()` showing current experiment info
+- [x] Implement `select_experiment()` — open existing or create new
+- [x] Wire menu items to interactive wrappers for each command
+- [x] Implement folder picker integration (`tkinter.filedialog.askdirectory`)
+- [x] Implement import preview/confirm flow in interactive mode
+- [x] Implement channel rename prompts in interactive mode
+- [x] Create `tests/test_cli/test_menu.py` — menu display, disabled items, quit
+- [x] Test `percell3` launches menu (invoke_without_command)
 
 #### Phase 6: Stub Commands (`stubs.py`)
 
@@ -307,10 +307,10 @@ measure = _coming_soon("measure")
 threshold = _coming_soon("threshold")
 ```
 
-- [ ] Create `src/percell3/cli/stubs.py` with disabled commands
-- [ ] Register stubs in `main.py`
-- [ ] Create `tests/test_cli/test_stubs.py` — each stub prints message, exits 0
-- [ ] Test `percell3 --help` shows all commands including stubs
+- [x] Create `src/percell3/cli/stubs.py` with disabled commands
+- [x] Register stubs in `main.py`
+- [x] Create `tests/test_cli/test_stubs.py` — each stub prints message, exits 0
+- [x] Test `percell3 --help` shows all commands including stubs
 
 ## Acceptance Criteria
 

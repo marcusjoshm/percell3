@@ -8,6 +8,8 @@ from percell3.cli.create import create
 from percell3.cli.export import export
 from percell3.cli.import_cmd import import_cmd
 from percell3.cli.query import query
+from percell3.cli.stubs import measure, segment, threshold
+from percell3.cli.workflow import workflow
 
 
 @click.group(invoke_without_command=True)
@@ -25,4 +27,8 @@ def cli(ctx: click.Context) -> None:
 cli.add_command(create)
 cli.add_command(export)
 cli.add_command(import_cmd)
+cli.add_command(measure)
 cli.add_command(query)
+cli.add_command(segment)
+cli.add_command(threshold)
+cli.add_command(workflow)
