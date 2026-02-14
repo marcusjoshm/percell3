@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -13,6 +14,9 @@ if TYPE_CHECKING:
     from percell3.core import ExperimentStore
 
 console = Console()
+
+# Set by the --verbose flag on the top-level CLI group.
+verbose: bool = False
 
 
 def open_experiment(path: str) -> ExperimentStore:
@@ -41,6 +45,7 @@ def error_handler(func: Callable[..., Any]) -> Callable[..., Any]:
     """Decorator wrapping CLI commands with standard error handling.
 
     Catches ExperimentError (exit 1) and unexpected exceptions (exit 2).
+    With --verbose, unexpected errors include the full traceback.
     """
 
     @functools.wraps(func)
@@ -55,7 +60,14 @@ def error_handler(func: Callable[..., Any]) -> Callable[..., Any]:
             console.print(f"[red]Error:[/red] {e}")
             raise SystemExit(1)
         except Exception as e:
-            console.print(f"[red]Internal error:[/red] {e}")
+            if verbose:
+                console.print(f"[red]Internal error:[/red] {e}")
+                console.print(traceback.format_exc())
+            else:
+                console.print(
+                    f"[red]Internal error:[/red] {type(e).__name__}: {e}\n"
+                    "[dim]Use --verbose for the full traceback.[/dim]"
+                )
             raise SystemExit(2)
 
     return wrapper

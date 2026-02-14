@@ -89,7 +89,11 @@ def run_interactive_menu() -> None:
             _show_header(state)
             _show_menu(menu_items)
 
-            choice = Prompt.ask("\nSelect an option", default="q")
+            try:
+                choice = Prompt.ask("\nSelect an option", default="q")
+            except EOFError:
+                # Non-interactive (piped stdin) — exit cleanly.
+                break
 
             if choice == "q":
                 break
@@ -203,9 +207,9 @@ def _import_images(state: MenuState) -> None:
 
     source = Path(source_str)
 
-    # Scan and preview
-    from percell3.io import FileScanner, ImportPlan, ImportEngine, ZTransform, TokenConfig
-    from percell3.cli.import_cmd import _show_preview, _parse_channel_maps
+    # Scan for preview and interactive prompts
+    from percell3.io import FileScanner
+    from percell3.cli.import_cmd import _show_preview, _run_import
 
     scanner = FileScanner()
     try:
@@ -244,33 +248,8 @@ def _import_images(state: MenuState) -> None:
         console.print("[yellow]Import cancelled.[/yellow]")
         return
 
-    # Build plan and execute
-    mappings = _parse_channel_maps(channel_maps)
-    plan = ImportPlan(
-        source_path=source,
-        condition=condition,
-        channel_mappings=mappings,
-        region_names={},
-        z_transform=ZTransform(method=z_method),
-        pixel_size_um=scan_result.pixel_size_um,
-        token_config=TokenConfig(),
-    )
-
-    engine = ImportEngine()
-    with make_progress() as progress:
-        task = progress.add_task("Importing...", total=None)
-
-        def on_progress(current: int, total: int, region_name: str) -> None:
-            progress.update(task, total=total, completed=current,
-                            description=f"Importing {region_name}")
-
-        result = engine.execute(plan, store, progress_callback=on_progress)
-
-    console.print(f"\n[green]Import complete![/green]")
-    console.print(f"  Regions: {result.regions_imported}, Images: {result.images_written}")
-    if result.warnings:
-        for w in result.warnings:
-            console.print(f"  [yellow]Warning:[/yellow] {w}")
+    # Delegate to shared import pipeline (yes=True since we already confirmed)
+    _run_import(store, str(source), condition, channel_maps, z_method, yes=True)
 
 
 def _prompt_source_path() -> str | None:
@@ -311,6 +290,8 @@ def _prompt_source_path() -> str | None:
 
 def _query_experiment(state: MenuState) -> None:
     """Interactively query the experiment."""
+    from percell3.cli.query import format_output
+
     store = state.require_experiment()
 
     console.print("\n[bold]Query[/bold]")
@@ -329,41 +310,33 @@ def _query_experiment(state: MenuState) -> None:
         if not ch_list:
             console.print("[dim]No channels found.[/dim]")
             return
-        from rich.table import Table
-        table = Table(show_header=True, title="Channels")
-        table.add_column("Name", style="bold")
-        table.add_column("Role")
-        table.add_column("Color")
-        for ch in ch_list:
-            table.add_row(ch.name, ch.role or "", ch.color or "")
-        console.print(table)
+        rows = [{"name": ch.name, "role": ch.role or "", "color": ch.color or ""}
+                for ch in ch_list]
+        format_output(rows, ["name", "role", "color"], "table", "Channels")
 
     elif choice == "2":
         region_list = store.get_regions()
         if not region_list:
             console.print("[dim]No regions found.[/dim]")
             return
-        from rich.table import Table
-        table = Table(show_header=True, title="Regions")
-        table.add_column("Name", style="bold")
-        table.add_column("Condition")
-        table.add_column("Size")
-        for r in region_list:
-            size = f"{r.width}x{r.height}" if r.width else ""
-            table.add_row(r.name, r.condition, size)
-        console.print(table)
+        rows = [
+            {
+                "name": r.name,
+                "condition": r.condition,
+                "size": f"{r.width}x{r.height}" if r.width else "",
+                "pixel_size_um": str(r.pixel_size_um) if r.pixel_size_um else "",
+            }
+            for r in region_list
+        ]
+        format_output(rows, ["name", "condition", "size", "pixel_size_um"], "table", "Regions")
 
     elif choice == "3":
         cond_list = store.get_conditions()
         if not cond_list:
             console.print("[dim]No conditions found.[/dim]")
             return
-        from rich.table import Table
-        table = Table(show_header=True, title="Conditions")
-        table.add_column("Name", style="bold")
-        for c in cond_list:
-            table.add_row(c)
-        console.print(table)
+        rows = [{"name": c} for c in cond_list]
+        format_output(rows, ["name"], "table", "Conditions")
 
 
 def _export_csv(state: MenuState) -> None:
@@ -375,7 +348,14 @@ def _export_csv(state: MenuState) -> None:
         raise _MenuCancel()
 
     out_path = Path(output_str).expanduser()
-    store.export_csv(out_path)
+
+    if out_path.exists():
+        if Prompt.ask("File exists. Overwrite?", choices=["y", "n"], default="n") != "y":
+            console.print("[yellow]Export cancelled.[/yellow]")
+            return
+
+    with console.status("[bold blue]Exporting measurements..."):
+        store.export_csv(out_path)
     console.print(f"[green]Exported measurements to {out_path}[/green]")
 
 

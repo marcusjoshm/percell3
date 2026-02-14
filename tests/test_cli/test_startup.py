@@ -44,3 +44,16 @@ class TestLazyImports:
         # Click exits with code 0 on --help
         assert result.returncode == 0, f"--help failed: {result.stderr}"
         assert "PerCell 3" in result.stdout
+
+    def test_non_tty_exits_cleanly(self):
+        """Bare `percell3` in non-TTY (piped) should exit cleanly, not hang."""
+        result = subprocess.run(
+            [
+                sys.executable, "-c",
+                "from percell3.cli.main import cli; cli([], standalone_mode=False)"
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert result.returncode == 0, f"Non-TTY invocation failed: {result.stderr}"

@@ -7,9 +7,14 @@ import click
 
 @click.group(invoke_without_command=True)
 @click.version_option(package_name="percell3")
+@click.option("--verbose", "-v", is_flag=True, help="Show full tracebacks on errors.")
 @click.pass_context
-def cli(ctx: click.Context) -> None:
+def cli(ctx: click.Context, verbose: bool) -> None:
     """PerCell 3 — Single-Cell Microscopy Analysis."""
+    from percell3.cli import utils
+
+    utils.verbose = verbose
+
     if ctx.invoked_subcommand is None:
         from percell3.cli.menu import run_interactive_menu
 
