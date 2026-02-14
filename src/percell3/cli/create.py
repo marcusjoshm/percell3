@@ -6,7 +6,6 @@ from pathlib import Path
 
 import click
 
-from percell3.core import ExperimentStore, ExperimentError
 from percell3.cli.utils import console, error_handler
 
 
@@ -17,14 +16,11 @@ from percell3.cli.utils import console, error_handler
 @error_handler
 def create(path: str, name: str | None, description: str | None) -> None:
     """Create a new .percell experiment directory."""
-    exp_path = Path(path)
-    try:
-        store = ExperimentStore.create(
-            exp_path, name=name or "", description=description or ""
-        )
-        store.close()
-    except ExperimentError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise SystemExit(1)
+    from percell3.core import ExperimentStore
 
+    exp_path = Path(path)
+    store = ExperimentStore.create(
+        exp_path, name=name or "", description=description or ""
+    )
+    store.close()
     console.print(f"[green]Created experiment at {exp_path}[/green]")

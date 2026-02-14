@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from rich.prompt import Prompt
 
 from percell3.cli.utils import console, make_progress, open_experiment
-from percell3.core import ExperimentStore, ExperimentError
+
+if TYPE_CHECKING:
+    from percell3.core import ExperimentStore
 
 
 # Menu item: (key, label, handler_or_None, enabled)
@@ -25,6 +27,8 @@ class MenuState:
 
     def set_experiment(self, path: Path) -> None:
         """Open an experiment and set it as current."""
+        from percell3.core import ExperimentStore
+
         if self.store:
             self.store.close()
         self.store = ExperimentStore.open(path)
@@ -102,6 +106,8 @@ def run_interactive_menu() -> None:
                 continue
 
             if handler:
+                from percell3.core.exceptions import ExperimentError
+
                 try:
                     handler(state)
                 except _MenuCancel:
@@ -165,6 +171,9 @@ def _create_experiment(state: MenuState) -> None:
     description = Prompt.ask("Description", default="")
 
     try:
+        from percell3.core import ExperimentStore
+        from percell3.core.exceptions import ExperimentError
+
         store = ExperimentStore.create(path, name=name, description=description)
         console.print(f"[green]Created experiment at {path}[/green]\n")
         # Set as current

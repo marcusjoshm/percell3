@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import functools
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
-from percell3.core import ExperimentStore, ExperimentError, ExperimentNotFoundError
+if TYPE_CHECKING:
+    from percell3.core import ExperimentStore
 
 console = Console()
 
@@ -26,6 +27,9 @@ def open_experiment(path: str) -> ExperimentStore:
     Raises:
         SystemExit: With code 1 if the experiment is not found.
     """
+    from percell3.core import ExperimentStore
+    from percell3.core.exceptions import ExperimentNotFoundError
+
     try:
         return ExperimentStore.open(Path(path))
     except ExperimentNotFoundError:
@@ -41,6 +45,8 @@ def error_handler(func: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
+        from percell3.core.exceptions import ExperimentError
+
         try:
             return func(*args, **kwargs)
         except SystemExit:

@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 from rich.table import Table
 
 from percell3.cli.utils import console, error_handler, make_progress, open_experiment
-from percell3.io import (
-    ChannelMapping,
-    FileScanner,
-    ImportEngine,
-    ImportPlan,
-    TokenConfig,
-    ZTransform,
-)
+
+if TYPE_CHECKING:
+    from percell3.core import ExperimentStore
+    from percell3.io import ScanResult
 
 
 @click.command("import")
@@ -60,7 +57,7 @@ def import_cmd(
 
 
 def _run_import(
-    store: "ExperimentStore",
+    store: ExperimentStore,
     source: str,
     condition: str,
     channel_map: tuple[str, ...],
@@ -68,6 +65,15 @@ def _run_import(
     yes: bool,
 ) -> None:
     """Core import logic shared by CLI and interactive menu."""
+    from percell3.io import (
+        ChannelMapping,
+        FileScanner,
+        ImportEngine,
+        ImportPlan,
+        TokenConfig,
+        ZTransform,
+    )
+
     # Scan source directory
     scanner = FileScanner()
     scan_result = scanner.scan(Path(source))
@@ -119,7 +125,7 @@ def _run_import(
     console.print(f"  Elapsed: {result.elapsed_seconds}s")
 
 
-def _show_preview(scan_result: "ScanResult", source: str) -> None:
+def _show_preview(scan_result: ScanResult, source: str) -> None:
     """Display a preview table of what will be imported."""
     console.print(f"\n[bold]Scan results for[/bold] {source}\n")
 
@@ -149,8 +155,10 @@ def _show_preview(scan_result: "ScanResult", source: str) -> None:
     console.print()
 
 
-def _parse_channel_maps(maps: tuple[str, ...]) -> list[ChannelMapping]:
+def _parse_channel_maps(maps: tuple[str, ...]) -> list:
     """Parse channel map strings like '00:DAPI' into ChannelMapping objects."""
+    from percell3.io import ChannelMapping
+
     mappings: list[ChannelMapping] = []
     for m in maps:
         if ":" not in m:
