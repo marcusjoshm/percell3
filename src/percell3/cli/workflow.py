@@ -37,27 +37,23 @@ def workflow() -> None:
 
 @workflow.command("list")
 @click.option("--steps", is_flag=True, help="Also list registered step types.")
+@click.option("--format", "fmt", type=click.Choice(["table", "json", "csv"]),
+              default="table", help="Output format.")
 @error_handler
-def workflow_list(steps: bool) -> None:
+def workflow_list(steps: bool, fmt: str) -> None:
     """List available preset workflows and step types."""
-    console.print("\n[bold]Preset Workflows[/bold]\n")
-    table = Table(show_header=True)
-    table.add_column("Name", style="bold")
-    table.add_column("Description")
-    for name, preset in _PRESETS.items():
-        table.add_row(name, preset.description)
-    console.print(table)
+    from percell3.cli.query import format_output
+
+    rows = [{"name": name, "description": preset.description}
+            for name, preset in _PRESETS.items()]
+    format_output(rows, ["name", "description"], fmt, "Preset Workflows")
 
     if steps:
         from percell3.workflow import StepRegistry
 
-        console.print("\n[bold]Registered Step Types[/bold]\n")
         step_names = StepRegistry.list_steps()
-        step_table = Table(show_header=True)
-        step_table.add_column("Step Name", style="bold")
-        for s in step_names:
-            step_table.add_row(s)
-        console.print(step_table)
+        step_rows = [{"name": s} for s in step_names]
+        format_output(step_rows, ["name"], fmt, "Registered Step Types")
 
 
 @workflow.command("run")

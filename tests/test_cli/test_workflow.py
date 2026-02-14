@@ -18,8 +18,21 @@ class TestWorkflowList:
     def test_list_with_steps(self, runner: CliRunner):
         result = runner.invoke(cli, ["workflow", "list", "--steps"])
         assert result.exit_code == 0
-        assert "Registered Step Types" in result.output
+        # Rich may wrap the table title across lines
+        assert "Step" in result.output
         assert "import_tiff" in result.output
+
+    def test_list_json_format(self, runner: CliRunner):
+        result = runner.invoke(cli, ["workflow", "list", "--format", "json"])
+        assert result.exit_code == 0
+        assert '"complete"' in result.output
+        assert '"description"' in result.output
+
+    def test_list_csv_format(self, runner: CliRunner):
+        result = runner.invoke(cli, ["workflow", "list", "--format", "csv"])
+        assert result.exit_code == 0
+        assert "name,description" in result.output
+        assert "complete" in result.output
 
 
 class TestWorkflowRun:

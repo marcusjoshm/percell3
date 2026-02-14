@@ -2,12 +2,51 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
+from typing import Any
 
 import click
 from rich.table import Table
 
 from percell3.cli.utils import console, error_handler, open_experiment
+
+
+def format_output(
+    rows: list[dict[str, Any]],
+    columns: list[str],
+    fmt: str,
+    title: str,
+) -> None:
+    """Render rows in the requested format (table, csv, or json).
+
+    Args:
+        rows: List of dicts, each with keys matching columns.
+        columns: Column names (display order).
+        fmt: One of "table", "csv", "json".
+        title: Title for table output.
+    """
+    if fmt == "table":
+        table = Table(show_header=True, title=title)
+        for col in columns:
+            if col == columns[0]:
+                table.add_column(col, style="bold")
+            else:
+                table.add_column(col)
+        for row in rows:
+            table.add_row(*(str(row.get(c, "")) for c in columns))
+        console.print(table)
+    elif fmt == "csv":
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(columns)
+        for row in rows:
+            writer.writerow([row.get(c, "") for c in columns])
+        # Print without trailing newline from csv module
+        console.print(buf.getvalue().rstrip())
+    elif fmt == "json":
+        console.print(json.dumps(rows, indent=2))
 
 
 @click.group()
@@ -46,22 +85,9 @@ def channels(ctx: click.Context, fmt: str) -> None:
         console.print("[dim]No channels found.[/dim]")
         return
 
-    if fmt == "table":
-        table = Table(show_header=True, title="Channels")
-        table.add_column("Name", style="bold")
-        table.add_column("Role")
-        table.add_column("Color")
-        for ch in ch_list:
-            table.add_row(ch.name, ch.role or "", ch.color or "")
-        console.print(table)
-    elif fmt == "csv":
-        console.print("name,role,color")
-        for ch in ch_list:
-            console.print(f"{ch.name},{ch.role or ''},{ch.color or ''}")
-    elif fmt == "json":
-        data = [{"name": ch.name, "role": ch.role, "color": ch.color}
-                for ch in ch_list]
-        console.print(json.dumps(data, indent=2))
+    rows = [{"name": ch.name, "role": ch.role or "", "color": ch.color or ""}
+            for ch in ch_list]
+    format_output(rows, ["name", "role", "color"], fmt, "Channels")
 
 
 @query.command()
@@ -79,32 +105,16 @@ def regions(ctx: click.Context, fmt: str, condition: str | None) -> None:
         console.print("[dim]No regions found.[/dim]")
         return
 
-    if fmt == "table":
-        table = Table(show_header=True, title="Regions")
-        table.add_column("Name", style="bold")
-        table.add_column("Condition")
-        table.add_column("Size")
-        table.add_column("Pixel Size (\u00b5m)")
-        for r in region_list:
-            size = f"{r.width}x{r.height}" if r.width else ""
-            ps = f"{r.pixel_size_um}" if r.pixel_size_um else ""
-            table.add_row(r.name, r.condition, size, ps)
-        console.print(table)
-    elif fmt == "csv":
-        console.print("name,condition,width,height,pixel_size_um")
-        for r in region_list:
-            console.print(
-                f"{r.name},{r.condition},{r.width or ''},{r.height or ''},"
-                f"{r.pixel_size_um or ''}"
-            )
-    elif fmt == "json":
-        data = [
-            {"name": r.name, "condition": r.condition,
-             "width": r.width, "height": r.height,
-             "pixel_size_um": r.pixel_size_um}
-            for r in region_list
-        ]
-        console.print(json.dumps(data, indent=2))
+    rows = [
+        {
+            "name": r.name,
+            "condition": r.condition,
+            "size": f"{r.width}x{r.height}" if r.width else "",
+            "pixel_size_um": str(r.pixel_size_um) if r.pixel_size_um else "",
+        }
+        for r in region_list
+    ]
+    format_output(rows, ["name", "condition", "size", "pixel_size_um"], fmt, "Regions")
 
 
 @query.command()
@@ -121,15 +131,5 @@ def conditions(ctx: click.Context, fmt: str) -> None:
         console.print("[dim]No conditions found.[/dim]")
         return
 
-    if fmt == "table":
-        table = Table(show_header=True, title="Conditions")
-        table.add_column("Name", style="bold")
-        for c in cond_list:
-            table.add_row(c)
-        console.print(table)
-    elif fmt == "csv":
-        console.print("name")
-        for c in cond_list:
-            console.print(c)
-    elif fmt == "json":
-        console.print(json.dumps(cond_list, indent=2))
+    rows = [{"name": c} for c in cond_list]
+    format_output(rows, ["name"], fmt, "Conditions")
