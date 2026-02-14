@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
 
 import click
 from rich.table import Table
@@ -10,16 +10,23 @@ from rich.table import Table
 from percell3.cli.utils import console, error_handler, open_experiment
 
 
-# Available preset workflows
-_PRESETS: dict[str, dict[str, Any]] = {
-    "complete": {
-        "description": "Import -> Segment -> Measure -> Export",
-        "factory_name": "complete_analysis_workflow",
-    },
-    "measure_only": {
-        "description": "Re-measure with different channels (assumes labels exist)",
-        "factory_name": "measure_only_workflow",
-    },
+@dataclass(frozen=True)
+class WorkflowPreset:
+    """A named workflow configuration."""
+
+    description: str
+    factory_name: str
+
+
+_PRESETS: dict[str, WorkflowPreset] = {
+    "complete": WorkflowPreset(
+        description="Import -> Segment -> Measure -> Export",
+        factory_name="complete_analysis_workflow",
+    ),
+    "measure_only": WorkflowPreset(
+        description="Re-measure with different channels (assumes labels exist)",
+        factory_name="measure_only_workflow",
+    ),
 }
 
 
@@ -37,8 +44,8 @@ def workflow_list(steps: bool) -> None:
     table = Table(show_header=True)
     table.add_column("Name", style="bold")
     table.add_column("Description")
-    for name, info in _PRESETS.items():
-        table.add_row(name, info["description"])
+    for name, preset in _PRESETS.items():
+        table.add_row(name, preset.description)
     console.print(table)
 
     if steps:

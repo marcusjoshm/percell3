@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -13,8 +14,14 @@ if TYPE_CHECKING:
     from percell3.core import ExperimentStore
 
 
-# Menu item: (key, label, handler_or_None, enabled)
-MenuItem = tuple[str, str, Callable[["MenuState"], None] | None, bool]
+@dataclass(frozen=True)
+class MenuItem:
+    """A single entry in the interactive menu."""
+
+    key: str
+    label: str
+    handler: Callable[[MenuState], None] | None
+    enabled: bool
 
 
 class MenuState:
@@ -63,18 +70,18 @@ def run_interactive_menu() -> None:
     state = MenuState()
 
     menu_items: list[MenuItem] = [
-        ("1", "Create experiment", _create_experiment, True),
-        ("2", "Import images", _import_images, True),
-        ("3", "Segment cells", None, False),
-        ("4", "Measure channels", None, False),
-        ("5", "Apply threshold", None, False),
-        ("6", "Query experiment", _query_experiment, True),
-        ("7", "Export to CSV", _export_csv, True),
-        ("8", "Run workflow", _run_workflow, True),
-        ("9", "Plugin manager", None, False),
-        ("e", "Select experiment", _select_experiment, True),
-        ("h", "Help", _show_help, True),
-        ("q", "Quit", None, True),
+        MenuItem("1", "Create experiment", _create_experiment, enabled=True),
+        MenuItem("2", "Import images", _import_images, enabled=True),
+        MenuItem("3", "Segment cells", None, enabled=False),
+        MenuItem("4", "Measure channels", None, enabled=False),
+        MenuItem("5", "Apply threshold", None, enabled=False),
+        MenuItem("6", "Query experiment", _query_experiment, enabled=True),
+        MenuItem("7", "Export to CSV", _export_csv, enabled=True),
+        MenuItem("8", "Run workflow", _run_workflow, enabled=True),
+        MenuItem("9", "Plugin manager", None, enabled=False),
+        MenuItem("e", "Select experiment", _select_experiment, enabled=True),
+        MenuItem("h", "Help", _show_help, enabled=True),
+        MenuItem("q", "Quit", None, enabled=True),
     ]
 
     try:
@@ -89,17 +96,17 @@ def run_interactive_menu() -> None:
 
             # Find matching menu item
             handler = None
-            for key, label, fn, enabled in menu_items:
-                if key == choice:
-                    if not enabled:
+            for item in menu_items:
+                if item.key == choice:
+                    if not item.enabled:
                         console.print(
-                            f"\n[yellow]{label} is not yet available.[/yellow]"
+                            f"\n[yellow]{item.label} is not yet available.[/yellow]"
                         )
                         console.print(
                             "[dim]This feature is under development.[/dim]\n"
                         )
-                    elif fn is not None:
-                        handler = fn
+                    elif item.handler is not None:
+                        handler = item.handler
                     break
             else:
                 console.print(f"[red]Invalid option: {choice}[/red]")
@@ -133,11 +140,11 @@ def _show_header(state: MenuState) -> None:
 
 def _show_menu(items: list[MenuItem]) -> None:
     """Render the menu items."""
-    for key, label, _, enabled in items:
-        if enabled:
-            console.print(f"  [{key}] {label}")
+    for item in items:
+        if item.enabled:
+            console.print(f"  [{item.key}] {item.label}")
         else:
-            console.print(f"  [{key}] {label}  [dim](coming soon)[/dim]")
+            console.print(f"  [{item.key}] {item.label}  [dim](coming soon)[/dim]")
 
 
 # --- Menu handlers ---
@@ -318,9 +325,6 @@ def _query_experiment(state: MenuState) -> None:
         raise _MenuCancel()
 
     if choice == "1":
-        from percell3.cli.query import channels
-        from click import Context
-        # Call the underlying logic directly
         ch_list = store.get_channels()
         if not ch_list:
             console.print("[dim]No channels found.[/dim]")
