@@ -91,3 +91,64 @@ class TestImportCommand:
         )
         assert result.exit_code == 1
         assert "Invalid channel map" in result.output
+
+
+class TestAutoConditionsFlag:
+    def test_auto_conditions_detects_multiple(
+        self, runner: CliRunner, experiment_path: Path,
+        multi_condition_tiff_dir: Path,
+    ):
+        result = runner.invoke(
+            cli,
+            ["import", str(multi_condition_tiff_dir), "-e", str(experiment_path),
+             "--auto-conditions", "--yes"],
+        )
+        assert result.exit_code == 0
+        assert "Auto-detected 2 conditions" in result.output
+        assert "Import complete" in result.output
+        assert "Regions imported: 2" in result.output
+
+    def test_auto_conditions_no_match(
+        self, runner: CliRunner, experiment_path: Path, tiff_dir: Path,
+    ):
+        """Single region — auto-conditions falls back to single condition."""
+        result = runner.invoke(
+            cli,
+            ["import", str(tiff_dir), "-e", str(experiment_path),
+             "--auto-conditions", "--yes"],
+        )
+        assert result.exit_code == 0
+        assert "No conditions detected" in result.output
+        assert "Import complete" in result.output
+
+
+class TestFilesFlag:
+    def test_import_specific_files(
+        self, runner: CliRunner, experiment_path: Path, tiff_dir: Path,
+    ):
+        """--files imports only the specified files."""
+        # tiff_dir has img_ch00_t00.tif and img_ch01_t00.tif
+        one_file = tiff_dir / "img_ch00_t00.tif"
+        result = runner.invoke(
+            cli,
+            ["import", str(tiff_dir), "-e", str(experiment_path),
+             "--files", str(one_file), "--yes"],
+        )
+        assert result.exit_code == 0
+        assert "Import complete" in result.output
+        assert "Images written: 1" in result.output
+
+    def test_import_multiple_files(
+        self, runner: CliRunner, experiment_path: Path, tiff_dir: Path,
+    ):
+        """--files can be repeated for multiple files."""
+        f1 = tiff_dir / "img_ch00_t00.tif"
+        f2 = tiff_dir / "img_ch01_t00.tif"
+        result = runner.invoke(
+            cli,
+            ["import", str(tiff_dir), "-e", str(experiment_path),
+             "--files", str(f1), "--files", str(f2), "--yes"],
+        )
+        assert result.exit_code == 0
+        assert "Import complete" in result.output
+        assert "Images written: 2" in result.output

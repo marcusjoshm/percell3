@@ -49,12 +49,14 @@ class ImportEngine:
         warnings: list[str] = []
 
         # Validate source path
-        if not plan.source_path.exists():
+        if plan.source_files is None and not plan.source_path.exists():
             raise FileNotFoundError(f"Source path does not exist: {plan.source_path}")
 
-        # Scan source directory
+        # Scan source directory (or explicit file list)
         scanner = FileScanner()
-        scan_result = scanner.scan(plan.source_path, plan.token_config)
+        scan_result = scanner.scan(
+            plan.source_path, plan.token_config, files=plan.source_files,
+        )
 
         # Register channels (idempotent)
         channels_registered = 0
@@ -70,12 +72,31 @@ class ImportEngine:
             except DuplicateError:
                 pass
 
-        # Register condition (idempotent)
-        condition = sanitize_name(plan.condition)
-        try:
-            store.add_condition(condition)
-        except DuplicateError:
-            pass
+        # Register default channel when no channel tokens were discovered
+        if not scan_result.channels:
+            default_ch_name = channel_name_map.get("0", sanitize_name("ch0"))
+            try:
+                store.add_channel(default_ch_name)
+                channels_registered += 1
+            except DuplicateError:
+                pass
+
+        # Register conditions (idempotent)
+        if plan.condition_map:
+            unique_conditions = sorted(set(
+                sanitize_name(c) for c in plan.condition_map.values()
+            ))
+            for cond in unique_conditions:
+                try:
+                    store.add_condition(cond)
+                except DuplicateError:
+                    pass
+        else:
+            unique_conditions = [sanitize_name(plan.condition)]
+            try:
+                store.add_condition(unique_conditions[0])
+            except DuplicateError:
+                pass
 
         # Group files by region
         region_files = _group_by_token(scan_result.files, "region", "default")
@@ -88,18 +109,29 @@ class ImportEngine:
         skipped = 0
         total_regions = len(region_files)
 
-        # Check existing regions
-        existing_regions = {r.name for r in store.get_regions(condition=condition)}
+        # Cache existing regions per condition to avoid repeated queries
+        _existing_cache: dict[str, set[str]] = {}
 
         for idx, (region_token, files) in enumerate(sorted(region_files.items())):
             region_name = plan.region_names.get(region_token, sanitize_name(region_token))
 
+            # Determine condition for this region
+            if plan.condition_map and region_token in plan.condition_map:
+                condition = sanitize_name(plan.condition_map[region_token])
+            else:
+                condition = sanitize_name(plan.condition)
+
             if progress_callback:
                 progress_callback(idx + 1, total_regions, region_name)
 
-            # Skip existing regions
-            if region_name in existing_regions:
-                warnings.append(f"Region '{region_name}' already exists, skipping")
+            # Check existing regions (cached per condition)
+            if condition not in _existing_cache:
+                _existing_cache[condition] = {
+                    r.name for r in store.get_regions(condition=condition)
+                }
+
+            if region_name in _existing_cache[condition]:
+                warnings.append(f"Region '{region_name}' already exists in '{condition}', skipping")
                 skipped += 1
                 continue
 
@@ -119,6 +151,7 @@ class ImportEngine:
                 pixel_size_um=pixel_size,
                 source_file=str(first_file.path),
             )
+            _existing_cache[condition].add(region_name)
 
             # Write each channel
             for ch_token, ch_files in sorted(channel_files.items()):

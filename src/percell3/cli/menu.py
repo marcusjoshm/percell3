@@ -146,9 +146,9 @@ def _show_menu(items: list[MenuItem]) -> None:
     """Render the menu items."""
     for item in items:
         if item.enabled:
-            console.print(f"  [{item.key}] {item.label}")
+            console.print(f"  \\[{item.key}] {item.label}")
         else:
-            console.print(f"  [{item.key}] {item.label}  [dim](coming soon)[/dim]")
+            console.print(f"  \\[{item.key}] {item.label}  [dim](coming soon)[/dim]")
 
 
 # --- Menu handlers ---
@@ -200,28 +200,51 @@ def _import_images(state: MenuState) -> None:
     """Interactively import TIFF images."""
     store = state.require_experiment()
 
-    # Get source path
-    source_str = _prompt_source_path()
+    # Get source path (and optionally an explicit file list)
+    source_str, source_files = _prompt_source_path()
     if source_str is None:
         raise _MenuCancel()
 
     source = Path(source_str)
 
     # Scan for preview and interactive prompts
-    from percell3.io import FileScanner
+    from percell3.io import FileScanner, detect_conditions
     from percell3.cli.import_cmd import _show_preview, _run_import
 
     scanner = FileScanner()
     try:
-        scan_result = scanner.scan(source)
+        scan_result = scanner.scan(source, files=source_files)
     except (FileNotFoundError, ValueError) as e:
         console.print(f"[red]Error:[/red] {e}")
         return
 
     _show_preview(scan_result, str(source))
 
-    # Condition
-    condition = Prompt.ask("Condition name", default="default")
+    # Condition auto-detection
+    condition = "default"
+    condition_map: dict[str, str] = {}
+    region_names: dict[str, str] = {}
+
+    detection = detect_conditions(scan_result.regions)
+    if detection is not None:
+        console.print(f"\n[bold]Detected conditions[/bold] (pattern: {detection.pattern_used}):")
+        # Group regions by condition for display
+        cond_regions: dict[str, list[str]] = {}
+        for region_token, cond in sorted(detection.condition_map.items()):
+            site = detection.region_name_map[region_token]
+            cond_regions.setdefault(cond, []).append(site)
+        for cond_name, sites in sorted(cond_regions.items()):
+            console.print(f"  {cond_name}: {', '.join(sorted(sites))}")
+
+        if Prompt.ask(
+            "Use detected conditions?", choices=["y", "n"], default="y"
+        ) == "y":
+            condition_map = dict(detection.condition_map)
+            region_names = dict(detection.region_name_map)
+        else:
+            condition = Prompt.ask("Condition name", default="default")
+    else:
+        condition = Prompt.ask("Condition name", default="default")
 
     # Channel mapping
     channel_maps: tuple[str, ...] = ()
@@ -248,21 +271,33 @@ def _import_images(state: MenuState) -> None:
         console.print("[yellow]Import cancelled.[/yellow]")
         return
 
-    # Delegate to shared import pipeline (yes=True since we already confirmed)
-    _run_import(store, str(source), condition, channel_maps, z_method, yes=True)
+    # Delegate to shared import pipeline (yes=True since we already confirmed).
+    # Pass scan_result to avoid a redundant second scan.
+    _run_import(
+        store, str(source), condition, channel_maps, z_method, yes=True,
+        condition_map=condition_map, region_names=region_names,
+        source_files=source_files, scan_result=scan_result,
+    )
 
 
-def _prompt_source_path() -> str | None:
-    """Prompt for source path, with optional folder picker."""
+def _prompt_source_path() -> tuple[str | None, list[Path] | None]:
+    """Prompt for source path, with optional folder/file picker.
+
+    Returns:
+        Tuple of (source_path_string, optional_file_list).
+        source_path is None when user cancels.
+        file_list is None when scanning a directory (not explicit files).
+    """
     console.print("\n[bold]Import source[/bold]")
-    console.print("  [1] Type path")
-    console.print("  [2] Browse for folder")
-    console.print("  [b] Back")
+    console.print("  \\[1] Type path")
+    console.print("  \\[2] Browse for folder")
+    console.print("  \\[3] Browse for files")
+    console.print("  \\[b] Back")
 
-    choice = Prompt.ask("Select", choices=["1", "2", "b"], default="1")
+    choice = Prompt.ask("Select", choices=["1", "2", "3", "b"], default="1")
 
     if choice == "b":
-        return None
+        return None, None
 
     if choice == "2":
         try:
@@ -274,9 +309,37 @@ def _prompt_source_path() -> str | None:
             folder = filedialog.askdirectory(title="Select TIFF directory")
             root.destroy()
             if folder:
-                return folder
+                return folder, None
             console.print("[dim]No folder selected.[/dim]")
-            return None
+            return None, None
+        except ImportError:
+            console.print(
+                "[yellow]tkinter not available.[/yellow] "
+                "Please type the path instead."
+            )
+            # Fall through to type path
+
+    if choice == "3":
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            files = filedialog.askopenfilenames(
+                title="Select TIFF files",
+                filetypes=[("TIFF files", "*.tif *.tiff"), ("All files", "*.*")],
+            )
+            root.destroy()
+            if files:
+                file_paths = [Path(f) for f in files]
+                parent = file_paths[0].parent
+                console.print(
+                    f"  Selected {len(file_paths)} files from {parent}"
+                )
+                return str(parent), file_paths
+            console.print("[dim]No files selected.[/dim]")
+            return None, None
         except ImportError:
             console.print(
                 "[yellow]tkinter not available.[/yellow] "
@@ -285,7 +348,7 @@ def _prompt_source_path() -> str | None:
             # Fall through to type path
 
     path_str = Prompt.ask("Path to TIFF directory")
-    return path_str if path_str else None
+    return (path_str, None) if path_str else (None, None)
 
 
 def _query_experiment(state: MenuState) -> None:

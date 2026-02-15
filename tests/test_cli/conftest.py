@@ -57,3 +57,15 @@ def tiff_dir(tmp_path: Path) -> Path:
         data = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
         tifffile.imwrite(str(d / f"img_ch{ch:02d}_t00.tif"), data)
     return d
+
+
+@pytest.fixture
+def multi_condition_tiff_dir(tmp_path: Path) -> Path:
+    """Create TIFFs with multi-condition naming (ctrl_s00, treated_s00)."""
+    d = tmp_path / "multi_cond_tiffs"
+    d.mkdir()
+    for cond in ("ctrl", "treated"):
+        for site in ("s00",):
+            data = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
+            tifffile.imwrite(str(d / f"{cond}_{site}_ch00.tif"), data)
+    return d

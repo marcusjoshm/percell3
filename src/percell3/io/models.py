@@ -108,6 +108,8 @@ class ImportPlan:
     z_transform: ZTransform
     pixel_size_um: float | None
     token_config: TokenConfig
+    condition_map: dict[str, str] = field(default_factory=dict)
+    source_files: list[Path] | None = None
 
     def to_yaml(self, path: Path) -> None:
         """Serialize this plan to a YAML file."""

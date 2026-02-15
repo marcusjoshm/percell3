@@ -130,6 +130,40 @@ class TestSymlinkGuard:
         assert len(result.files) == 1
 
 
+class TestFileListScan:
+    def test_scan_with_explicit_files(self, tmp_path):
+        d = tmp_path / "data"
+        d.mkdir()
+        tifffile.imwrite(str(d / "a_ch00.tif"), np.zeros((32, 32), dtype=np.uint16))
+        tifffile.imwrite(str(d / "b_ch00.tif"), np.zeros((32, 32), dtype=np.uint16))
+        # This file exists but won't be in the explicit list
+        tifffile.imwrite(str(d / "c_ch00.tif"), np.zeros((32, 32), dtype=np.uint16))
+
+        file_list = [d / "a_ch00.tif", d / "b_ch00.tif"]
+        scanner = FileScanner()
+        result = scanner.scan(d, files=file_list)
+        assert len(result.files) == 2
+        assert result.source_path == d
+
+    def test_scan_files_filters_non_tiffs(self, tmp_path):
+        d = tmp_path / "data"
+        d.mkdir()
+        tifffile.imwrite(str(d / "a_ch00.tif"), np.zeros((32, 32), dtype=np.uint16))
+        (d / "readme.txt").write_text("not a tiff")
+
+        file_list = [d / "a_ch00.tif", d / "readme.txt"]
+        scanner = FileScanner()
+        result = scanner.scan(d, files=file_list)
+        assert len(result.files) == 1
+
+    def test_scan_files_empty_raises(self, tmp_path):
+        d = tmp_path / "data"
+        d.mkdir()
+        scanner = FileScanner()
+        with pytest.raises(ValueError, match="No TIFF files"):
+            scanner.scan(d, files=[])
+
+
 class TestCustomTokenConfig:
     def test_custom_channel_pattern(self, tmp_path):
         d = tmp_path / "custom"

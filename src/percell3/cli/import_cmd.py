@@ -12,7 +12,7 @@ from percell3.cli.utils import console, error_handler, make_progress, open_exper
 
 if TYPE_CHECKING:
     from percell3.core import ExperimentStore
-    from percell3.io import ScanResult
+    from percell3.io import ChannelMapping, ScanResult
 
 
 @click.command("import")
@@ -36,6 +36,14 @@ if TYPE_CHECKING:
     help="Z-stack projection method.",
 )
 @click.option(
+    "--auto-conditions", is_flag=True,
+    help="Auto-detect conditions from region names.",
+)
+@click.option(
+    "--files", multiple=True, type=click.Path(exists=True),
+    help="Specific TIFF files to import (instead of scanning directory).",
+)
+@click.option(
     "--yes", "-y", is_flag=True,
     help="Skip confirmation prompt.",
 )
@@ -46,12 +54,40 @@ def import_cmd(
     condition: str,
     channel_map: tuple[str, ...],
     z_projection: str,
+    auto_conditions: bool,
+    files: tuple[str, ...],
     yes: bool,
 ) -> None:
     """Import TIFF images into an experiment."""
     store = open_experiment(experiment)
     try:
-        _run_import(store, source, condition, channel_map, z_projection, yes)
+        condition_map: dict[str, str] = {}
+        region_names: dict[str, str] = {}
+        source_files: list[Path] | None = [Path(f) for f in files] if files else None
+
+        if auto_conditions:
+            from percell3.io import FileScanner, detect_conditions
+
+            scanner = FileScanner()
+            scan_result = scanner.scan(Path(source), files=source_files)
+            detection = detect_conditions(scan_result.regions)
+            if detection is not None:
+                condition_map = dict(detection.condition_map)
+                region_names = dict(detection.region_name_map)
+                console.print(
+                    f"Auto-detected {len(detection.conditions)} conditions: "
+                    f"{', '.join(detection.conditions)}"
+                )
+            else:
+                console.print(
+                    "[yellow]No conditions detected, using single condition.[/yellow]"
+                )
+
+        _run_import(
+            store, source, condition, channel_map, z_projection, yes,
+            condition_map=condition_map, region_names=region_names,
+            source_files=source_files,
+        )
     finally:
         store.close()
 
@@ -63,6 +99,10 @@ def _run_import(
     channel_map: tuple[str, ...],
     z_projection: str,
     yes: bool,
+    condition_map: dict[str, str] | None = None,
+    region_names: dict[str, str] | None = None,
+    source_files: list[Path] | None = None,
+    scan_result: ScanResult | None = None,
 ) -> None:
     """Core import logic shared by CLI and interactive menu."""
     from percell3.io import (
@@ -74,9 +114,10 @@ def _run_import(
         ZTransform,
     )
 
-    # Scan source directory
-    scanner = FileScanner()
-    scan_result = scanner.scan(Path(source))
+    # Scan source directory (or explicit file list) — skip if already scanned
+    if scan_result is None:
+        scanner = FileScanner()
+        scan_result = scanner.scan(Path(source), files=source_files)
 
     # Show preview
     _show_preview(scan_result, source)
@@ -95,10 +136,12 @@ def _run_import(
         source_path=Path(source),
         condition=condition,
         channel_mappings=mappings,
-        region_names={},
+        region_names=region_names or {},
         z_transform=ZTransform(method=z_projection),
         pixel_size_um=scan_result.pixel_size_um,
         token_config=TokenConfig(),
+        condition_map=condition_map or {},
+        source_files=source_files,
     )
 
     # Execute with progress
@@ -155,7 +198,7 @@ def _show_preview(scan_result: ScanResult, source: str) -> None:
     console.print()
 
 
-def _parse_channel_maps(maps: tuple[str, ...]) -> list:
+def _parse_channel_maps(maps: tuple[str, ...]) -> list[ChannelMapping]:
     """Parse channel map strings like '00:DAPI' into ChannelMapping objects."""
     from percell3.io import ChannelMapping
 

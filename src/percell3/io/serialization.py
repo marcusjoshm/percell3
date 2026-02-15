@@ -55,6 +55,9 @@ def plan_to_yaml(plan: ImportPlan, path: Path) -> None:
         "region_names": plan.region_names,
     }
 
+    if plan.condition_map:
+        data["condition_map"] = plan.condition_map
+
     if plan.z_transform.slice_index is not None:
         data["z_transform"]["slice_index"] = plan.z_transform.slice_index
 
@@ -139,4 +142,5 @@ def plan_from_yaml(path: Path) -> ImportPlan:
         z_transform=z_transform,
         pixel_size_um=data.get("pixel_size_um"),
         token_config=token_config,
+        condition_map=data.get("condition_map", {}),
     )

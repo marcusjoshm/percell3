@@ -18,34 +18,47 @@ class FileScanner:
         self,
         path: Path,
         token_config: TokenConfig | None = None,
+        files: list[Path] | None = None,
     ) -> ScanResult:
-        """Scan a directory for TIFF files and parse filename tokens.
+        """Scan a directory (or explicit file list) for TIFF files.
 
         Args:
-            path: Directory to scan.
+            path: Directory to scan (used as source_path in result).
             token_config: Token patterns for filename parsing.
                 Uses defaults if not provided.
+            files: Optional explicit list of file paths. When provided,
+                directory walking is skipped and only TIFF files from
+                this list are used. ``path`` is still used as the
+                ``source_path`` in the result.
 
         Returns:
             ScanResult with discovered files and extracted dimensions.
 
         Raises:
-            FileNotFoundError: If path does not exist.
-            ValueError: If path is not a directory or contains no TIFF files.
+            FileNotFoundError: If path does not exist (when files is None).
+            ValueError: If path is not a directory (when files is None)
+                or no TIFF files found.
         """
         path = Path(path)
-        if not path.exists():
-            raise FileNotFoundError(f"Source path does not exist: {path}")
-        if not path.is_dir():
-            raise ValueError(f"Source path is not a directory: {path}")
+
+        if files is not None:
+            tiff_paths = sorted(
+                f for f in files
+                if f.suffix.lower() in self.TIFF_EXTENSIONS
+            )
+        else:
+            if not path.exists():
+                raise FileNotFoundError(f"Source path does not exist: {path}")
+            if not path.is_dir():
+                raise ValueError(f"Source path is not a directory: {path}")
+            tiff_paths = sorted(self._find_tiffs(path))
 
         config = token_config or TokenConfig()
-        tiff_paths = sorted(self._find_tiffs(path))
 
         if not tiff_paths:
             raise ValueError(f"No TIFF files found in: {path}")
 
-        files: list[DiscoveredFile] = []
+        discovered: list[DiscoveredFile] = []
         warnings: list[str] = []
         pixel_sizes: list[float] = []
 
@@ -68,13 +81,13 @@ class FileScanner:
                 dtype=meta["dtype"],
                 pixel_size_um=ps,
             )
-            files.append(df)
+            discovered.append(df)
 
         # Extract unique dimension values
-        channels = sorted({f.tokens["channel"] for f in files if "channel" in f.tokens})
-        regions = sorted({f.tokens["region"] for f in files if "region" in f.tokens})
-        timepoints = sorted({f.tokens["timepoint"] for f in files if "timepoint" in f.tokens})
-        z_slices = sorted({f.tokens["z_slice"] for f in files if "z_slice" in f.tokens})
+        channels = sorted({f.tokens["channel"] for f in discovered if "channel" in f.tokens})
+        regions = sorted({f.tokens["region"] for f in discovered if "region" in f.tokens})
+        timepoints = sorted({f.tokens["timepoint"] for f in discovered if "timepoint" in f.tokens})
+        z_slices = sorted({f.tokens["z_slice"] for f in discovered if "z_slice" in f.tokens})
 
         # Check pixel size consistency
         scan_pixel_size: float | None = None
@@ -89,13 +102,13 @@ class FileScanner:
                 scan_pixel_size = pixel_sizes[0]
 
         # Check shape consistency
-        shapes = {f.shape for f in files}
+        shapes = {f.shape for f in discovered}
         if len(shapes) > 1:
             warnings.append(f"Inconsistent shapes across files: {sorted(shapes)}")
 
         return ScanResult(
             source_path=path,
-            files=files,
+            files=discovered,
             channels=channels,
             regions=regions,
             timepoints=timepoints,

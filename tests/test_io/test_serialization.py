@@ -93,6 +93,59 @@ class TestRoundTrip:
         assert loaded.z_transform.slice_index is None
 
 
+class TestConditionMapSerialization:
+    def test_condition_map_round_trips(self, tmp_path):
+        plan = ImportPlan(
+            source_path=tmp_path / "tiffs",
+            condition="default",
+            channel_mappings=[],
+            region_names={"ctrl_s00": "s00", "treated_s00": "s00"},
+            z_transform=ZTransform(method="mip"),
+            pixel_size_um=None,
+            token_config=TokenConfig(),
+            condition_map={"ctrl_s00": "ctrl", "treated_s00": "treated"},
+        )
+        yaml_path = tmp_path / "plan.yaml"
+
+        plan.to_yaml(yaml_path)
+        loaded = ImportPlan.from_yaml(yaml_path)
+
+        assert loaded.condition_map == {"ctrl_s00": "ctrl", "treated_s00": "treated"}
+
+    def test_empty_condition_map_not_written(self, tmp_path):
+        plan = ImportPlan(
+            source_path=tmp_path / "tiffs",
+            condition="control",
+            channel_mappings=[],
+            region_names={},
+            z_transform=ZTransform(method="mip"),
+            pixel_size_um=None,
+            token_config=TokenConfig(),
+            condition_map={},
+        )
+        yaml_path = tmp_path / "plan.yaml"
+
+        plan.to_yaml(yaml_path)
+        loaded = ImportPlan.from_yaml(yaml_path)
+
+        assert loaded.condition_map == {}
+
+    def test_old_yaml_without_condition_map_loads(self, tmp_path):
+        """YAML files from before condition_map was added still load."""
+        yaml_path = tmp_path / "plan.yaml"
+        yaml_path.write_text(
+            "source_path: /some/path\n"
+            "condition: control\n"
+            "z_transform:\n"
+            "  method: mip\n"
+            "token_config:\n"
+            "  channel: '_ch(\\d+)'\n"
+        )
+
+        loaded = ImportPlan.from_yaml(yaml_path)
+        assert loaded.condition_map == {}
+
+
 class TestErrorHandling:
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):

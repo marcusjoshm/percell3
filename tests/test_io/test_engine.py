@@ -248,6 +248,106 @@ class TestProgressCallback:
             assert calls[0] == (1, 1, "Region1")
 
 
+class TestMultiConditionImport:
+    def test_imports_two_conditions(self, tmp_path):
+        """Files from 2 conditions via condition_map are imported correctly."""
+        d1 = np.random.randint(0, 65535, (32, 32), dtype=np.uint16)
+        d2 = np.random.randint(0, 65535, (32, 32), dtype=np.uint16)
+        tiff_dir = _make_tiff_dir(tmp_path, {
+            "ctrl_s00_ch00.tif": d1,
+            "treated_s00_ch00.tif": d2,
+        })
+
+        with ExperimentStore.create(tmp_path / "test.percell") as store:
+            plan = ImportPlan(
+                source_path=tiff_dir,
+                condition="default",
+                channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
+                region_names={"ctrl_s00": "s00", "treated_s00": "s00"},
+                z_transform=ZTransform(method="mip"),
+                pixel_size_um=0.65,
+                token_config=TokenConfig(),
+                condition_map={
+                    "ctrl_s00": "ctrl",
+                    "treated_s00": "treated",
+                },
+            )
+            engine = ImportEngine()
+            result = engine.execute(plan, store)
+
+            assert result.regions_imported == 2
+            assert result.channels_registered == 1
+
+            conds = store.get_conditions()
+            assert "ctrl" in conds
+            assert "treated" in conds
+
+            regions_ctrl = store.get_regions(condition="ctrl")
+            regions_treated = store.get_regions(condition="treated")
+            assert len(regions_ctrl) == 1
+            assert len(regions_treated) == 1
+            assert regions_ctrl[0].name == "s00"
+            assert regions_treated[0].name == "s00"
+
+    def test_condition_map_empty_uses_fallback(self, tmp_path):
+        """When condition_map is empty, single condition field is used."""
+        data = np.zeros((32, 32), dtype=np.uint16)
+        tiff_dir = _make_tiff_dir(tmp_path, {"img_ch00.tif": data})
+
+        with ExperimentStore.create(tmp_path / "test.percell") as store:
+            plan = ImportPlan(
+                source_path=tiff_dir,
+                condition="control",
+                channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
+                region_names={},
+                z_transform=ZTransform(method="mip"),
+                pixel_size_um=None,
+                token_config=TokenConfig(),
+                condition_map={},
+            )
+            engine = ImportEngine()
+            result = engine.execute(plan, store)
+
+            assert result.regions_imported == 1
+            conds = store.get_conditions()
+            assert conds == ["control"]
+
+    def test_skip_existing_per_condition(self, tmp_path):
+        """Same region name in different conditions doesn't conflict."""
+        d1 = np.zeros((32, 32), dtype=np.uint16)
+        d2 = np.ones((32, 32), dtype=np.uint16) * 100
+        tiff_dir = _make_tiff_dir(tmp_path, {
+            "ctrl_s00_ch00.tif": d1,
+            "treated_s00_ch00.tif": d2,
+        })
+
+        with ExperimentStore.create(tmp_path / "test.percell") as store:
+            plan = ImportPlan(
+                source_path=tiff_dir,
+                condition="default",
+                channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
+                region_names={"ctrl_s00": "s00", "treated_s00": "s00"},
+                z_transform=ZTransform(method="mip"),
+                pixel_size_um=0.65,
+                token_config=TokenConfig(),
+                condition_map={
+                    "ctrl_s00": "ctrl",
+                    "treated_s00": "treated",
+                },
+            )
+            engine = ImportEngine()
+
+            # First import — both regions imported
+            r1 = engine.execute(plan, store)
+            assert r1.regions_imported == 2
+            assert r1.skipped == 0
+
+            # Second import — both regions skipped
+            r2 = engine.execute(plan, store)
+            assert r2.regions_imported == 0
+            assert r2.skipped == 2
+
+
 class TestEdgeCases:
     def test_invalid_source_path(self, tmp_path):
         with ExperimentStore.create(tmp_path / "test.percell") as store:
