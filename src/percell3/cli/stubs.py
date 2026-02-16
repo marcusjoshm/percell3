@@ -18,6 +18,5 @@ def _coming_soon(name: str, description: str) -> click.Command:
     return stub
 
 
-segment = _coming_soon("segment", "Run cell segmentation")
 measure = _coming_soon("measure", "Measure channel intensities")
 threshold = _coming_soon("threshold", "Apply intensity thresholds")

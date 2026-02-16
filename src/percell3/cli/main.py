@@ -27,7 +27,8 @@ def _register_commands() -> None:
     from percell3.cli.export import export
     from percell3.cli.import_cmd import import_cmd
     from percell3.cli.query import query
-    from percell3.cli.stubs import measure, segment, threshold
+    from percell3.cli.segment import segment
+    from percell3.cli.stubs import measure, threshold
     from percell3.cli.workflow import workflow
 
     cli.add_command(create)

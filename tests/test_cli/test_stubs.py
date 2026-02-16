@@ -6,11 +6,6 @@ from percell3.cli.main import cli
 
 
 class TestStubCommands:
-    def test_segment_shows_coming_soon(self, runner: CliRunner):
-        result = runner.invoke(cli, ["segment"])
-        assert result.exit_code == 0
-        assert "not yet available" in result.output
-
     def test_measure_shows_coming_soon(self, runner: CliRunner):
         result = runner.invoke(cli, ["measure"])
         assert result.exit_code == 0
