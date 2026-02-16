@@ -72,7 +72,7 @@ def run_interactive_menu() -> None:
     menu_items: list[MenuItem] = [
         MenuItem("1", "Create experiment", _create_experiment, enabled=True),
         MenuItem("2", "Import images", _import_images, enabled=True),
-        MenuItem("3", "Segment cells", None, enabled=False),
+        MenuItem("3", "Segment cells", _segment_cells, enabled=True),
         MenuItem("4", "Measure channels", None, enabled=False),
         MenuItem("5", "Apply threshold", None, enabled=False),
         MenuItem("6", "Query experiment", _query_experiment, enabled=True),
@@ -280,6 +280,122 @@ def _import_images(state: MenuState) -> None:
     )
 
 
+def _segment_cells(state: MenuState) -> None:
+    """Interactively run cell segmentation."""
+    store = state.require_experiment()
+
+    # Show available channels
+    channels = store.get_channels()
+    if not channels:
+        console.print("[red]No channels found.[/red] Import images first.")
+        return
+
+    console.print("\n[bold]Available channels:[/bold]")
+    for ch in channels:
+        role_str = f"  ({ch.role})" if ch.role else ""
+        console.print(f"  {ch.name}{role_str}")
+
+    channel = Prompt.ask(
+        "Channel to segment",
+        choices=[ch.name for ch in channels],
+    )
+
+    # Model selection — show common models
+    common_models = ["cyto3", "cyto2", "nuclei", "cyto"]
+    console.print("\n[bold]Common models:[/bold] " + ", ".join(common_models))
+    model = Prompt.ask("Model", default="cyto3")
+
+    # Diameter
+    diam_str = Prompt.ask("Cell diameter in pixels (blank = auto-detect)", default="")
+    diameter: float | None = None
+    if diam_str:
+        try:
+            diameter = float(diam_str)
+            if diameter <= 0:
+                console.print("[red]Diameter must be positive.[/red]")
+                return
+        except ValueError:
+            console.print(f"[red]Invalid diameter: {diam_str}[/red]")
+            return
+
+    # Optional condition filter
+    conditions = store.get_conditions()
+    condition: str | None = None
+    if len(conditions) > 1:
+        console.print(f"\n[bold]Conditions:[/bold] {', '.join(conditions)}")
+        cond_str = Prompt.ask("Condition filter (blank = all)", default="")
+        if cond_str:
+            condition = cond_str
+
+    # Optional region filter
+    regions_list: list[str] | None = None
+    regions = store.get_regions(condition=condition)
+    if len(regions) > 1:
+        console.print(f"\n[bold]Regions ({len(regions)}):[/bold] ", end="")
+        names = [r.name for r in regions]
+        if len(names) <= 10:
+            console.print(", ".join(names))
+        else:
+            console.print(", ".join(names[:10]) + f" ... ({len(names)} total)")
+        filter_str = Prompt.ask(
+            "Region filter (comma-separated, blank = all)", default=""
+        )
+        if filter_str:
+            regions_list = [r.strip() for r in filter_str.split(",") if r.strip()]
+
+    # Confirm
+    console.print(f"\n[bold]Segmentation settings:[/bold]")
+    console.print(f"  Channel:  {channel}")
+    console.print(f"  Model:    {model}")
+    console.print(f"  Diameter: {diameter or 'auto-detect'}")
+    if condition:
+        console.print(f"  Condition: {condition}")
+    if regions_list:
+        console.print(f"  Regions:  {', '.join(regions_list)}")
+    else:
+        console.print(f"  Regions:  all ({len(regions)})")
+
+    if Prompt.ask("\nProceed?", choices=["y", "n"], default="y") != "y":
+        console.print("[yellow]Segmentation cancelled.[/yellow]")
+        return
+
+    # Run segmentation
+    from percell3.segment import SegmentationEngine
+
+    engine = SegmentationEngine()
+
+    with make_progress() as progress:
+        task = progress.add_task("Segmenting...", total=None)
+
+        def on_progress(current: int, total: int, region_name: str) -> None:
+            progress.update(
+                task, total=total, completed=current,
+                description=f"Segmenting {region_name}",
+            )
+
+        result = engine.run(
+            store,
+            channel=channel,
+            model=model,
+            diameter=diameter,
+            regions=regions_list,
+            condition=condition,
+            progress_callback=on_progress,
+        )
+
+    console.print()
+    console.print("[green]Segmentation complete[/green]")
+    console.print(f"  Regions processed: {result.regions_processed}")
+    console.print(f"  Total cells found: {result.cell_count}")
+    console.print(f"  Elapsed: {result.elapsed_seconds:.1f}s")
+
+    if result.warnings:
+        console.print(f"\n[yellow]Warnings ({len(result.warnings)}):[/yellow]")
+        for w in result.warnings:
+            console.print(f"  [dim]- {w}[/dim]")
+    console.print()
+
+
 def _prompt_source_path() -> tuple[str | None, list[Path] | None]:
     """Prompt for source path, with optional folder/file picker.
 
@@ -454,6 +570,7 @@ def _show_help(state: MenuState) -> None:
     console.print("  Use the numbered menu to navigate, or run commands directly:\n")
     console.print("    percell3 create <path>          Create a new experiment")
     console.print("    percell3 import <src> -e <exp>  Import TIFF images")
+    console.print("    percell3 segment -e <exp> -c CH Segment cells")
     console.print("    percell3 query channels -e <exp> Query channels")
     console.print("    percell3 export <out> -e <exp>  Export to CSV")
     console.print("    percell3 workflow list          List workflows")

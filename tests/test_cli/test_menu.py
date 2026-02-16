@@ -24,8 +24,8 @@ class TestMenuLaunch:
         assert "coming soon" in result.output
 
     def test_disabled_item_shows_message(self, runner: CliRunner):
-        # Select disabled item "3" (Segment), then quit
-        result = runner.invoke(cli, [], input="3\nq\n")
+        # Select disabled item "4" (Measure), then quit
+        result = runner.invoke(cli, [], input="4\nq\n")
         assert "not yet available" in result.output
 
     def test_help_shows_commands(self, runner: CliRunner):
