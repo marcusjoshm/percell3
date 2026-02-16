@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 from percell3.core import ExperimentStore
 from percell3.core.exceptions import ChannelNotFoundError
@@ -137,7 +140,12 @@ class SegmentationEngine:
                     )
 
             except Exception as exc:
-                # Per-region error: log warning, continue with next region
+                if isinstance(exc, (MemoryError, KeyboardInterrupt, SystemExit)):
+                    raise
+                logger.warning(
+                    "Segmentation failed for region %s: %s",
+                    region_info.name, exc, exc_info=True,
+                )
                 warnings.append(
                     f"{region_info.name}: segmentation failed — {exc}"
                 )

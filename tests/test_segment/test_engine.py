@@ -13,6 +13,34 @@ from percell3.segment._engine import SegmentationEngine
 from percell3.segment.base_segmenter import SegmentationResult
 from tests.test_segment.conftest import EmptySegmenter, MockSegmenter
 
+# --- Error-raising segmenters for exception handling tests ---
+
+
+class ErrorSegmenter(MockSegmenter):
+    """A segmenter that raises a specific exception on every call."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
+    def segment(self, image: np.ndarray, params) -> np.ndarray:
+        raise self._error
+
+
+class ErrorOnceSegmenter(MockSegmenter):
+    """A segmenter that raises on the first call, succeeds on subsequent calls."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+        self._call_count = 0
+
+    def segment(self, image: np.ndarray, params) -> np.ndarray:
+        self._call_count += 1
+        if self._call_count == 1:
+            raise self._error
+        return super().segment(image, params)
+
 
 @pytest.fixture
 def experiment_with_regions(tmp_path: Path) -> ExperimentStore:
@@ -236,3 +264,59 @@ class TestSegmentationEngine:
         runs = store.get_segmentation_runs()
         run = [r for r in runs if r["id"] == result.run_id][0]
         assert run["cell_count"] == result.cell_count
+
+    def test_memory_error_propagates(
+        self, experiment_with_regions: ExperimentStore
+    ) -> None:
+        """MemoryError should not be caught by per-region handler."""
+        store = experiment_with_regions
+        engine = SegmentationEngine(
+            segmenter=ErrorSegmenter(MemoryError("out of memory"))
+        )
+
+        with pytest.raises(MemoryError, match="out of memory"):
+            engine.run(store, channel="DAPI")
+
+    def test_keyboard_interrupt_propagates(
+        self, experiment_with_regions: ExperimentStore
+    ) -> None:
+        """KeyboardInterrupt should propagate immediately."""
+        store = experiment_with_regions
+        engine = SegmentationEngine(
+            segmenter=ErrorSegmenter(KeyboardInterrupt())
+        )
+
+        with pytest.raises(KeyboardInterrupt):
+            engine.run(store, channel="DAPI")
+
+    def test_region_value_error_continues(
+        self, experiment_with_regions: ExperimentStore
+    ) -> None:
+        """ValueError on one region should not stop other regions."""
+        store = experiment_with_regions
+        engine = SegmentationEngine(
+            segmenter=ErrorOnceSegmenter(ValueError("bad region"))
+        )
+
+        result = engine.run(store, channel="DAPI")
+
+        # First region failed, second succeeded
+        assert result.regions_processed == 1
+        assert len(result.warnings) == 1
+        assert "segmentation failed" in result.warnings[0]
+        assert result.cell_count > 0
+
+    def test_region_runtime_error_continues(
+        self, experiment_with_regions: ExperimentStore
+    ) -> None:
+        """RuntimeError on one region should not stop other regions."""
+        store = experiment_with_regions
+        engine = SegmentationEngine(
+            segmenter=ErrorOnceSegmenter(RuntimeError("cellpose crash"))
+        )
+
+        result = engine.run(store, channel="DAPI")
+
+        assert result.regions_processed == 1
+        assert len(result.warnings) == 1
+        assert "cellpose crash" in result.warnings[0]
