@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 
 from percell3.core import ExperimentStore
-from percell3.core import queries
 from percell3.segment.label_processor import LabelProcessor
 
 
@@ -93,9 +92,7 @@ class RoiImporter:
             store.add_cells(cells)
 
         # Update cell count
-        queries.update_segmentation_run_cell_count(
-            store._conn, run_id, len(cells)
-        )
+        store.update_segmentation_run_cell_count(run_id, len(cells))
 
         return run_id
 
@@ -109,6 +106,13 @@ class RoiImporter:
         timepoint: str | None = None,
     ) -> int:
         """Import a Cellpose ``_seg.npy`` file.
+
+        .. warning::
+
+            This uses ``np.load(allow_pickle=True)`` because the Cellpose
+            ``_seg.npy`` format stores a pickled dictionary. Only load files
+            from trusted sources — a malicious ``.npy`` file can execute
+            arbitrary code during deserialization.
 
         Args:
             seg_path: Path to the ``_seg.npy`` file.
@@ -188,8 +192,6 @@ class RoiImporter:
         if cells:
             store.add_cells(cells)
 
-        queries.update_segmentation_run_cell_count(
-            store._conn, run_id, len(cells)
-        )
+        store.update_segmentation_run_cell_count(run_id, len(cells))
 
         return run_id

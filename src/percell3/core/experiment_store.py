@@ -458,6 +458,12 @@ class ExperimentStore:
             self._conn, ch.id, model_name, parameters
         )
 
+    def update_segmentation_run_cell_count(
+        self, run_id: int, cell_count: int
+    ) -> None:
+        """Update the cell count for a segmentation run."""
+        queries.update_segmentation_run_cell_count(self._conn, run_id, cell_count)
+
     # --- Threshold Runs ---
 
     def add_threshold_run(

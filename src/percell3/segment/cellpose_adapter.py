@@ -28,7 +28,7 @@ class CellposeAdapter(BaseSegmenter):
             gpu: Whether to use GPU acceleration.
 
         Returns:
-            A ``cellpose.models.Cellpose`` instance.
+            A Cellpose model instance (``CellposeModel`` in 4.x, ``Cellpose`` in 3.x).
 
         Raises:
             ImportError: If cellpose is not installed.
@@ -42,7 +42,10 @@ class CellposeAdapter(BaseSegmenter):
                     "cellpose is required for segmentation. "
                     "Install it with: pip install 'percell3[all]' or pip install cellpose"
                 ) from exc
-            self._model_cache[key] = models.Cellpose(
+            model_cls = getattr(models, "CellposeModel", None) or getattr(
+                models, "Cellpose"
+            )
+            self._model_cache[key] = model_cls(
                 model_type=model_name,
                 gpu=gpu,
             )
@@ -59,7 +62,7 @@ class CellposeAdapter(BaseSegmenter):
             Label image (Y, X) as int32 where pixel value = cell ID, 0 = background.
         """
         model = self._get_model(params.model_name, params.gpu)
-        masks, _, _, _ = model.eval(
+        results = model.eval(
             image,
             diameter=params.diameter,
             flow_threshold=params.flow_threshold,
@@ -68,6 +71,8 @@ class CellposeAdapter(BaseSegmenter):
             normalize=params.normalize,
             channels=params.channels_cellpose or [0, 0],
         )
+        # Cellpose 3.x returns 4 values, 4.x returns 3
+        masks = results[0]
         return masks.astype(np.int32)
 
     def segment_batch(
@@ -92,6 +97,6 @@ class CellposeAdapter(BaseSegmenter):
             normalize=params.normalize,
             channels=params.channels_cellpose or [0, 0],
         )
-        # model.eval with list returns (list[masks], list[flows], list[styles], list[diams])
+        # model.eval returns (masks, flows, styles[, diams]) — count varies by version
         masks_list = results[0]
         return [m.astype(np.int32) for m in masks_list]

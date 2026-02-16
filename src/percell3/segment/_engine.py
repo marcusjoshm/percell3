@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Callable
 
 from percell3.core import ExperimentStore
-from percell3.core import queries
 from percell3.core.exceptions import ChannelNotFoundError
 from percell3.segment.base_segmenter import (
     BaseSegmenter,
@@ -148,9 +146,7 @@ class SegmentationEngine:
                 progress_callback(i + 1, total, region_info.name)
 
         # 7. Update cell count in segmentation run
-        queries.update_segmentation_run_cell_count(
-            store._conn, run_id, total_cells
-        )
+        store.update_segmentation_run_cell_count(run_id, total_cells)
 
         elapsed = time.monotonic() - start
 
