@@ -12,7 +12,52 @@ import numpy as np
 import pytest
 
 from percell3.segment.base_segmenter import SegmentationParams
-from percell3.segment.cellpose_adapter import CellposeAdapter
+from percell3.segment.cellpose_adapter import KNOWN_CELLPOSE_MODELS, CellposeAdapter
+
+
+class TestModelNameValidation:
+    """Tests for model name allowlist (security: prevents arbitrary torch.load)."""
+
+    def test_known_model_accepted(self) -> None:
+        """Known model names should not raise."""
+        adapter = CellposeAdapter()
+        # Inject a mock to avoid actually loading cellpose
+        mock_model = MagicMock()
+        for name in ("cyto", "cyto2", "cyto3", "nuclei"):
+            adapter._model_cache.clear()
+            adapter._model_cache[(name, False)] = mock_model
+            # Should not raise — model is in cache and name is valid
+            assert adapter._get_model(name, gpu=False) is mock_model
+
+    def test_path_model_name_rejected(self) -> None:
+        """Filesystem path as model name should raise ValueError."""
+        adapter = CellposeAdapter()
+        with pytest.raises(ValueError, match="Unknown model"):
+            adapter._get_model("../evil", gpu=False)
+
+    def test_absolute_path_rejected(self) -> None:
+        """Absolute path should raise ValueError."""
+        adapter = CellposeAdapter()
+        with pytest.raises(ValueError, match="Unknown model"):
+            adapter._get_model("/tmp/malicious.pth", gpu=False)
+
+    def test_empty_string_rejected(self) -> None:
+        """Empty string should raise ValueError."""
+        adapter = CellposeAdapter()
+        with pytest.raises(ValueError, match="Unknown model"):
+            adapter._get_model("", gpu=False)
+
+    def test_arbitrary_string_rejected(self) -> None:
+        """Arbitrary string should raise ValueError."""
+        adapter = CellposeAdapter()
+        with pytest.raises(ValueError, match="Unknown model"):
+            adapter._get_model("not_a_real_model", gpu=False)
+
+    def test_known_models_constant_nonempty(self) -> None:
+        """The allowlist should contain the core Cellpose models."""
+        assert len(KNOWN_CELLPOSE_MODELS) > 0
+        assert "cyto3" in KNOWN_CELLPOSE_MODELS
+        assert "nuclei" in KNOWN_CELLPOSE_MODELS
 
 
 class TestCellposeAdapterUnit:

@@ -9,6 +9,7 @@ from percell3.segment.base_segmenter import (
 __all__ = [
     "BaseSegmenter",
     "CellposeAdapter",
+    "KNOWN_CELLPOSE_MODELS",
     "RoiImporter",
     "SegmentationEngine",
     "SegmentationParams",
@@ -26,6 +27,10 @@ def __getattr__(name: str):  # type: ignore[no-untyped-def]
         from percell3.segment.cellpose_adapter import CellposeAdapter
 
         return CellposeAdapter
+    if name == "KNOWN_CELLPOSE_MODELS":
+        from percell3.segment.cellpose_adapter import KNOWN_CELLPOSE_MODELS
+
+        return KNOWN_CELLPOSE_MODELS
     if name == "RoiImporter":
         from percell3.segment.roi_import import RoiImporter
 

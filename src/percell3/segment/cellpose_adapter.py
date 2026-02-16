@@ -9,6 +9,17 @@ import numpy as np
 from percell3.segment.base_segmenter import BaseSegmenter, SegmentationParams
 
 
+KNOWN_CELLPOSE_MODELS = frozenset({
+    "cyto", "cyto2", "cyto3", "nuclei",
+    "tissuenet", "livecell",
+    "tissuenet_cp3", "livecell_cp3",
+    "deepbacs_cp3", "cyto2_cp3",
+    "yeast_PhC_cp3", "yeast_BF_cp3",
+    "bact_phase_cp3", "bact_fluor_cp3",
+    "plant_cp3",
+})
+
+
 class CellposeAdapter(BaseSegmenter):
     """Cellpose segmentation backend with lazy import and model caching.
 
@@ -32,7 +43,13 @@ class CellposeAdapter(BaseSegmenter):
 
         Raises:
             ImportError: If cellpose is not installed.
+            ValueError: If model_name is not a known Cellpose model.
         """
+        if model_name not in KNOWN_CELLPOSE_MODELS:
+            raise ValueError(
+                f"Unknown model {model_name!r}. "
+                f"Known models: {sorted(KNOWN_CELLPOSE_MODELS)}"
+            )
         key = (model_name, gpu)
         if key not in self._model_cache:
             try:
