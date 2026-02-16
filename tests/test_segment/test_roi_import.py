@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from percell3.core import ExperimentStore
+from percell3.core.exceptions import ConditionNotFoundError
 from percell3.segment.roi_import import RoiImporter
 
 
@@ -146,6 +147,44 @@ class TestImportLabels:
         assert run["cell_count"] == 2
 
 
+    def test_invalid_region_no_orphaned_data(
+        self, experiment_with_region: ExperimentStore
+    ) -> None:
+        """Failed import should leave no orphaned DB records."""
+        store = experiment_with_region
+        importer = RoiImporter()
+
+        labels = np.zeros((128, 128), dtype=np.int32)
+        labels[10:40, 10:40] = 1
+
+        with pytest.raises(ValueError, match="not found"):
+            importer.import_labels(
+                labels, store, "nonexistent_region", "control", channel="manual"
+            )
+
+        # No segmentation runs should have been created
+        runs = store.get_segmentation_runs()
+        assert len(runs) == 0
+
+    def test_invalid_condition_no_orphaned_data(
+        self, experiment_with_region: ExperimentStore
+    ) -> None:
+        """Invalid condition should leave no orphaned data."""
+        store = experiment_with_region
+        importer = RoiImporter()
+
+        labels = np.zeros((128, 128), dtype=np.int32)
+        labels[10:40, 10:40] = 1
+
+        with pytest.raises(ConditionNotFoundError):
+            importer.import_labels(
+                labels, store, "region_1", "nonexistent_condition", channel="manual"
+            )
+
+        runs = store.get_segmentation_runs()
+        assert len(runs) == 0
+
+
 class TestImportCellposeSeg:
     """Tests for RoiImporter.import_cellpose_seg()."""
 
@@ -229,3 +268,25 @@ class TestImportCellposeSeg:
                 tmp_path / "nonexistent_seg.npy",
                 store, "region_1", "control",
             )
+
+    def test_invalid_region_no_orphaned_data(
+        self, experiment_with_region: ExperimentStore, tmp_path: Path
+    ) -> None:
+        """Invalid region should leave no orphaned DB records."""
+        store = experiment_with_region
+        importer = RoiImporter()
+
+        masks = np.zeros((128, 128), dtype=np.int32)
+        masks[20:50, 20:50] = 1
+        seg_data = {"masks": masks, "est_diam": 30.0}
+        seg_path = tmp_path / "test_seg.npy"
+        np.save(str(seg_path), seg_data, allow_pickle=True)
+
+        with pytest.raises(ValueError, match="not found"):
+            importer.import_cellpose_seg(
+                seg_path, store, "nonexistent_region", "control", channel="manual"
+            )
+
+        # No segmentation runs should have been created
+        runs = store.get_segmentation_runs()
+        assert len(runs) == 0

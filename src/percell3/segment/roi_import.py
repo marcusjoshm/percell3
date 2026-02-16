@@ -61,6 +61,17 @@ class RoiImporter:
         # Cast to int32 if needed
         labels_int32 = labels.astype(np.int32)
 
+        # Validate region exists BEFORE any DB/Zarr writes
+        region_info = store.get_regions(condition=condition)
+        target_region = None
+        for r in region_info:
+            if r.name == region:
+                target_region = r
+                break
+
+        if target_region is None:
+            raise ValueError(f"Region {region!r} not found in condition {condition!r}")
+
         # Create segmentation run
         run_id = store.add_segmentation_run(
             channel, source, {"source": source, "imported": True}
@@ -71,15 +82,6 @@ class RoiImporter:
 
         # Extract cells and insert
         processor = LabelProcessor()
-        region_info = store.get_regions(condition=condition)
-        target_region = None
-        for r in region_info:
-            if r.name == region:
-                target_region = r
-                break
-
-        if target_region is None:
-            raise ValueError(f"Region {region!r} not found in condition {condition!r}")
 
         cells = processor.extract_cells(
             labels_int32,
@@ -149,6 +151,17 @@ class RoiImporter:
 
         masks = seg_data["masks"]
 
+        # Validate region exists BEFORE any DB/Zarr writes
+        region_info = store.get_regions(condition=condition)
+        target_region = None
+        for r in region_info:
+            if r.name == region:
+                target_region = r
+                break
+
+        if target_region is None:
+            raise ValueError(f"Region {region!r} not found in condition {condition!r}")
+
         # Build parameters from seg_data metadata
         params: dict = {"source": "cellpose-gui", "imported": True}
         if "est_diam" in seg_data:
@@ -172,15 +185,6 @@ class RoiImporter:
 
         # Extract cells
         processor = LabelProcessor()
-        region_info = store.get_regions(condition=condition)
-        target_region = None
-        for r in region_info:
-            if r.name == region:
-                target_region = r
-                break
-
-        if target_region is None:
-            raise ValueError(f"Region {region!r} not found in condition {condition!r}")
 
         cells = processor.extract_cells(
             masks,
