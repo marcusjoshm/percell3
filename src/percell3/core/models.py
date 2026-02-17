@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+DEFAULT_BIO_REP = "N1"
+
 
 @dataclass(frozen=True)
 class ChannelConfig:
@@ -26,7 +28,7 @@ class FovInfo:
     id: int
     name: str
     condition: str
-    bio_rep: str = "N1"
+    bio_rep: str = DEFAULT_BIO_REP
     timepoint: str | None = None
     width: int | None = None
     height: int | None = None

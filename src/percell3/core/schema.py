@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS cell_tags (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cells_fov ON cells(fov_id);
+CREATE INDEX IF NOT EXISTS idx_cells_fov_valid ON cells(fov_id, is_valid);
 CREATE INDEX IF NOT EXISTS idx_cells_segmentation ON cells(segmentation_id);
 CREATE INDEX IF NOT EXISTS idx_cells_area ON cells(area_pixels);
 CREATE INDEX IF NOT EXISTS idx_measurements_cell ON measurements(cell_id);
@@ -148,7 +149,7 @@ EXPECTED_TABLES = frozenset({
 })
 
 EXPECTED_INDEXES = frozenset({
-    "idx_cells_fov", "idx_cells_segmentation", "idx_cells_area",
+    "idx_cells_fov", "idx_cells_fov_valid", "idx_cells_segmentation", "idx_cells_area",
     "idx_measurements_cell", "idx_measurements_channel", "idx_measurements_metric",
     "idx_fovs_condition", "idx_fovs_bio_rep",
 })
@@ -176,7 +177,9 @@ def create_schema(
         "INSERT INTO experiments (name, description) VALUES (?, ?)",
         (name, description),
     )
-    conn.execute("INSERT INTO bio_reps (name) VALUES ('N1')")
+    from percell3.core.models import DEFAULT_BIO_REP
+
+    conn.execute("INSERT INTO bio_reps (name) VALUES (?)", (DEFAULT_BIO_REP,))
     conn.commit()
     return conn
 

@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from percell3.core.models import DEFAULT_BIO_REP
+
 _MAX_PATTERN_LENGTH = 200
 
 
@@ -108,7 +110,7 @@ class ImportPlan:
     z_transform: ZTransform
     pixel_size_um: float | None
     token_config: TokenConfig
-    bio_rep: str = "N1"
+    bio_rep: str = DEFAULT_BIO_REP
     condition_map: dict[str, str] = field(default_factory=dict)
     source_files: list[Path] | None = None  # Transient — not serialized to YAML
 

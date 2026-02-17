@@ -210,12 +210,7 @@ def select_bio_rep_by_name(conn: sqlite3.Connection, name: str) -> sqlite3.Row:
 
 def select_bio_rep_id(conn: sqlite3.Connection, name: str) -> int:
     """Resolve a bio rep name to its ID. Raises BioRepNotFoundError if not found."""
-    row = conn.execute(
-        "SELECT id FROM bio_reps WHERE name = ?", (name,)
-    ).fetchone()
-    if row is None:
-        raise BioRepNotFoundError(name)
-    return row["id"]
+    return select_bio_rep_by_name(conn, name)["id"]
 
 
 # ---------------------------------------------------------------------------

@@ -155,3 +155,14 @@ def conditions(ctx: click.Context, fmt: str) -> None:
 
     rows = [{"name": c} for c in cond_list]
     format_output(rows, ["name"], fmt, "Conditions")
+
+
+@query.command("add-bio-rep")
+@click.argument("name")
+@click.pass_context
+@error_handler
+def add_bio_rep(ctx: click.Context, name: str) -> None:
+    """Add a biological replicate to the experiment."""
+    store = ctx.obj["store"]
+    store.add_bio_rep(name)
+    console.print(f"[green]Added bio rep:[/green] {name}")
