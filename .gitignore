@@ -38,7 +38,7 @@ htmlcov/
 .obsidian/
 
 # Agentic development config (Claude Code, Cursor, etc.)
-CLAUDE.md
+**/CLAUDE.md
 .claude/
 compound-engineering.local.md
 .cursorrules
