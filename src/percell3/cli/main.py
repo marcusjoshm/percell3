@@ -16,9 +16,19 @@ def cli(ctx: click.Context, verbose: bool) -> None:
     utils.verbose = verbose
 
     if ctx.invoked_subcommand is None:
-        from percell3.cli.menu import run_interactive_menu
+        if _is_interactive():
+            from percell3.cli.menu import run_interactive_menu
 
-        run_interactive_menu()
+            run_interactive_menu()
+        else:
+            click.echo(ctx.get_help())
+
+
+def _is_interactive() -> bool:
+    """Check if stdin is a TTY (agent/pipe callers get help instead of menu)."""
+    import sys
+
+    return sys.stdin.isatty()
 
 
 def _register_commands() -> None:

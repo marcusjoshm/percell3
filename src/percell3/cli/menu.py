@@ -532,8 +532,15 @@ def _export_csv(state: MenuState) -> None:
             console.print("[yellow]Export cancelled.[/yellow]")
             return
 
+    # Optional channel/metric filters
+    ch_filter = Prompt.ask("Channels to export (comma-separated, blank = all)", default="")
+    met_filter = Prompt.ask("Metrics to export (comma-separated, blank = all)", default="")
+
+    ch_list = [c.strip() for c in ch_filter.split(",") if c.strip()] or None
+    met_list = [m.strip() for m in met_filter.split(",") if m.strip()] or None
+
     with console.status("[bold blue]Exporting measurements..."):
-        store.export_csv(out_path)
+        store.export_csv(out_path, channels=ch_list, metrics=met_list)
     console.print(f"[green]Exported measurements to {out_path}[/green]")
 
 

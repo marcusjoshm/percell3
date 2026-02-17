@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import click
-from rich.table import Table
 
 from percell3.cli.utils import console, error_handler, open_experiment
 

@@ -269,7 +269,7 @@ def write_labels(
     group = root.require_group(group_path)
 
     arr_path = f"{group_path}/0"
-    label_data = data.astype(np.int32)
+    label_data = np.asarray(data, dtype=np.int32)
 
     if arr_path in root:
         arr = root[arr_path]

@@ -23,11 +23,6 @@ class _MockSegmenter(BaseSegmenter):
         labels[h * 3 // 4 : h * 7 // 8, w * 3 // 4 : w * 7 // 8] = 2
         return labels
 
-    def segment_batch(
-        self, images: list[np.ndarray], params: SegmentationParams
-    ) -> list[np.ndarray]:
-        return [self.segment(img, params) for img in images]
-
 
 class TestSegmentCommand:
     def test_help(self, runner: CliRunner) -> None:

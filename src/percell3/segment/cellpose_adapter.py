@@ -99,30 +99,4 @@ class CellposeAdapter(BaseSegmenter):
         )
         # Cellpose 3.x returns 4 values, 4.x returns 3
         masks = results[0]
-        return masks.astype(np.int32)
-
-    def segment_batch(
-        self, images: list[np.ndarray], params: SegmentationParams
-    ) -> list[np.ndarray]:
-        """Run Cellpose segmentation on multiple images.
-
-        Args:
-            images: List of 2D arrays (Y, X).
-            params: Segmentation parameters.
-
-        Returns:
-            List of label images (Y, X) as int32.
-        """
-        model = self._get_model(params.model_name, params.gpu)
-        results = model.eval(
-            images,
-            diameter=params.diameter,
-            flow_threshold=params.flow_threshold,
-            cellprob_threshold=params.cellprob_threshold,
-            min_size=params.min_size,
-            normalize=params.normalize,
-            channels=params.channels_cellpose or [0, 0],
-        )
-        # model.eval returns (masks, flows, styles[, diams]) — count varies by version
-        masks_list = results[0]
-        return [m.astype(np.int32) for m in masks_list]
+        return np.asarray(masks, dtype=np.int32)

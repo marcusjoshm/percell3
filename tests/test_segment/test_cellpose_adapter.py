@@ -180,22 +180,6 @@ class TestCellposeAdapterUnit:
 
         assert result.max() == 0
 
-    def test_segment_batch(self) -> None:
-        """Batch segmentation should return list of label arrays."""
-        adapter = CellposeAdapter()
-        masks_list = [np.zeros((32, 32), dtype=np.int32) for _ in range(3)]
-
-        mock_model = MagicMock()
-        mock_model.eval.return_value = (masks_list, None, None, None)
-
-        with patch.object(adapter, "_get_model", return_value=mock_model):
-            params = SegmentationParams(channel="DAPI", gpu=False)
-            images = [np.zeros((32, 32), dtype=np.uint16) for _ in range(3)]
-            results = adapter.segment_batch(images, params)
-
-        assert len(results) == 3
-        assert all(r.dtype == np.int32 for r in results)
-
     def test_default_channels_grayscale(self) -> None:
         """When channels_cellpose is None, should pass [0, 0] to Cellpose."""
         adapter = CellposeAdapter()
@@ -220,11 +204,11 @@ class TestCellposeAdapterUnit:
         mock_model.eval.return_value = (fake_masks, None, None, None)
 
         with patch.object(adapter, "_get_model", return_value=mock_model):
-            params = SegmentationParams(channel="DAPI", gpu=False, channels_cellpose=[2, 1])
+            params = SegmentationParams(channel="DAPI", gpu=False, channels_cellpose=(2, 1))
             adapter.segment(np.zeros((10, 10), dtype=np.uint16), params)
 
         call_kwargs = mock_model.eval.call_args
-        assert call_kwargs[1]["channels"] == [2, 1]
+        assert list(call_kwargs[1]["channels"]) == [2, 1]
 
 
 @pytest.mark.slow

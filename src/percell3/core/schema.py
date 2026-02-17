@@ -9,6 +9,7 @@ from percell3.core.exceptions import ExperimentNotFoundError
 
 _SCHEMA_SQL = """\
 PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS experiments (
@@ -190,5 +191,6 @@ def open_database(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn

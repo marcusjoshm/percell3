@@ -109,7 +109,7 @@ class ImportPlan:
     pixel_size_um: float | None
     token_config: TokenConfig
     condition_map: dict[str, str] = field(default_factory=dict)
-    source_files: list[Path] | None = None
+    source_files: list[Path] | None = None  # Transient — not serialized to YAML
 
     def to_yaml(self, path: Path) -> None:
         """Serialize this plan to a YAML file."""

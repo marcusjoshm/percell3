@@ -7,7 +7,41 @@ from pathlib import Path
 import numpy as np
 
 from percell3.core import ExperimentStore
+from percell3.core.models import CellRecord, RegionInfo
 from percell3.segment.label_processor import LabelProcessor
+
+
+def _validate_region(
+    store: ExperimentStore, region: str, condition: str,
+) -> RegionInfo:
+    """Look up a region by name, raising ValueError if not found."""
+    region_info = store.get_regions(condition=condition)
+    for r in region_info:
+        if r.name == region:
+            return r
+    raise ValueError(f"Region {region!r} not found in condition {condition!r}")
+
+
+def _store_labels_and_cells(
+    store: ExperimentStore,
+    labels: np.ndarray,
+    region_info: RegionInfo,
+    region: str,
+    condition: str,
+    run_id: int,
+    timepoint: str | None,
+) -> None:
+    """Write labels to zarr, extract cells, insert into DB, update run count."""
+    store.write_labels(region, condition, labels, run_id, timepoint)
+
+    processor = LabelProcessor()
+    cells = processor.extract_cells(
+        labels, region_info.id, run_id, region_info.pixel_size_um,
+    )
+    if cells:
+        store.add_cells(cells)
+
+    store.update_segmentation_run_cell_count(run_id, len(cells))
 
 
 class RoiImporter:
@@ -45,57 +79,27 @@ class RoiImporter:
         Raises:
             ValueError: If labels is not 2D or has non-integer dtype.
         """
-        # Validate dtype
         if not np.issubdtype(labels.dtype, np.integer):
             raise ValueError(
                 f"Labels must have integer dtype, got {labels.dtype}. "
                 "Cast to int32 before importing."
             )
-
-        # Validate shape
         if labels.ndim != 2:
             raise ValueError(
                 f"Labels must be 2D, got {labels.ndim}D with shape {labels.shape}"
             )
 
-        # Cast to int32 if needed
-        labels_int32 = labels.astype(np.int32)
+        labels_int32 = np.asarray(labels, dtype=np.int32)
 
-        # Validate region exists BEFORE any DB/Zarr writes
-        region_info = store.get_regions(condition=condition)
-        target_region = None
-        for r in region_info:
-            if r.name == region:
-                target_region = r
-                break
+        target_region = _validate_region(store, region, condition)
 
-        if target_region is None:
-            raise ValueError(f"Region {region!r} not found in condition {condition!r}")
-
-        # Create segmentation run
         run_id = store.add_segmentation_run(
             channel, source, {"source": source, "imported": True}
         )
 
-        # Write labels to zarr
-        store.write_labels(region, condition, labels_int32, run_id, timepoint)
-
-        # Extract cells and insert
-        processor = LabelProcessor()
-
-        cells = processor.extract_cells(
-            labels_int32,
-            target_region.id,
-            run_id,
-            target_region.pixel_size_um,
+        _store_labels_and_cells(
+            store, labels_int32, target_region, region, condition, run_id, timepoint,
         )
-
-        if cells:
-            store.add_cells(cells)
-
-        # Update cell count
-        store.update_segmentation_run_cell_count(run_id, len(cells))
-
         return run_id
 
     def import_cellpose_seg(
@@ -135,67 +139,31 @@ class RoiImporter:
         if not seg_path.exists():
             raise FileNotFoundError(f"Cellpose seg file not found: {seg_path}")
 
-        # Load _seg.npy (allow_pickle required for Cellpose format)
         seg_data = np.load(str(seg_path), allow_pickle=True).item()
 
         if not isinstance(seg_data, dict):
             raise ValueError(
                 f"Expected dict from _seg.npy, got {type(seg_data).__name__}"
             )
-
         if "masks" not in seg_data:
             raise ValueError(
                 f"Cellpose _seg.npy missing 'masks' key. "
                 f"Available keys: {list(seg_data.keys())}"
             )
 
-        masks = seg_data["masks"]
+        masks = np.asarray(seg_data["masks"], dtype=np.int32)
 
-        # Validate region exists BEFORE any DB/Zarr writes
-        region_info = store.get_regions(condition=condition)
-        target_region = None
-        for r in region_info:
-            if r.name == region:
-                target_region = r
-                break
+        target_region = _validate_region(store, region, condition)
 
-        if target_region is None:
-            raise ValueError(f"Region {region!r} not found in condition {condition!r}")
-
-        # Build parameters from seg_data metadata
         params: dict = {"source": "cellpose-gui", "imported": True}
         if "est_diam" in seg_data:
             params["diameter"] = float(seg_data["est_diam"])
         if "model_path" in seg_data:
             params["model_path"] = str(seg_data["model_path"])
 
-        # Create segmentation run with captured parameters
-        run_id = store.add_segmentation_run(
-            channel, "cellpose-gui", params
+        run_id = store.add_segmentation_run(channel, "cellpose-gui", params)
+
+        _store_labels_and_cells(
+            store, masks, target_region, region, condition, run_id, timepoint,
         )
-
-        # Validate and cast masks
-        if not np.issubdtype(masks.dtype, np.integer):
-            masks = masks.astype(np.int32)
-        else:
-            masks = masks.astype(np.int32)
-
-        # Write labels
-        store.write_labels(region, condition, masks, run_id, timepoint)
-
-        # Extract cells
-        processor = LabelProcessor()
-
-        cells = processor.extract_cells(
-            masks,
-            target_region.id,
-            run_id,
-            target_region.pixel_size_um,
-        )
-
-        if cells:
-            store.add_cells(cells)
-
-        store.update_segmentation_run_cell_count(run_id, len(cells))
-
         return run_id

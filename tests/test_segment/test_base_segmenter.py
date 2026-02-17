@@ -37,7 +37,7 @@ class TestSegmentationParams:
             gpu=False,
             min_size=30,
             normalize=False,
-            channels_cellpose=[0, 0],
+            channels_cellpose=(0, 0),
         )
         assert params.channel == "GFP"
         assert params.model_name == "nuclei"
@@ -141,32 +141,9 @@ class TestBaseSegmenter:
             ) -> np.ndarray:
                 return np.zeros(image.shape, dtype=np.int32)
 
-            def segment_batch(
-                self, images: list[np.ndarray], params: SegmentationParams
-            ) -> list[np.ndarray]:
-                return [self.segment(img, params) for img in images]
-
         segmenter = MockSegmenter()
         img = np.zeros((64, 64), dtype=np.uint16)
         params = SegmentationParams(channel="DAPI")
         result = segmenter.segment(img, params)
         assert result.shape == (64, 64)
         assert result.dtype == np.int32
-
-    def test_concrete_subclass_batch(self) -> None:
-        class MockSegmenter(BaseSegmenter):
-            def segment(
-                self, image: np.ndarray, params: SegmentationParams
-            ) -> np.ndarray:
-                return np.zeros(image.shape, dtype=np.int32)
-
-            def segment_batch(
-                self, images: list[np.ndarray], params: SegmentationParams
-            ) -> list[np.ndarray]:
-                return [self.segment(img, params) for img in images]
-
-        segmenter = MockSegmenter()
-        images = [np.zeros((64, 64), dtype=np.uint16) for _ in range(3)]
-        params = SegmentationParams(channel="DAPI")
-        results = segmenter.segment_batch(images, params)
-        assert len(results) == 3

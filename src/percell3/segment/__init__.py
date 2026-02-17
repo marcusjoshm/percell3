@@ -5,11 +5,16 @@ from percell3.segment.base_segmenter import (
     SegmentationParams,
     SegmentationResult,
 )
+from percell3.segment._engine import SegmentationEngine
+from percell3.segment.label_processor import LabelProcessor, extract_cells
+from percell3.segment.roi_import import RoiImporter
 
 __all__ = [
     "BaseSegmenter",
     "CellposeAdapter",
+    "extract_cells",
     "KNOWN_CELLPOSE_MODELS",
+    "LabelProcessor",
     "RoiImporter",
     "SegmentationEngine",
     "SegmentationParams",
@@ -18,11 +23,7 @@ __all__ = [
 
 
 def __getattr__(name: str):  # type: ignore[no-untyped-def]
-    """Lazy imports to avoid heavy dependencies (cellpose) at module level."""
-    if name == "SegmentationEngine":
-        from percell3.segment._engine import SegmentationEngine
-
-        return SegmentationEngine
+    """Lazy imports for cellpose-dependent symbols to avoid slow startup."""
     if name == "CellposeAdapter":
         from percell3.segment.cellpose_adapter import CellposeAdapter
 
@@ -31,8 +32,4 @@ def __getattr__(name: str):  # type: ignore[no-untyped-def]
         from percell3.segment.cellpose_adapter import KNOWN_CELLPOSE_MODELS
 
         return KNOWN_CELLPOSE_MODELS
-    if name == "RoiImporter":
-        from percell3.segment.roi_import import RoiImporter
-
-        return RoiImporter
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

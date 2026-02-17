@@ -10,7 +10,7 @@ import pytest
 from percell3.core import ExperimentStore
 from percell3.core.exceptions import ChannelNotFoundError
 from percell3.segment._engine import SegmentationEngine
-from percell3.segment.base_segmenter import SegmentationResult
+from percell3.segment.base_segmenter import SegmentationParams, SegmentationResult
 from tests.test_segment.conftest import EmptySegmenter, MockSegmenter
 
 # --- Error-raising segmenters for exception handling tests ---

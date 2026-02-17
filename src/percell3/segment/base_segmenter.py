@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import math
+import dataclasses
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -34,7 +34,7 @@ class SegmentationParams:
     gpu: bool = True
     min_size: int = 15
     normalize: bool = True
-    channels_cellpose: list[int] | None = None
+    channels_cellpose: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         """Validate parameters."""
@@ -50,20 +50,14 @@ class SegmentationParams:
             )
         if self.diameter is not None and self.diameter <= 0:
             raise ValueError(f"diameter must be > 0 or None, got {self.diameter}")
+        if not (-6 <= self.cellprob_threshold <= 6):
+            raise ValueError(
+                f"cellprob_threshold must be between -6 and 6, got {self.cellprob_threshold}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict for storing in segmentation_runs.parameters."""
-        return {
-            "channel": self.channel,
-            "model_name": self.model_name,
-            "diameter": self.diameter,
-            "flow_threshold": self.flow_threshold,
-            "cellprob_threshold": self.cellprob_threshold,
-            "gpu": self.gpu,
-            "min_size": self.min_size,
-            "normalize": self.normalize,
-            "channels_cellpose": self.channels_cellpose,
-        }
+        return dataclasses.asdict(self)
 
 
 @dataclass(frozen=True)
@@ -76,6 +70,7 @@ class SegmentationResult:
         regions_processed: Number of regions that were segmented.
         warnings: List of warning messages (e.g., regions with 0 cells).
         elapsed_seconds: Wall-clock time for the segmentation run.
+        region_stats: Per-region structured stats (region, cell_count, status, error).
     """
 
     run_id: int
@@ -83,13 +78,14 @@ class SegmentationResult:
     regions_processed: int
     warnings: list[str] = field(default_factory=list)
     elapsed_seconds: float = 0.0
+    region_stats: list[dict[str, object]] = field(default_factory=list)
 
 
 class BaseSegmenter(ABC):
     """Abstract interface for segmentation backends.
 
     Concrete implementations (e.g., CellposeAdapter) must implement
-    ``segment()`` and ``segment_batch()``.
+    ``segment()``.
     """
 
     @abstractmethod
@@ -102,18 +98,4 @@ class BaseSegmenter(ABC):
 
         Returns:
             Label image (Y, X) as int32 where pixel value = cell ID, 0 = background.
-        """
-
-    @abstractmethod
-    def segment_batch(
-        self, images: list[np.ndarray], params: SegmentationParams
-    ) -> list[np.ndarray]:
-        """Run segmentation on multiple images (for GPU batching).
-
-        Args:
-            images: List of 2D arrays (Y, X).
-            params: Segmentation parameters.
-
-        Returns:
-            List of label images (Y, X) as int32.
         """
