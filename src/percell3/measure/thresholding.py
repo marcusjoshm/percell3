@@ -46,6 +46,7 @@ class ThresholdEngine:
         channel: str,
         method: str = "otsu",
         manual_value: float | None = None,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> ThresholdResult:
         """Apply thresholding to a channel image in a FOV.
@@ -57,6 +58,7 @@ class ThresholdEngine:
             channel: Channel name to threshold.
             method: Thresholding method ("otsu", "adaptive", "manual", "triangle", "li").
             manual_value: Threshold value (required when method="manual").
+            bio_rep: Biological replicate name (auto-resolved if None).
             timepoint: Timepoint (optional).
 
         Returns:
@@ -74,7 +76,7 @@ class ThresholdEngine:
             raise ValueError("manual_value is required when method='manual'")
 
         # Read channel image
-        image = store.read_image_numpy(fov, condition, channel, timepoint)
+        image = store.read_image_numpy(fov, condition, channel, bio_rep=bio_rep, timepoint=timepoint)
 
         # Compute threshold
         threshold_value = self._compute_threshold(image, method, manual_value)
@@ -92,7 +94,7 @@ class ThresholdEngine:
         run_id = store.add_threshold_run(channel, method, parameters)
 
         # Write mask to masks.zarr
-        store.write_mask(fov, condition, channel, mask.astype(np.uint8), run_id, timepoint)
+        store.write_mask(fov, condition, channel, mask.astype(np.uint8), run_id, bio_rep=bio_rep, timepoint=timepoint)
 
         # Statistics
         positive_pixels = int(np.sum(mask))

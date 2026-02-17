@@ -38,6 +38,7 @@ class Measurer:
         channels: list[str],
         metrics: list[str] | None = None,
         segmentation_run_id: int | None = None,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> int:
         """Measure all cells in a FOV across specified channels.
@@ -49,6 +50,7 @@ class Measurer:
             channels: Channel names to measure.
             metrics: Metric names (default: all registered metrics).
             segmentation_run_id: Which segmentation to use (default: latest).
+            bio_rep: Biological replicate name (auto-resolved if None).
             timepoint: Timepoint (optional).
 
         Returns:
@@ -64,7 +66,7 @@ class Measurer:
 
         # Get cells for this FOV
         cells_df = store.get_cells(
-            condition=condition, fov=fov, timepoint=timepoint,
+            condition=condition, bio_rep=bio_rep, fov=fov, timepoint=timepoint,
         )
         if cells_df.empty:
             logger.info("No cells found in %s/%s — skipping", condition, fov)
@@ -77,13 +79,13 @@ class Measurer:
                 return 0
 
         # Read label image once
-        labels = store.read_labels(fov, condition, timepoint)
+        labels = store.read_labels(fov, condition, bio_rep=bio_rep, timepoint=timepoint)
 
         all_records: list[MeasurementRecord] = []
 
         for channel in channels:
             ch_info = store.get_channel(channel)
-            image = store.read_image_numpy(fov, condition, channel, timepoint)
+            image = store.read_image_numpy(fov, condition, channel, bio_rep=bio_rep, timepoint=timepoint)
 
             records = self._measure_cells_on_channel(
                 cells_df, labels, image, ch_info.id, metric_names,
@@ -103,6 +105,7 @@ class Measurer:
         condition: str,
         channel: str,
         metrics: list[str] | None = None,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> list[MeasurementRecord]:
         """Measure specific cells on a specific channel (preview, no DB write).
@@ -114,6 +117,7 @@ class Measurer:
             condition: Condition name.
             channel: Channel name.
             metrics: Metric names (default: all).
+            bio_rep: Biological replicate name (auto-resolved if None).
             timepoint: Timepoint (optional).
 
         Returns:
@@ -121,7 +125,7 @@ class Measurer:
         """
         metric_names = metrics or self._metrics.list_metrics()
 
-        cells_df = store.get_cells(condition=condition, fov=fov, timepoint=timepoint)
+        cells_df = store.get_cells(condition=condition, bio_rep=bio_rep, fov=fov, timepoint=timepoint)
         if cells_df.empty:
             return []
 
@@ -129,9 +133,9 @@ class Measurer:
         if cells_df.empty:
             return []
 
-        labels = store.read_labels(fov, condition, timepoint)
+        labels = store.read_labels(fov, condition, bio_rep=bio_rep, timepoint=timepoint)
         ch_info = store.get_channel(channel)
-        image = store.read_image_numpy(fov, condition, channel, timepoint)
+        image = store.read_image_numpy(fov, condition, channel, bio_rep=bio_rep, timepoint=timepoint)
 
         return self._measure_cells_on_channel(
             cells_df, labels, image, ch_info.id, metric_names,

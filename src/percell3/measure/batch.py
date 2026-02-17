@@ -51,6 +51,7 @@ class BatchMeasurer:
         channels: list[str] | None = None,
         metrics: list[str] | None = None,
         condition: str | None = None,
+        bio_rep: str | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> BatchResult:
         """Measure all cells in all FOVs across specified channels.
@@ -60,6 +61,7 @@ class BatchMeasurer:
             channels: Channel names to measure. None = all channels.
             metrics: Metric names. None = all registered metrics.
             condition: Optional condition filter.
+            bio_rep: Optional biological replicate filter.
             progress_callback: Optional callback(current, total, fov_name).
 
         Returns:
@@ -80,7 +82,7 @@ class BatchMeasurer:
             raise ValueError("No channels to measure")
 
         # Get FOVs
-        all_fovs = store.get_fovs(condition=condition)
+        all_fovs = store.get_fovs(condition=condition, bio_rep=bio_rep)
         if not all_fovs:
             raise ValueError(
                 f"No fovs found"
@@ -100,6 +102,7 @@ class BatchMeasurer:
                     condition=fov_info.condition,
                     channels=channels,
                     metrics=metrics,
+                    bio_rep=fov_info.bio_rep,
                 )
                 total_measurements += count
                 fovs_processed += 1

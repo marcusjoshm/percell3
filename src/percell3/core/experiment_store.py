@@ -333,7 +333,8 @@ class ExperimentStore:
         bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> np.ndarray:
-        _, br_name = self._resolve_bio_rep(bio_rep)
+        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
+        br_name = fov_info.bio_rep
         gp = zarr_io.label_group_path(br_name, condition, fov, timepoint)
         return zarr_io.read_labels(self.labels_zarr_path, gp)
 
@@ -494,7 +495,8 @@ class ExperimentStore:
         bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> np.ndarray:
-        _, br_name = self._resolve_bio_rep(bio_rep)
+        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
+        br_name = fov_info.bio_rep
         gp = zarr_io.mask_group_path(br_name, condition, fov, channel, timepoint)
         return zarr_io.read_mask(self.masks_zarr_path, gp)
 
