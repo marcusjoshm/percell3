@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class SegmentationEngine:
-    """Orchestrates a full segmentation run across experiment regions.
+    """Orchestrates a full segmentation run across experiment FOVs.
 
     Reads images from ExperimentStore, runs segmentation via a
     ``BaseSegmenter`` backend, writes label images to ``labels.zarr``,
@@ -41,22 +41,22 @@ class SegmentationEngine:
         channel: str = "DAPI",
         model: str = "cpsam",
         diameter: int | float | None = None,
-        regions: list[str] | None = None,
+        fovs: list[str] | None = None,
         condition: str | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
         params: SegmentationParams | None = None,
         **kwargs: object,
     ) -> SegmentationResult:
-        """Run segmentation on experiment regions.
+        """Run segmentation on experiment FOVs.
 
         Args:
             store: Target ExperimentStore.
             channel: Channel name to segment.
             model: Cellpose model name (e.g., "cpsam", "cyto3", "nuclei").
             diameter: Expected cell diameter in pixels. None = auto-detect.
-            regions: Optional list of region names to process. None = all.
+            fovs: Optional list of FOV names to process. None = all.
             condition: Optional condition filter.
-            progress_callback: Optional callback(current, total, region_name).
+            progress_callback: Optional callback(current, total, fov_name).
             params: Optional pre-built SegmentationParams. If provided,
                 channel/model/diameter/kwargs are ignored.
             **kwargs: Additional SegmentationParams fields (flow_threshold,
@@ -67,11 +67,11 @@ class SegmentationEngine:
 
         Raises:
             ChannelNotFoundError: If the channel doesn't exist.
-            ValueError: If no regions match the filter.
+            ValueError: If no FOVs match the filter.
         """
         start = time.monotonic()
         warnings: list[str] = []
-        region_stats: list[dict[str, object]] = []
+        fov_stats: list[dict[str, object]] = []
 
         # 1. Validate channel exists
         store.get_channel(channel)
@@ -96,16 +96,16 @@ class SegmentationEngine:
 
             segmenter = CellposeAdapter()
 
-        # 4. Get regions to segment
-        all_regions = store.get_regions(condition=condition)
-        if regions is not None:
-            region_set = set(regions)
-            all_regions = [r for r in all_regions if r.name in region_set]
+        # 4. Get FOVs to segment
+        all_fovs = store.get_fovs(condition=condition)
+        if fovs is not None:
+            fov_set = set(fovs)
+            all_fovs = [f for f in all_fovs if f.name in fov_set]
 
-        if not all_regions:
+        if not all_fovs:
             raise ValueError(
-                "No regions match the filter. "
-                f"condition={condition!r}, regions={regions!r}"
+                "No FOVs match the filter. "
+                f"condition={condition!r}, fovs={fovs!r}"
             )
 
         # 5. Create segmentation run in DB
@@ -113,17 +113,17 @@ class SegmentationEngine:
             channel, params.model_name, params.to_dict()
         )
 
-        # 6. Process each region (one at a time for memory streaming)
+        # 6. Process each FOV (one at a time for memory streaming)
         processor = LabelProcessor()
         total_cells = 0
-        regions_processed = 0
-        total = len(all_regions)
+        fovs_processed = 0
+        total = len(all_fovs)
 
-        for i, region_info in enumerate(all_regions):
+        for i, fov_info in enumerate(all_fovs):
             try:
                 # Read image
                 image = store.read_image_numpy(
-                    region_info.name, region_info.condition, channel
+                    fov_info.name, fov_info.condition, channel
                 )
 
                 # Run segmentation
@@ -131,15 +131,15 @@ class SegmentationEngine:
 
                 # Write labels to zarr
                 store.write_labels(
-                    region_info.name, region_info.condition, labels, run_id
+                    fov_info.name, fov_info.condition, labels, run_id
                 )
 
                 # Extract cell properties
                 cells = processor.extract_cells(
                     labels,
-                    region_info.id,
+                    fov_info.id,
                     run_id,
-                    region_info.pixel_size_um,
+                    fov_info.pixel_size_um,
                 )
 
                 # Insert cells into DB
@@ -147,38 +147,38 @@ class SegmentationEngine:
                     store.add_cells(cells)
 
                 total_cells += len(cells)
-                regions_processed += 1
+                fovs_processed += 1
 
-                region_stats.append({
-                    "region": region_info.name,
+                fov_stats.append({
+                    "fov": fov_info.name,
                     "cell_count": len(cells),
                     "status": "ok",
                 })
 
                 if len(cells) == 0:
                     warnings.append(
-                        f"{region_info.name}: 0 cells detected"
+                        f"{fov_info.name}: 0 cells detected"
                     )
 
             except Exception as exc:
                 if isinstance(exc, (MemoryError, KeyboardInterrupt, SystemExit)):
                     raise
                 logger.warning(
-                    "Segmentation failed for region %s: %s",
-                    region_info.name, exc, exc_info=True,
+                    "Segmentation failed for FOV %s: %s",
+                    fov_info.name, exc, exc_info=True,
                 )
                 warnings.append(
-                    f"{region_info.name}: segmentation failed — {exc}"
+                    f"{fov_info.name}: segmentation failed — {exc}"
                 )
-                region_stats.append({
-                    "region": region_info.name,
+                fov_stats.append({
+                    "fov": fov_info.name,
                     "cell_count": 0,
                     "status": "failed",
                     "error": str(exc),
                 })
 
             if progress_callback:
-                progress_callback(i + 1, total, region_info.name)
+                progress_callback(i + 1, total, fov_info.name)
 
         # 7. Update cell count in segmentation run
         store.update_segmentation_run_cell_count(run_id, total_cells)
@@ -188,8 +188,8 @@ class SegmentationEngine:
         return SegmentationResult(
             run_id=run_id,
             cell_count=total_cells,
-            regions_processed=regions_processed,
+            fovs_processed=fovs_processed,
             warnings=warnings,
             elapsed_seconds=round(elapsed, 3),
-            region_stats=region_stats,
+            fov_stats=fov_stats,
         )

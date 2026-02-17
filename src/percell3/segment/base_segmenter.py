@@ -66,19 +66,19 @@ class SegmentationResult:
 
     Attributes:
         run_id: Segmentation run ID in the database.
-        cell_count: Total number of cells detected across all regions.
-        regions_processed: Number of regions that were segmented.
-        warnings: List of warning messages (e.g., regions with 0 cells).
+        cell_count: Total number of cells detected across all FOVs.
+        fovs_processed: Number of FOVs that were segmented.
+        warnings: List of warning messages (e.g., FOVs with 0 cells).
         elapsed_seconds: Wall-clock time for the segmentation run.
-        region_stats: Per-region structured stats (region, cell_count, status, error).
+        fov_stats: Per-FOV structured stats (fov, cell_count, status, error).
     """
 
     run_id: int
     cell_count: int
-    regions_processed: int
+    fovs_processed: int
     warnings: list[str] = field(default_factory=list)
     elapsed_seconds: float = 0.0
-    region_stats: list[dict[str, object]] = field(default_factory=list)
+    fov_stats: list[dict[str, object]] = field(default_factory=list)
 
 
 class BaseSegmenter(ABC):

@@ -42,15 +42,15 @@ class TestScanBasic:
         assert result.source_path == tiff_dir
 
 
-class TestScanMultiRegion:
-    def test_discovers_regions(self, tiff_dir_multichannel_multiregion):
+class TestScanMultiFOV:
+    def test_discovers_fovs(self, tiff_dir_multichannel_multifov):
         scanner = FileScanner()
-        result = scanner.scan(tiff_dir_multichannel_multiregion)
-        assert sorted(result.regions) == ["region1", "region2"]
+        result = scanner.scan(tiff_dir_multichannel_multifov)
+        assert sorted(result.fovs) == ["fov1", "fov2"]
 
-    def test_discovers_channels(self, tiff_dir_multichannel_multiregion):
+    def test_discovers_channels(self, tiff_dir_multichannel_multifov):
         scanner = FileScanner()
-        result = scanner.scan(tiff_dir_multichannel_multiregion)
+        result = scanner.scan(tiff_dir_multichannel_multifov)
         assert result.channels == ["00", "01"]
 
 
@@ -180,7 +180,7 @@ class TestCustomTokenConfig:
         result = scanner.scan(d, token_config=config)
         assert result.channels == ["0", "1"]
 
-    def test_custom_region_pattern(self, tmp_path):
+    def test_custom_fov_pattern(self, tmp_path):
         d = tmp_path / "custom"
         d.mkdir()
         tifffile.imwrite(
@@ -190,7 +190,7 @@ class TestCustomTokenConfig:
             str(d / "img_r02_ch00.tif"), np.zeros((32, 32), dtype=np.uint16)
         )
 
-        config = TokenConfig(region=r"_r(\d+)")
+        config = TokenConfig(fov=r"_r(\d+)")
         scanner = FileScanner()
         result = scanner.scan(d, token_config=config)
-        assert result.regions == ["01", "02"]
+        assert result.fovs == ["01", "02"]

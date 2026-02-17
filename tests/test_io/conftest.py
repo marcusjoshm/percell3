@@ -26,17 +26,17 @@ def tiff_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def tiff_dir_multichannel_multiregion(tmp_path: Path) -> Path:
-    """Create a directory with multiple regions and channels.
+def tiff_dir_multichannel_multifov(tmp_path: Path) -> Path:
+    """Create a directory with multiple FOVs and channels.
 
-    Layout: region1_ch00.tif, region1_ch01.tif, region2_ch00.tif, region2_ch01.tif
+    Layout: fov1_ch00.tif, fov1_ch01.tif, fov2_ch00.tif, fov2_ch01.tif
     """
     d = tmp_path / "tiffs"
     d.mkdir()
-    for region in ("region1", "region2"):
+    for fov in ("fov1", "fov2"):
         for ch in (0, 1):
             data = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
-            tifffile.imwrite(str(d / f"{region}_ch{ch:02d}.tif"), data)
+            tifffile.imwrite(str(d / f"{fov}_ch{ch:02d}.tif"), data)
     return d
 
 

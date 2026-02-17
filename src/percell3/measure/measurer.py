@@ -1,4 +1,4 @@
-"""Measurer — per-region measurement engine using labels and channel images."""
+"""Measurer — per-FOV measurement engine using labels and channel images."""
 
 from __future__ import annotations
 
@@ -30,21 +30,21 @@ class Measurer:
     def __init__(self, metrics: MetricRegistry | None = None) -> None:
         self._metrics = metrics or MetricRegistry()
 
-    def measure_region(
+    def measure_fov(
         self,
         store: ExperimentStore,
-        region: str,
+        fov: str,
         condition: str,
         channels: list[str],
         metrics: list[str] | None = None,
         segmentation_run_id: int | None = None,
         timepoint: str | None = None,
     ) -> int:
-        """Measure all cells in a region across specified channels.
+        """Measure all cells in a FOV across specified channels.
 
         Args:
             store: Target ExperimentStore.
-            region: Region name.
+            fov: FOV name.
             condition: Condition name.
             channels: Channel names to measure.
             metrics: Metric names (default: all registered metrics).
@@ -62,12 +62,12 @@ class Measurer:
             if m not in self._metrics:
                 raise KeyError(f"Unknown metric {m!r}")
 
-        # Get cells for this region
+        # Get cells for this FOV
         cells_df = store.get_cells(
-            condition=condition, region=region, timepoint=timepoint,
+            condition=condition, fov=fov, timepoint=timepoint,
         )
         if cells_df.empty:
-            logger.info("No cells found in %s/%s — skipping", condition, region)
+            logger.info("No cells found in %s/%s — skipping", condition, fov)
             return 0
 
         # Filter by segmentation run if specified
@@ -77,13 +77,13 @@ class Measurer:
                 return 0
 
         # Read label image once
-        labels = store.read_labels(region, condition, timepoint)
+        labels = store.read_labels(fov, condition, timepoint)
 
         all_records: list[MeasurementRecord] = []
 
         for channel in channels:
             ch_info = store.get_channel(channel)
-            image = store.read_image_numpy(region, condition, channel, timepoint)
+            image = store.read_image_numpy(fov, condition, channel, timepoint)
 
             records = self._measure_cells_on_channel(
                 cells_df, labels, image, ch_info.id, metric_names,
@@ -99,7 +99,7 @@ class Measurer:
         self,
         store: ExperimentStore,
         cell_ids: list[int],
-        region: str,
+        fov: str,
         condition: str,
         channel: str,
         metrics: list[str] | None = None,
@@ -110,7 +110,7 @@ class Measurer:
         Args:
             store: Target ExperimentStore.
             cell_ids: Cell IDs to measure.
-            region: Region name.
+            fov: FOV name.
             condition: Condition name.
             channel: Channel name.
             metrics: Metric names (default: all).
@@ -121,7 +121,7 @@ class Measurer:
         """
         metric_names = metrics or self._metrics.list_metrics()
 
-        cells_df = store.get_cells(condition=condition, region=region, timepoint=timepoint)
+        cells_df = store.get_cells(condition=condition, fov=fov, timepoint=timepoint)
         if cells_df.empty:
             return []
 
@@ -129,9 +129,9 @@ class Measurer:
         if cells_df.empty:
             return []
 
-        labels = store.read_labels(region, condition, timepoint)
+        labels = store.read_labels(fov, condition, timepoint)
         ch_info = store.get_channel(channel)
-        image = store.read_image_numpy(region, condition, channel, timepoint)
+        image = store.read_image_numpy(fov, condition, channel, timepoint)
 
         return self._measure_cells_on_channel(
             cells_df, labels, image, ch_info.id, metric_names,

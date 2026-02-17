@@ -32,11 +32,11 @@ class ConditionNotFoundError(ExperimentError):
         self.name = name
 
 
-class RegionNotFoundError(ExperimentError):
-    """Raised when referencing an undefined region."""
+class FovNotFoundError(ExperimentError):
+    """Raised when referencing an undefined FOV."""
 
     def __init__(self, name: str | None = None) -> None:
-        msg = f"Region not found: {name}" if name else "Region not found"
+        msg = f"FOV not found: {name}" if name else "FOV not found"
         super().__init__(msg)
         self.name = name
 

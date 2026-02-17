@@ -62,7 +62,7 @@ class TestSegmentCommand:
 
         assert result.exit_code == 0, result.output
         assert "Segmentation complete" in result.output
-        assert "Regions processed: 1" in result.output
+        assert "FOVs processed: 1" in result.output
         assert "Total cells found: 2" in result.output
 
     def test_segment_with_diameter(
@@ -116,10 +116,10 @@ class TestSegmentCommand:
         assert result.exit_code == 0, result.output
         assert "Segmentation complete" in result.output
 
-    def test_segment_with_region_filter(
+    def test_segment_with_fov_filter(
         self, runner: CliRunner, experiment_with_data: ExperimentStore
     ) -> None:
-        """--regions filter should be parsed as comma-separated."""
+        """--fovs filter should be parsed as comma-separated."""
         store = experiment_with_data
         exp_path = str(store.path)
 
@@ -129,16 +129,16 @@ class TestSegmentCommand:
         ):
             result = runner.invoke(cli, [
                 "segment", "-e", exp_path, "-c", "DAPI",
-                "--regions", "region1",
+                "--fovs", "fov1",
             ])
 
         assert result.exit_code == 0, result.output
-        assert "Regions processed: 1" in result.output
+        assert "FOVs processed: 1" in result.output
 
-    def test_segment_nonexistent_region_filter(
+    def test_segment_nonexistent_fov_filter(
         self, runner: CliRunner, experiment_with_data: ExperimentStore
     ) -> None:
-        """Filtering to a non-existent region should error."""
+        """Filtering to a non-existent FOV should error."""
         store = experiment_with_data
         exp_path = str(store.path)
 
@@ -148,7 +148,7 @@ class TestSegmentCommand:
         ):
             result = runner.invoke(cli, [
                 "segment", "-e", exp_path, "-c", "DAPI",
-                "--regions", "nonexistent",
+                "--fovs", "nonexistent",
             ])
 
         assert result.exit_code != 0

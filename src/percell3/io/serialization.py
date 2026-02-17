@@ -52,7 +52,7 @@ def plan_to_yaml(plan: ImportPlan, path: Path) -> None:
             "z_slice": plan.token_config.z_slice,
         },
         "channel_mappings": [],
-        "region_names": plan.region_names,
+        "fov_names": plan.fov_names,
     }
 
     if plan.condition_map:
@@ -61,8 +61,8 @@ def plan_to_yaml(plan: ImportPlan, path: Path) -> None:
     if plan.z_transform.slice_index is not None:
         data["z_transform"]["slice_index"] = plan.z_transform.slice_index
 
-    if plan.token_config.region is not None:
-        data["token_config"]["region"] = plan.token_config.region
+    if plan.token_config.fov is not None:
+        data["token_config"]["fov"] = plan.token_config.fov
 
     for mapping in plan.channel_mappings:
         entry: dict[str, Any] = {
@@ -119,7 +119,7 @@ def plan_from_yaml(path: Path) -> ImportPlan:
         channel=tc_data.get("channel", r"_ch(\d+)"),
         timepoint=tc_data.get("timepoint", r"_t(\d+)"),
         z_slice=tc_data.get("z_slice", r"_z(\d+)"),
-        region=tc_data.get("region"),
+        fov=tc_data.get("fov"),
     )
 
     # Parse channel_mappings
@@ -138,7 +138,7 @@ def plan_from_yaml(path: Path) -> ImportPlan:
         source_path=Path(data["source_path"]),
         condition=data["condition"],
         channel_mappings=channel_mappings,
-        region_names=data.get("region_names", {}),
+        fov_names=data.get("fov_names", {}),
         z_transform=z_transform,
         pixel_size_um=data.get("pixel_size_um"),
         token_config=token_config,

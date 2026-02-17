@@ -7,36 +7,36 @@ from pathlib import Path
 import numpy as np
 
 from percell3.core import ExperimentStore
-from percell3.core.models import CellRecord, RegionInfo
+from percell3.core.models import CellRecord, FovInfo
 from percell3.segment.label_processor import LabelProcessor
 
 
-def _validate_region(
-    store: ExperimentStore, region: str, condition: str,
-) -> RegionInfo:
-    """Look up a region by name, raising ValueError if not found."""
-    region_info = store.get_regions(condition=condition)
-    for r in region_info:
-        if r.name == region:
-            return r
-    raise ValueError(f"Region {region!r} not found in condition {condition!r}")
+def _validate_fov(
+    store: ExperimentStore, fov: str, condition: str,
+) -> FovInfo:
+    """Look up a FOV by name, raising ValueError if not found."""
+    fov_list = store.get_fovs(condition=condition)
+    for f in fov_list:
+        if f.name == fov:
+            return f
+    raise ValueError(f"FOV {fov!r} not found in condition {condition!r}")
 
 
 def _store_labels_and_cells(
     store: ExperimentStore,
     labels: np.ndarray,
-    region_info: RegionInfo,
-    region: str,
+    fov_info: FovInfo,
+    fov: str,
     condition: str,
     run_id: int,
     timepoint: str | None,
 ) -> None:
     """Write labels to zarr, extract cells, insert into DB, update run count."""
-    store.write_labels(region, condition, labels, run_id, timepoint)
+    store.write_labels(fov, condition, labels, run_id, timepoint)
 
     processor = LabelProcessor()
     cells = processor.extract_cells(
-        labels, region_info.id, run_id, region_info.pixel_size_um,
+        labels, fov_info.id, run_id, fov_info.pixel_size_um,
     )
     if cells:
         store.add_cells(cells)
@@ -56,7 +56,7 @@ class RoiImporter:
         self,
         labels: np.ndarray,
         store: ExperimentStore,
-        region: str,
+        fov: str,
         condition: str,
         channel: str = "manual",
         source: str = "manual",
@@ -67,7 +67,7 @@ class RoiImporter:
         Args:
             labels: 2D integer array where pixel value = cell ID, 0 = background.
             store: Target ExperimentStore.
-            region: Region name.
+            fov: FOV name.
             condition: Condition name.
             channel: Channel name for segmentation run record.
             source: Source identifier (stored as model_name in segmentation run).
@@ -91,14 +91,14 @@ class RoiImporter:
 
         labels_int32 = np.asarray(labels, dtype=np.int32)
 
-        target_region = _validate_region(store, region, condition)
+        target_fov = _validate_fov(store, fov, condition)
 
         run_id = store.add_segmentation_run(
             channel, source, {"source": source, "imported": True}
         )
 
         _store_labels_and_cells(
-            store, labels_int32, target_region, region, condition, run_id, timepoint,
+            store, labels_int32, target_fov, fov, condition, run_id, timepoint,
         )
         return run_id
 
@@ -106,7 +106,7 @@ class RoiImporter:
         self,
         seg_path: Path,
         store: ExperimentStore,
-        region: str,
+        fov: str,
         condition: str,
         channel: str = "manual",
         timepoint: str | None = None,
@@ -123,7 +123,7 @@ class RoiImporter:
         Args:
             seg_path: Path to the ``_seg.npy`` file.
             store: Target ExperimentStore.
-            region: Region name.
+            fov: FOV name.
             condition: Condition name.
             channel: Channel name for segmentation run record.
             timepoint: Optional timepoint.
@@ -153,7 +153,7 @@ class RoiImporter:
 
         masks = np.asarray(seg_data["masks"], dtype=np.int32)
 
-        target_region = _validate_region(store, region, condition)
+        target_fov = _validate_fov(store, fov, condition)
 
         params: dict = {"source": "cellpose-gui", "imported": True}
         if "est_diam" in seg_data:
@@ -164,6 +164,6 @@ class RoiImporter:
         run_id = store.add_segmentation_run(channel, "cellpose-gui", params)
 
         _store_labels_and_cells(
-            store, masks, target_region, region, condition, run_id, timepoint,
+            store, masks, target_fov, fov, condition, run_id, timepoint,
         )
         return run_id

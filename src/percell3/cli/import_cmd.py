@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 )
 @click.option(
     "--auto-conditions", is_flag=True,
-    help="Auto-detect conditions from region names.",
+    help="Auto-detect conditions from FOV names.",
 )
 @click.option(
     "--files", multiple=True, type=click.Path(exists=True),
@@ -62,7 +62,7 @@ def import_cmd(
     store = open_experiment(experiment)
     try:
         condition_map: dict[str, str] = {}
-        region_names: dict[str, str] = {}
+        fov_names: dict[str, str] = {}
         source_files: list[Path] | None = [Path(f) for f in files] if files else None
 
         if auto_conditions:
@@ -70,10 +70,10 @@ def import_cmd(
 
             scanner = FileScanner()
             scan_result = scanner.scan(Path(source), files=source_files)
-            detection = detect_conditions(scan_result.regions)
+            detection = detect_conditions(scan_result.fovs)
             if detection is not None:
                 condition_map = dict(detection.condition_map)
-                region_names = dict(detection.region_name_map)
+                fov_names = dict(detection.fov_name_map)
                 console.print(
                     f"Auto-detected {len(detection.conditions)} conditions: "
                     f"{', '.join(detection.conditions)}"
@@ -85,7 +85,7 @@ def import_cmd(
 
         _run_import(
             store, source, condition, channel_map, z_projection, yes,
-            condition_map=condition_map, region_names=region_names,
+            condition_map=condition_map, fov_names=fov_names,
             source_files=source_files,
         )
     finally:
@@ -100,7 +100,7 @@ def _run_import(
     z_projection: str,
     yes: bool,
     condition_map: dict[str, str] | None = None,
-    region_names: dict[str, str] | None = None,
+    fov_names: dict[str, str] | None = None,
     source_files: list[Path] | None = None,
     scan_result: ScanResult | None = None,
 ) -> None:
@@ -136,7 +136,7 @@ def _run_import(
         source_path=Path(source),
         condition=condition,
         channel_mappings=mappings,
-        region_names=region_names or {},
+        fov_names=fov_names or {},
         z_transform=ZTransform(method=z_projection),
         pixel_size_um=scan_result.pixel_size_um,
         token_config=TokenConfig(),
@@ -149,15 +149,15 @@ def _run_import(
     with make_progress() as progress:
         task = progress.add_task("Importing images...", total=None)
 
-        def on_progress(current: int, total: int, region_name: str) -> None:
+        def on_progress(current: int, total: int, fov_name: str) -> None:
             progress.update(task, total=total, completed=current,
-                            description=f"Importing {region_name}")
+                            description=f"Importing {fov_name}")
 
         result = engine.execute(plan, store, progress_callback=on_progress)
 
     # Show result
     console.print(f"\n[green]Import complete![/green]")
-    console.print(f"  Regions imported: {result.regions_imported}")
+    console.print(f"  FOVs imported: {result.fovs_imported}")
     console.print(f"  Channels registered: {result.channels_registered}")
     console.print(f"  Images written: {result.images_written}")
     if result.skipped:
@@ -178,7 +178,7 @@ def _show_preview(scan_result: ScanResult, source: str) -> None:
 
     table.add_row("Files found", str(len(scan_result.files)))
     table.add_row("Channels", ", ".join(scan_result.channels) or "none")
-    table.add_row("Regions", ", ".join(scan_result.regions) or "default")
+    table.add_row("FOVs", ", ".join(scan_result.fovs) or "default")
     table.add_row("Timepoints", ", ".join(scan_result.timepoints) or "none")
     table.add_row("Z-slices", ", ".join(scan_result.z_slices) or "none")
 

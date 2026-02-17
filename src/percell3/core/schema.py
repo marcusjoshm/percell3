@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS timepoints (
     display_order INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS regions (
+CREATE TABLE IF NOT EXISTS fovs (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     condition_id INTEGER NOT NULL REFERENCES conditions(id),
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS segmentation_runs (
 
 CREATE TABLE IF NOT EXISTS cells (
     id INTEGER PRIMARY KEY,
-    region_id INTEGER NOT NULL REFERENCES regions(id),
+    fov_id INTEGER NOT NULL REFERENCES fovs(id),
     segmentation_id INTEGER NOT NULL REFERENCES segmentation_runs(id),
     label_value INTEGER NOT NULL,
     centroid_x REAL NOT NULL,
@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS cells (
     perimeter REAL,
     circularity REAL,
     is_valid INTEGER NOT NULL DEFAULT 1,
-    UNIQUE(region_id, segmentation_id, label_value)
+    UNIQUE(fov_id, segmentation_id, label_value)
 );
 
 CREATE TABLE IF NOT EXISTS measurements (
@@ -126,25 +126,25 @@ CREATE TABLE IF NOT EXISTS cell_tags (
     PRIMARY KEY (cell_id, tag_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_cells_region ON cells(region_id);
+CREATE INDEX IF NOT EXISTS idx_cells_fov ON cells(fov_id);
 CREATE INDEX IF NOT EXISTS idx_cells_segmentation ON cells(segmentation_id);
 CREATE INDEX IF NOT EXISTS idx_cells_area ON cells(area_pixels);
 CREATE INDEX IF NOT EXISTS idx_measurements_cell ON measurements(cell_id);
 CREATE INDEX IF NOT EXISTS idx_measurements_channel ON measurements(channel_id);
 CREATE INDEX IF NOT EXISTS idx_measurements_metric ON measurements(metric);
-CREATE INDEX IF NOT EXISTS idx_regions_condition ON regions(condition_id);
+CREATE INDEX IF NOT EXISTS idx_fovs_condition ON fovs(condition_id);
 """
 
 EXPECTED_TABLES = frozenset({
-    "experiments", "channels", "conditions", "timepoints", "regions",
+    "experiments", "channels", "conditions", "timepoints", "fovs",
     "segmentation_runs", "cells", "measurements", "threshold_runs",
     "analysis_runs", "tags", "cell_tags",
 })
 
 EXPECTED_INDEXES = frozenset({
-    "idx_cells_region", "idx_cells_segmentation", "idx_cells_area",
+    "idx_cells_fov", "idx_cells_segmentation", "idx_cells_area",
     "idx_measurements_cell", "idx_measurements_channel", "idx_measurements_metric",
-    "idx_regions_condition",
+    "idx_fovs_condition",
 })
 
 

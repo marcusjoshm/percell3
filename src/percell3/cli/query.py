@@ -96,25 +96,25 @@ def channels(ctx: click.Context, fmt: str) -> None:
 @click.option("--condition", default=None, help="Filter by condition.")
 @click.pass_context
 @error_handler
-def regions(ctx: click.Context, fmt: str, condition: str | None) -> None:
-    """List regions in the experiment."""
+def fovs(ctx: click.Context, fmt: str, condition: str | None) -> None:
+    """List FOVs in the experiment."""
     store = ctx.obj["store"]
-    region_list = store.get_regions(condition=condition)
+    fov_list = store.get_fovs(condition=condition)
 
-    if not region_list:
-        console.print("[dim]No regions found.[/dim]")
+    if not fov_list:
+        console.print("[dim]No FOVs found.[/dim]")
         return
 
     rows = [
         {
-            "name": r.name,
-            "condition": r.condition,
-            "size": f"{r.width}x{r.height}" if r.width else "",
-            "pixel_size_um": str(r.pixel_size_um) if r.pixel_size_um else "",
+            "name": f.name,
+            "condition": f.condition,
+            "size": f"{f.width}x{f.height}" if f.width else "",
+            "pixel_size_um": str(f.pixel_size_um) if f.pixel_size_um else "",
         }
-        for r in region_list
+        for f in fov_list
     ]
-    format_output(rows, ["name", "condition", "size", "pixel_size_um"], fmt, "Regions")
+    format_output(rows, ["name", "condition", "size", "pixel_size_um"], fmt, "FOVs")
 
 
 @query.command()

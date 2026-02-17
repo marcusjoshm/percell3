@@ -38,21 +38,21 @@ class ThresholdEngine:
     Supported methods: otsu, adaptive, manual, triangle, li.
     """
 
-    def threshold_region(
+    def threshold_fov(
         self,
         store: ExperimentStore,
-        region: str,
+        fov: str,
         condition: str,
         channel: str,
         method: str = "otsu",
         manual_value: float | None = None,
         timepoint: str | None = None,
     ) -> ThresholdResult:
-        """Apply thresholding to a channel image in a region.
+        """Apply thresholding to a channel image in a FOV.
 
         Args:
             store: Target ExperimentStore.
-            region: Region name.
+            fov: FOV name.
             condition: Condition name.
             channel: Channel name to threshold.
             method: Thresholding method ("otsu", "adaptive", "manual", "triangle", "li").
@@ -74,7 +74,7 @@ class ThresholdEngine:
             raise ValueError("manual_value is required when method='manual'")
 
         # Read channel image
-        image = store.read_image_numpy(region, condition, channel, timepoint)
+        image = store.read_image_numpy(fov, condition, channel, timepoint)
 
         # Compute threshold
         threshold_value = self._compute_threshold(image, method, manual_value)
@@ -92,7 +92,7 @@ class ThresholdEngine:
         run_id = store.add_threshold_run(channel, method, parameters)
 
         # Write mask to masks.zarr
-        store.write_mask(region, condition, channel, mask.astype(np.uint8), run_id, timepoint)
+        store.write_mask(fov, condition, channel, mask.astype(np.uint8), run_id, timepoint)
 
         # Statistics
         positive_pixels = int(np.sum(mask))

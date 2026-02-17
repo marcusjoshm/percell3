@@ -34,7 +34,7 @@ def _make_tiff_dir(base: Path, layout: dict[str, np.ndarray]) -> Path:
 
 
 class TestSingleChannelImport:
-    def test_imports_one_region(self, tmp_path):
+    def test_imports_one_fov(self, tmp_path):
         data = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
         tiff_dir = _make_tiff_dir(tmp_path, {"img_ch00.tif": data})
 
@@ -43,7 +43,7 @@ class TestSingleChannelImport:
                 source_path=tiff_dir,
                 condition="control",
                 channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
-                region_names={"img": "Region1"},
+                fov_names={"img": "FOV1"},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=0.65,
                 token_config=TokenConfig(),
@@ -51,12 +51,12 @@ class TestSingleChannelImport:
             engine = ImportEngine()
             result = engine.execute(plan, store)
 
-            assert result.regions_imported == 1
+            assert result.fovs_imported == 1
             assert result.channels_registered == 1
             assert result.images_written == 1
 
             # Verify data round-trips
-            img = store.read_image_numpy("Region1", "control", "DAPI")
+            img = store.read_image_numpy("FOV1", "control", "DAPI")
             np.testing.assert_array_equal(img, data)
 
 
@@ -77,7 +77,7 @@ class TestMultiChannelImport:
                     ChannelMapping(token_value="00", name="DAPI"),
                     ChannelMapping(token_value="01", name="GFP"),
                 ],
-                region_names={"img": "Region1"},
+                fov_names={"img": "FOV1"},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=0.65,
                 token_config=TokenConfig(),
@@ -88,14 +88,14 @@ class TestMultiChannelImport:
             assert result.channels_registered == 2
             assert result.images_written == 2
 
-            img_dapi = store.read_image_numpy("Region1", "control", "DAPI")
-            img_gfp = store.read_image_numpy("Region1", "control", "GFP")
+            img_dapi = store.read_image_numpy("FOV1", "control", "DAPI")
+            img_gfp = store.read_image_numpy("FOV1", "control", "GFP")
             np.testing.assert_array_equal(img_dapi, dapi)
             np.testing.assert_array_equal(img_gfp, gfp)
 
 
-class TestMultiRegionImport:
-    def test_imports_two_regions(self, tmp_path):
+class TestMultiFOVImport:
+    def test_imports_two_fovs(self, tmp_path):
         r1 = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
         r2 = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
         tiff_dir = _make_tiff_dir(tmp_path, {
@@ -108,7 +108,7 @@ class TestMultiRegionImport:
                 source_path=tiff_dir,
                 condition="control",
                 channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
-                region_names={},  # use defaults
+                fov_names={},  # use defaults
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=0.65,
                 token_config=TokenConfig(),
@@ -116,7 +116,7 @@ class TestMultiRegionImport:
             engine = ImportEngine()
             result = engine.execute(plan, store)
 
-            assert result.regions_imported == 2
+            assert result.fovs_imported == 2
 
 
 class TestZProjectionImport:
@@ -135,7 +135,7 @@ class TestZProjectionImport:
                 source_path=tiff_dir,
                 condition="control",
                 channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
-                region_names={"img": "Region1"},
+                fov_names={"img": "FOV1"},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=0.65,
                 token_config=TokenConfig(),
@@ -144,7 +144,7 @@ class TestZProjectionImport:
             result = engine.execute(plan, store)
 
             assert result.images_written == 1
-            img = store.read_image_numpy("Region1", "control", "DAPI")
+            img = store.read_image_numpy("FOV1", "control", "DAPI")
             assert img[0, 0] == 50  # max of 10, 50, 30
 
 
@@ -160,7 +160,7 @@ class TestChannelMapping:
                 channel_mappings=[
                     ChannelMapping(token_value="00", name="DAPI", color="#0000FF"),
                 ],
-                region_names={},
+                fov_names={},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=None,
                 token_config=TokenConfig(),
@@ -173,8 +173,8 @@ class TestChannelMapping:
             assert channels[0].name == "DAPI"
 
 
-class TestRegionRenaming:
-    def test_renames_regions(self, tmp_path):
+class TestFOVRenaming:
+    def test_renames_fovs(self, tmp_path):
         data = np.zeros((32, 32), dtype=np.uint16)
         tiff_dir = _make_tiff_dir(tmp_path, {"myregion_ch00.tif": data})
 
@@ -183,7 +183,7 @@ class TestRegionRenaming:
                 source_path=tiff_dir,
                 condition="control",
                 channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
-                region_names={"myregion": "Well_A1"},
+                fov_names={"myregion": "Well_A1"},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=None,
                 token_config=TokenConfig(),
@@ -191,13 +191,13 @@ class TestRegionRenaming:
             engine = ImportEngine()
             engine.execute(plan, store)
 
-            regions = store.get_regions(condition="control")
-            assert len(regions) == 1
-            assert regions[0].name == "Well_A1"
+            fovs = store.get_fovs(condition="control")
+            assert len(fovs) == 1
+            assert fovs[0].name == "Well_A1"
 
 
 class TestIncrementalImport:
-    def test_skip_existing_region(self, tmp_path):
+    def test_skip_existing_fov(self, tmp_path):
         data = np.zeros((32, 32), dtype=np.uint16)
         tiff_dir = _make_tiff_dir(tmp_path, {"img_ch00.tif": data})
 
@@ -206,7 +206,7 @@ class TestIncrementalImport:
                 source_path=tiff_dir,
                 condition="control",
                 channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
-                region_names={"img": "Region1"},
+                fov_names={"img": "FOV1"},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=0.65,
                 token_config=TokenConfig(),
@@ -215,12 +215,12 @@ class TestIncrementalImport:
 
             # First import
             r1 = engine.execute(plan, store)
-            assert r1.regions_imported == 1
+            assert r1.fovs_imported == 1
             assert r1.skipped == 0
 
-            # Second import — region already exists
+            # Second import — FOV already exists
             r2 = engine.execute(plan, store)
-            assert r2.regions_imported == 0
+            assert r2.fovs_imported == 0
             assert r2.skipped == 1
             assert any("already exists" in w for w in r2.warnings)
 
@@ -235,7 +235,7 @@ class TestProgressCallback:
                 source_path=tiff_dir,
                 condition="control",
                 channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
-                region_names={"img": "Region1"},
+                fov_names={"img": "FOV1"},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=None,
                 token_config=TokenConfig(),
@@ -245,7 +245,7 @@ class TestProgressCallback:
             engine.execute(plan, store, progress_callback=lambda c, t, n: calls.append((c, t, n)))
 
             assert len(calls) == 1
-            assert calls[0] == (1, 1, "Region1")
+            assert calls[0] == (1, 1, "FOV1")
 
 
 class TestMultiConditionImport:
@@ -263,7 +263,7 @@ class TestMultiConditionImport:
                 source_path=tiff_dir,
                 condition="default",
                 channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
-                region_names={"ctrl_s00": "s00", "treated_s00": "s00"},
+                fov_names={"ctrl_s00": "s00", "treated_s00": "s00"},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=0.65,
                 token_config=TokenConfig(),
@@ -275,19 +275,19 @@ class TestMultiConditionImport:
             engine = ImportEngine()
             result = engine.execute(plan, store)
 
-            assert result.regions_imported == 2
+            assert result.fovs_imported == 2
             assert result.channels_registered == 1
 
             conds = store.get_conditions()
             assert "ctrl" in conds
             assert "treated" in conds
 
-            regions_ctrl = store.get_regions(condition="ctrl")
-            regions_treated = store.get_regions(condition="treated")
-            assert len(regions_ctrl) == 1
-            assert len(regions_treated) == 1
-            assert regions_ctrl[0].name == "s00"
-            assert regions_treated[0].name == "s00"
+            fovs_ctrl = store.get_fovs(condition="ctrl")
+            fovs_treated = store.get_fovs(condition="treated")
+            assert len(fovs_ctrl) == 1
+            assert len(fovs_treated) == 1
+            assert fovs_ctrl[0].name == "s00"
+            assert fovs_treated[0].name == "s00"
 
     def test_condition_map_empty_uses_fallback(self, tmp_path):
         """When condition_map is empty, single condition field is used."""
@@ -299,7 +299,7 @@ class TestMultiConditionImport:
                 source_path=tiff_dir,
                 condition="control",
                 channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
-                region_names={},
+                fov_names={},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=None,
                 token_config=TokenConfig(),
@@ -308,12 +308,12 @@ class TestMultiConditionImport:
             engine = ImportEngine()
             result = engine.execute(plan, store)
 
-            assert result.regions_imported == 1
+            assert result.fovs_imported == 1
             conds = store.get_conditions()
             assert conds == ["control"]
 
     def test_skip_existing_per_condition(self, tmp_path):
-        """Same region name in different conditions doesn't conflict."""
+        """Same FOV name in different conditions doesn't conflict."""
         d1 = np.zeros((32, 32), dtype=np.uint16)
         d2 = np.ones((32, 32), dtype=np.uint16) * 100
         tiff_dir = _make_tiff_dir(tmp_path, {
@@ -326,7 +326,7 @@ class TestMultiConditionImport:
                 source_path=tiff_dir,
                 condition="default",
                 channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
-                region_names={"ctrl_s00": "s00", "treated_s00": "s00"},
+                fov_names={"ctrl_s00": "s00", "treated_s00": "s00"},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=0.65,
                 token_config=TokenConfig(),
@@ -337,14 +337,14 @@ class TestMultiConditionImport:
             )
             engine = ImportEngine()
 
-            # First import — both regions imported
+            # First import — both FOVs imported
             r1 = engine.execute(plan, store)
-            assert r1.regions_imported == 2
+            assert r1.fovs_imported == 2
             assert r1.skipped == 0
 
-            # Second import — both regions skipped
+            # Second import — both FOVs skipped
             r2 = engine.execute(plan, store)
-            assert r2.regions_imported == 0
+            assert r2.fovs_imported == 0
             assert r2.skipped == 2
 
 
@@ -355,7 +355,7 @@ class TestEdgeCases:
                 source_path=Path("/nonexistent"),
                 condition="control",
                 channel_mappings=[],
-                region_names={},
+                fov_names={},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=None,
                 token_config=TokenConfig(),
@@ -372,7 +372,7 @@ class TestEdgeCases:
                 source_path=d,
                 condition="control",
                 channel_mappings=[],
-                region_names={},
+                fov_names={},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=None,
                 token_config=TokenConfig(),
@@ -390,7 +390,7 @@ class TestEdgeCases:
                 source_path=tiff_dir,
                 condition="control",
                 channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
-                region_names={},
+                fov_names={},
                 z_transform=ZTransform(method="mip"),
                 pixel_size_um=None,
                 token_config=TokenConfig(),

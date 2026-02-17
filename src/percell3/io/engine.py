@@ -36,7 +36,7 @@ class ImportEngine:
         Args:
             plan: The import plan to execute.
             store: Target ExperimentStore.
-            progress_callback: Optional callback(current, total, region_name).
+            progress_callback: Optional callback(current, total, fov_name).
 
         Returns:
             ImportResult with counts and warnings.
@@ -98,40 +98,40 @@ class ImportEngine:
             except DuplicateError:
                 pass
 
-        # Group files by region
-        region_files = _group_by_token(scan_result.files, "region", "default")
+        # Group files by FOV
+        fov_files = _group_by_token(scan_result.files, "fov", "default")
 
         # Determine pixel size
         pixel_size = plan.pixel_size_um or scan_result.pixel_size_um
 
-        regions_imported = 0
+        fovs_imported = 0
         images_written = 0
         skipped = 0
-        total_regions = len(region_files)
+        total_fovs = len(fov_files)
 
-        # Cache existing regions per condition to avoid repeated queries
+        # Cache existing FOVs per condition to avoid repeated queries
         _existing_cache: dict[str, set[str]] = {}
 
-        for idx, (region_token, files) in enumerate(sorted(region_files.items())):
-            region_name = plan.region_names.get(region_token, sanitize_name(region_token))
+        for idx, (fov_token, files) in enumerate(sorted(fov_files.items())):
+            fov_name = plan.fov_names.get(fov_token, sanitize_name(fov_token))
 
-            # Determine condition for this region
-            if plan.condition_map and region_token in plan.condition_map:
-                condition = sanitize_name(plan.condition_map[region_token])
+            # Determine condition for this FOV
+            if plan.condition_map and fov_token in plan.condition_map:
+                condition = sanitize_name(plan.condition_map[fov_token])
             else:
                 condition = sanitize_name(plan.condition)
 
             if progress_callback:
-                progress_callback(idx + 1, total_regions, region_name)
+                progress_callback(idx + 1, total_fovs, fov_name)
 
-            # Check existing regions (cached per condition)
+            # Check existing FOVs (cached per condition)
             if condition not in _existing_cache:
                 _existing_cache[condition] = {
-                    r.name for r in store.get_regions(condition=condition)
+                    f.name for f in store.get_fovs(condition=condition)
                 }
 
-            if region_name in _existing_cache[condition]:
-                warnings.append(f"Region '{region_name}' already exists in '{condition}', skipping")
+            if fov_name in _existing_cache[condition]:
+                warnings.append(f"FOV '{fov_name}' already exists in '{condition}', skipping")
                 skipped += 1
                 continue
 
@@ -142,16 +142,16 @@ class ImportEngine:
             first_file = files[0]
             h, w = first_file.shape[:2]
 
-            # Register region
-            store.add_region(
-                region_name,
+            # Register FOV
+            store.add_fov(
+                fov_name,
                 condition,
                 width=w,
                 height=h,
                 pixel_size_um=pixel_size,
                 source_file=str(first_file.path),
             )
-            _existing_cache[condition].add(region_name)
+            _existing_cache[condition].add(fov_name)
 
             # Write each channel
             for ch_token, ch_files in sorted(channel_files.items()):
@@ -169,15 +169,15 @@ class ImportEngine:
                         # Multi-page TIFF — apply projection
                         data = _project_array(data, plan.z_transform)
 
-                store.write_image(region_name, condition, ch_name, data)
+                store.write_image(fov_name, condition, ch_name, data)
                 images_written += 1
 
-            regions_imported += 1
+            fovs_imported += 1
 
         elapsed = time.monotonic() - start
 
         return ImportResult(
-            regions_imported=regions_imported,
+            fovs_imported=fovs_imported,
             channels_registered=channels_registered,
             images_written=images_written,
             skipped=skipped,

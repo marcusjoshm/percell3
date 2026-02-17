@@ -19,12 +19,12 @@ class TestTokenConfig:
         assert tc.channel == r"_ch(\d+)"
         assert tc.timepoint == r"_t(\d+)"
         assert tc.z_slice == r"_z(\d+)"
-        assert tc.region is None
+        assert tc.fov is None
 
     def test_custom_patterns(self):
-        tc = TokenConfig(channel=r"_C(\d+)", region=r"_r(\d+)")
+        tc = TokenConfig(channel=r"_C(\d+)", fov=r"_r(\d+)")
         assert tc.channel == r"_C(\d+)"
-        assert tc.region == r"_r(\d+)"
+        assert tc.fov == r"_r(\d+)"
 
     def test_frozen(self):
         tc = TokenConfig()
@@ -45,9 +45,9 @@ class TestTokenConfig:
         with pytest.raises(ValueError, match="exceeds max length"):
             TokenConfig(channel="a" * 201)
 
-    def test_none_region_skips_validation(self):
-        tc = TokenConfig(region=None)
-        assert tc.region is None
+    def test_none_fov_skips_validation(self):
+        tc = TokenConfig(fov=None)
+        assert tc.fov is None
 
 
 class TestDiscoveredFile:
@@ -69,14 +69,14 @@ class TestScanResult:
             source_path=Path("/tmp"),
             files=[],
             channels=["00", "01"],
-            regions=["r1"],
+            fovs=["r1"],
             timepoints=[],
             z_slices=[],
             pixel_size_um=0.65,
             warnings=[],
         )
         assert sr.channels == ["00", "01"]
-        assert sr.regions == ["r1"]
+        assert sr.fovs == ["r1"]
 
 
 class TestChannelMapping:
@@ -129,7 +129,7 @@ class TestImportPlan:
             source_path=Path("/tmp/data"),
             condition="control",
             channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
-            region_names={"r1": "Region_1"},
+            fov_names={"r1": "FOV_1"},
             z_transform=ZTransform(method="mip"),
             pixel_size_um=0.65,
             token_config=TokenConfig(),
@@ -143,7 +143,7 @@ class TestImportPlan:
             source_path=Path("/tmp"),
             condition="ctrl",
             channel_mappings=[],
-            region_names={},
+            fov_names={},
             z_transform=ZTransform(method="mip"),
             pixel_size_um=None,
             token_config=TokenConfig(),
@@ -155,11 +155,11 @@ class TestImportPlan:
 class TestImportResult:
     def test_construction(self):
         ir = ImportResult(
-            regions_imported=3,
+            fovs_imported=3,
             channels_registered=2,
             images_written=6,
             skipped=0,
         )
-        assert ir.regions_imported == 3
+        assert ir.fovs_imported == 3
         assert ir.warnings == []
         assert ir.elapsed_seconds == 0.0

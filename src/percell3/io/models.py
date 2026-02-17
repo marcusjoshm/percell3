@@ -20,11 +20,11 @@ class TokenConfig:
     channel: str = r"_ch(\d+)"
     timepoint: str = r"_t(\d+)"
     z_slice: str = r"_z(\d+)"
-    region: str | None = None
+    fov: str | None = None
 
     def __post_init__(self) -> None:
         """Validate regex patterns are compilable and not excessively long."""
-        for field_name in ("channel", "timepoint", "z_slice", "region"):
+        for field_name in ("channel", "timepoint", "z_slice", "fov"):
             pattern = getattr(self, field_name)
             if pattern is None:
                 continue
@@ -59,7 +59,7 @@ class ScanResult:
     source_path: Path
     files: list[DiscoveredFile]
     channels: list[str]
-    regions: list[str]
+    fovs: list[str]
     timepoints: list[str]
     z_slices: list[str]
     pixel_size_um: float | None
@@ -104,7 +104,7 @@ class ImportPlan:
     source_path: Path
     condition: str
     channel_mappings: list[ChannelMapping]
-    region_names: dict[str, str]
+    fov_names: dict[str, str]
     z_transform: ZTransform
     pixel_size_um: float | None
     token_config: TokenConfig
@@ -129,7 +129,7 @@ class ImportPlan:
 class ImportResult:
     """What happened during import."""
 
-    regions_imported: int
+    fovs_imported: int
     channels_registered: int
     images_written: int
     skipped: int

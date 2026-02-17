@@ -18,7 +18,7 @@ class TestImportCommand:
         )
         assert result.exit_code == 0
         assert "Import complete" in result.output
-        assert "Regions imported: 1" in result.output
+        assert "FOVs imported: 1" in result.output
         assert "Images written: 2" in result.output
 
     def test_import_with_condition(
@@ -106,12 +106,12 @@ class TestAutoConditionsFlag:
         assert result.exit_code == 0
         assert "Auto-detected 2 conditions" in result.output
         assert "Import complete" in result.output
-        assert "Regions imported: 2" in result.output
+        assert "FOVs imported: 2" in result.output
 
     def test_auto_conditions_no_match(
         self, runner: CliRunner, experiment_path: Path, tiff_dir: Path,
     ):
-        """Single region — auto-conditions falls back to single condition."""
+        """Single FOV — auto-conditions falls back to single condition."""
         result = runner.invoke(
             cli,
             ["import", str(tiff_dir), "-e", str(experiment_path),

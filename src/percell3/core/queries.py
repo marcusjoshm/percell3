@@ -12,9 +12,9 @@ from percell3.core.exceptions import (
     ChannelNotFoundError,
     ConditionNotFoundError,
     DuplicateError,
-    RegionNotFoundError,
+    FovNotFoundError,
 )
-from percell3.core.models import ChannelConfig, CellRecord, MeasurementRecord, RegionInfo
+from percell3.core.models import ChannelConfig, CellRecord, MeasurementRecord, FovInfo
 
 # ---------------------------------------------------------------------------
 # Experiment
@@ -74,9 +74,9 @@ def _row_to_channel(r: sqlite3.Row) -> ChannelConfig:
     )
 
 
-def _row_to_region(r: sqlite3.Row) -> RegionInfo:
-    """Convert a database row to a RegionInfo."""
-    return RegionInfo(
+def _row_to_fov(r: sqlite3.Row) -> FovInfo:
+    """Convert a database row to a FovInfo."""
+    return FovInfo(
         id=r["id"],
         name=r["name"],
         condition=r["condition"],
@@ -173,11 +173,11 @@ def select_timepoint_id(conn: sqlite3.Connection, name: str) -> int | None:
 
 
 # ---------------------------------------------------------------------------
-# Regions
+# FOVs
 # ---------------------------------------------------------------------------
 
 
-def insert_region(
+def insert_fov(
     conn: sqlite3.Connection,
     name: str,
     condition_id: int,
@@ -191,88 +191,88 @@ def insert_region(
     # SQLite treats NULLs as distinct in UNIQUE constraints, so check manually
     if timepoint_id is None:
         existing = conn.execute(
-            "SELECT id FROM regions WHERE name = ? AND condition_id = ? "
+            "SELECT id FROM fovs WHERE name = ? AND condition_id = ? "
             "AND timepoint_id IS NULL",
             (name, condition_id),
         ).fetchone()
     else:
         existing = conn.execute(
-            "SELECT id FROM regions WHERE name = ? AND condition_id = ? "
+            "SELECT id FROM fovs WHERE name = ? AND condition_id = ? "
             "AND timepoint_id = ?",
             (name, condition_id, timepoint_id),
         ).fetchone()
     if existing:
-        raise DuplicateError("region", name)
+        raise DuplicateError("fov", name)
     try:
         cur = conn.execute(
-            "INSERT INTO regions (name, condition_id, timepoint_id, width, height, "
+            "INSERT INTO fovs (name, condition_id, timepoint_id, width, height, "
             "pixel_size_um, source_file, zarr_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (name, condition_id, timepoint_id, width, height, pixel_size_um,
              source_file, zarr_path),
         )
         conn.commit()
     except sqlite3.IntegrityError:
-        raise DuplicateError("region", name)
+        raise DuplicateError("fov", name)
     return cur.lastrowid  # type: ignore[return-value]
 
 
-def select_regions(
+def select_fovs(
     conn: sqlite3.Connection,
     condition_id: int | None = None,
     timepoint_id: int | None = None,
-) -> list[RegionInfo]:
+) -> list[FovInfo]:
     query = (
-        "SELECT r.id, r.name, c.name AS condition, t.name AS timepoint, "
-        "r.width, r.height, r.pixel_size_um, r.source_file "
-        "FROM regions r "
-        "JOIN conditions c ON r.condition_id = c.id "
-        "LEFT JOIN timepoints t ON r.timepoint_id = t.id"
+        "SELECT f.id, f.name, c.name AS condition, t.name AS timepoint, "
+        "f.width, f.height, f.pixel_size_um, f.source_file "
+        "FROM fovs f "
+        "JOIN conditions c ON f.condition_id = c.id "
+        "LEFT JOIN timepoints t ON f.timepoint_id = t.id"
     )
     params: list = []
     clauses: list[str] = []
     if condition_id is not None:
-        clauses.append("r.condition_id = ?")
+        clauses.append("f.condition_id = ?")
         params.append(condition_id)
     if timepoint_id is not None:
-        clauses.append("r.timepoint_id = ?")
+        clauses.append("f.timepoint_id = ?")
         params.append(timepoint_id)
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY r.id"
+    query += " ORDER BY f.id"
 
     rows = conn.execute(query, params).fetchall()
-    return [_row_to_region(r) for r in rows]
+    return [_row_to_fov(r) for r in rows]
 
 
-def select_region_by_name(
+def select_fov_by_name(
     conn: sqlite3.Connection,
     name: str,
     condition_id: int,
     timepoint_id: int | None = None,
-) -> RegionInfo:
+) -> FovInfo:
     if timepoint_id is not None:
         row = conn.execute(
-            "SELECT r.id, r.name, c.name AS condition, t.name AS timepoint, "
-            "r.width, r.height, r.pixel_size_um, r.source_file "
-            "FROM regions r "
-            "JOIN conditions c ON r.condition_id = c.id "
-            "LEFT JOIN timepoints t ON r.timepoint_id = t.id "
-            "WHERE r.name = ? AND r.condition_id = ? AND r.timepoint_id = ?",
+            "SELECT f.id, f.name, c.name AS condition, t.name AS timepoint, "
+            "f.width, f.height, f.pixel_size_um, f.source_file "
+            "FROM fovs f "
+            "JOIN conditions c ON f.condition_id = c.id "
+            "LEFT JOIN timepoints t ON f.timepoint_id = t.id "
+            "WHERE f.name = ? AND f.condition_id = ? AND f.timepoint_id = ?",
             (name, condition_id, timepoint_id),
         ).fetchone()
     else:
         row = conn.execute(
-            "SELECT r.id, r.name, c.name AS condition, t.name AS timepoint, "
-            "r.width, r.height, r.pixel_size_um, r.source_file "
-            "FROM regions r "
-            "JOIN conditions c ON r.condition_id = c.id "
-            "LEFT JOIN timepoints t ON r.timepoint_id = t.id "
-            "WHERE r.name = ? AND r.condition_id = ? AND r.timepoint_id IS NULL",
+            "SELECT f.id, f.name, c.name AS condition, t.name AS timepoint, "
+            "f.width, f.height, f.pixel_size_um, f.source_file "
+            "FROM fovs f "
+            "JOIN conditions c ON f.condition_id = c.id "
+            "LEFT JOIN timepoints t ON f.timepoint_id = t.id "
+            "WHERE f.name = ? AND f.condition_id = ? AND f.timepoint_id IS NULL",
             (name, condition_id),
         ).fetchone()
     if row is None:
-        raise RegionNotFoundError(name)
-    return _row_to_region(row)
+        raise FovNotFoundError(name)
+    return _row_to_fov(row)
 
 
 # ---------------------------------------------------------------------------
@@ -340,14 +340,14 @@ def insert_cells(conn: sqlite3.Connection, cells: list[CellRecord]) -> list[int]
     if not cells:
         return []
     sql = (
-        "INSERT INTO cells (region_id, segmentation_id, label_value, "
+        "INSERT INTO cells (fov_id, segmentation_id, label_value, "
         "centroid_x, centroid_y, bbox_x, bbox_y, bbox_w, bbox_h, "
         "area_pixels, area_um2, perimeter, circularity) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     rows = [
         (
-            cell.region_id, cell.segmentation_id, cell.label_value,
+            cell.fov_id, cell.segmentation_id, cell.label_value,
             cell.centroid_x, cell.centroid_y,
             cell.bbox_x, cell.bbox_y, cell.bbox_w, cell.bbox_h,
             cell.area_pixels, cell.area_um2, cell.perimeter, cell.circularity,
@@ -369,7 +369,7 @@ def insert_cells(conn: sqlite3.Connection, cells: list[CellRecord]) -> list[int]
 def select_cells(
     conn: sqlite3.Connection,
     condition_id: int | None = None,
-    region_id: int | None = None,
+    fov_id: int | None = None,
     timepoint_id: int | None = None,
     is_valid: bool = True,
     min_area: float | None = None,
@@ -378,15 +378,15 @@ def select_cells(
 ) -> list[dict]:
     """Query cells with flexible filters. Returns list of row dicts."""
     query = (
-        "SELECT c.id, c.region_id, c.segmentation_id, c.label_value, "
+        "SELECT c.id, c.fov_id, c.segmentation_id, c.label_value, "
         "c.centroid_x, c.centroid_y, c.bbox_x, c.bbox_y, c.bbox_w, c.bbox_h, "
         "c.area_pixels, c.area_um2, c.perimeter, c.circularity, c.is_valid, "
-        "r.name AS region_name, cond.name AS condition_name, "
+        "f.name AS fov_name, cond.name AS condition_name, "
         "t.name AS timepoint_name "
         "FROM cells c "
-        "JOIN regions r ON c.region_id = r.id "
-        "JOIN conditions cond ON r.condition_id = cond.id "
-        "LEFT JOIN timepoints t ON r.timepoint_id = t.id"
+        "JOIN fovs f ON c.fov_id = f.id "
+        "JOIN conditions cond ON f.condition_id = cond.id "
+        "LEFT JOIN timepoints t ON f.timepoint_id = t.id"
     )
     params: list = []
     clauses: list[str] = []
@@ -394,13 +394,13 @@ def select_cells(
     if is_valid:
         clauses.append("c.is_valid = 1")
     if condition_id is not None:
-        clauses.append("r.condition_id = ?")
+        clauses.append("f.condition_id = ?")
         params.append(condition_id)
-    if region_id is not None:
-        clauses.append("c.region_id = ?")
-        params.append(region_id)
+    if fov_id is not None:
+        clauses.append("c.fov_id = ?")
+        params.append(fov_id)
     if timepoint_id is not None:
-        clauses.append("r.timepoint_id = ?")
+        clauses.append("f.timepoint_id = ?")
         params.append(timepoint_id)
     if min_area is not None:
         clauses.append("c.area_pixels >= ?")
@@ -426,20 +426,20 @@ def select_cells(
 def count_cells(
     conn: sqlite3.Connection,
     condition_id: int | None = None,
-    region_id: int | None = None,
+    fov_id: int | None = None,
     is_valid: bool = True,
 ) -> int:
-    query = "SELECT COUNT(*) FROM cells c JOIN regions r ON c.region_id = r.id"
+    query = "SELECT COUNT(*) FROM cells c JOIN fovs f ON c.fov_id = f.id"
     params: list = []
     clauses: list[str] = []
     if is_valid:
         clauses.append("c.is_valid = 1")
     if condition_id is not None:
-        clauses.append("r.condition_id = ?")
+        clauses.append("f.condition_id = ?")
         params.append(condition_id)
-    if region_id is not None:
-        clauses.append("c.region_id = ?")
-        params.append(region_id)
+    if fov_id is not None:
+        clauses.append("c.fov_id = ?")
+        params.append(fov_id)
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
     return conn.execute(query, params).fetchone()[0]

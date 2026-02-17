@@ -1,4 +1,4 @@
-"""percell3 segment — run cell segmentation on experiment regions."""
+"""percell3 segment — run cell segmentation on experiment FOVs."""
 
 from __future__ import annotations
 
@@ -34,12 +34,12 @@ from percell3.cli.utils import console, error_handler, make_progress, open_exper
     help="Expected cell diameter in pixels. Auto-detect if omitted.",
 )
 @click.option(
-    "--regions", default=None,
-    help="Comma-separated region names to segment. All regions if omitted.",
+    "--fovs", default=None,
+    help="Comma-separated FOV names to segment. All FOVs if omitted.",
 )
 @click.option(
     "--condition", default=None,
-    help="Only segment regions in this condition.",
+    help="Only segment FOVs in this condition.",
 )
 @error_handler
 def segment(
@@ -47,27 +47,27 @@ def segment(
     channel: str,
     model: str,
     diameter: float | None,
-    regions: str | None,
+    fovs: str | None,
     condition: str | None,
 ) -> None:
-    """Run cell segmentation on experiment regions."""
+    """Run cell segmentation on experiment FOVs."""
     from percell3.segment import SegmentationEngine
 
     store = open_experiment(experiment)
     try:
         engine = SegmentationEngine()
 
-        region_list: list[str] | None = None
-        if regions is not None:
-            region_list = [r.strip() for r in regions.split(",") if r.strip()]
+        fov_list: list[str] | None = None
+        if fovs is not None:
+            fov_list = [f.strip() for f in fovs.split(",") if f.strip()]
 
         with make_progress() as progress:
             task = progress.add_task("Segmenting...", total=None)
 
-            def on_progress(current: int, total: int, region_name: str) -> None:
+            def on_progress(current: int, total: int, fov_name: str) -> None:
                 progress.update(
                     task, total=total, completed=current,
-                    description=f"Segmenting {region_name}",
+                    description=f"Segmenting {fov_name}",
                 )
 
             result = engine.run(
@@ -75,7 +75,7 @@ def segment(
                 channel=channel,
                 model=model,
                 diameter=diameter,
-                regions=region_list,
+                fovs=fov_list,
                 condition=condition,
                 progress_callback=on_progress,
             )
@@ -83,7 +83,7 @@ def segment(
         # Summary
         console.print()
         console.print(f"[green]Segmentation complete[/green]")
-        console.print(f"  Regions processed: {result.regions_processed}")
+        console.print(f"  FOVs processed: {result.fovs_processed}")
         console.print(f"  Total cells found: {result.cell_count}")
         console.print(f"  Elapsed: {result.elapsed_seconds:.1f}s")
 

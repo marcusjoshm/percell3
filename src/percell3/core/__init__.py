@@ -6,21 +6,21 @@ from percell3.core.exceptions import (
     DuplicateError,
     ExperimentError,
     ExperimentNotFoundError,
-    RegionNotFoundError,
+    FovNotFoundError,
 )
 from percell3.core.experiment_store import ExperimentStore
-from percell3.core.models import CellRecord, ChannelConfig, MeasurementRecord, RegionInfo
+from percell3.core.models import CellRecord, ChannelConfig, FovInfo, MeasurementRecord
 
 __all__ = [
     "ExperimentStore",
     "ChannelConfig",
-    "RegionInfo",
+    "FovInfo",
     "CellRecord",
     "MeasurementRecord",
     "ExperimentError",
     "ExperimentNotFoundError",
     "ChannelNotFoundError",
     "ConditionNotFoundError",
-    "RegionNotFoundError",
+    "FovNotFoundError",
     "DuplicateError",
 ]

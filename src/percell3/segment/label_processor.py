@@ -12,7 +12,7 @@ from percell3.core.models import CellRecord
 
 def extract_cells(
     labels: np.ndarray,
-    region_id: int,
+    fov_id: int,
     segmentation_id: int,
     pixel_size_um: float | None = None,
 ) -> list[CellRecord]:
@@ -21,7 +21,7 @@ def extract_cells(
     Args:
         labels: 2D integer array (Y, X) where pixel value = cell ID,
             0 = background.
-        region_id: Database ID of the region this label image belongs to.
+        fov_id: Database ID of the FOV this label image belongs to.
         segmentation_id: Database ID of the segmentation run.
         pixel_size_um: Physical pixel size in micrometers. If provided,
             ``area_um2`` is computed. Otherwise it is set to None.
@@ -65,7 +65,7 @@ def extract_cells(
 
         cells.append(
             CellRecord(
-                region_id=region_id,
+                fov_id=fov_id,
                 segmentation_id=segmentation_id,
                 label_value=int(prop.label),
                 centroid_x=centroid_x,
@@ -97,9 +97,9 @@ class LabelProcessor:
     def extract_cells(
         self,
         labels: np.ndarray,
-        region_id: int,
+        fov_id: int,
         segmentation_id: int,
         pixel_size_um: float | None = None,
     ) -> list[CellRecord]:
         """Convert a label image to a list of CellRecord objects."""
-        return extract_cells(labels, region_id, segmentation_id, pixel_size_um)
+        return extract_cells(labels, fov_id, segmentation_id, pixel_size_um)

@@ -21,14 +21,14 @@ def _make_plan(source_path: Path) -> ImportPlan:
             ChannelMapping(token_value="00", name="DAPI", role="nucleus", color="#0000FF"),
             ChannelMapping(token_value="01", name="GFP"),
         ],
-        region_names={"region1": "Well_A1", "region2": "Well_A2"},
+        fov_names={"region1": "Well_A1", "region2": "Well_A2"},
         z_transform=ZTransform(method="mip"),
         pixel_size_um=0.65,
         token_config=TokenConfig(
             channel=r"_ch(\d+)",
             timepoint=r"_t(\d+)",
             z_slice=r"_z(\d+)",
-            region=r"^([a-z]+\d+)",
+            fov=r"^([a-z]+\d+)",
         ),
     )
 
@@ -46,7 +46,7 @@ class TestRoundTrip:
         assert loaded.pixel_size_um == plan.pixel_size_um
         assert loaded.z_transform == plan.z_transform
         assert loaded.token_config == plan.token_config
-        assert loaded.region_names == plan.region_names
+        assert loaded.fov_names == plan.fov_names
         assert len(loaded.channel_mappings) == 2
         assert loaded.channel_mappings[0].name == "DAPI"
         assert loaded.channel_mappings[0].role == "nucleus"
@@ -59,7 +59,7 @@ class TestRoundTrip:
             source_path=tmp_path / "tiffs",
             condition="treated",
             channel_mappings=[],
-            region_names={},
+            fov_names={},
             z_transform=ZTransform(method="slice", slice_index=3),
             pixel_size_um=None,
             token_config=TokenConfig(),
@@ -89,7 +89,7 @@ class TestRoundTrip:
         assert loaded.condition == "control"
         assert loaded.pixel_size_um is None
         assert loaded.channel_mappings == []
-        assert loaded.region_names == {}
+        assert loaded.fov_names == {}
         assert loaded.z_transform.slice_index is None
 
 
@@ -99,7 +99,7 @@ class TestConditionMapSerialization:
             source_path=tmp_path / "tiffs",
             condition="default",
             channel_mappings=[],
-            region_names={"ctrl_s00": "s00", "treated_s00": "s00"},
+            fov_names={"ctrl_s00": "s00", "treated_s00": "s00"},
             z_transform=ZTransform(method="mip"),
             pixel_size_um=None,
             token_config=TokenConfig(),
@@ -117,7 +117,7 @@ class TestConditionMapSerialization:
             source_path=tmp_path / "tiffs",
             condition="control",
             channel_mappings=[],
-            region_names={},
+            fov_names={},
             z_transform=ZTransform(method="mip"),
             pixel_size_um=None,
             token_config=TokenConfig(),
@@ -165,36 +165,36 @@ class TestErrorHandling:
 
 
 class TestTokenConfigSerialization:
-    def test_custom_region_pattern_preserved(self, tmp_path):
+    def test_custom_fov_pattern_preserved(self, tmp_path):
         plan = ImportPlan(
             source_path=tmp_path / "tiffs",
             condition="ctrl",
             channel_mappings=[],
-            region_names={},
+            fov_names={},
             z_transform=ZTransform(method="mip"),
             pixel_size_um=None,
-            token_config=TokenConfig(region=r"^(well_[A-Z]\d+)"),
+            token_config=TokenConfig(fov=r"^(well_[A-Z]\d+)"),
         )
         yaml_path = tmp_path / "plan.yaml"
 
         plan.to_yaml(yaml_path)
         loaded = ImportPlan.from_yaml(yaml_path)
 
-        assert loaded.token_config.region == r"^(well_[A-Z]\d+)"
+        assert loaded.token_config.fov == r"^(well_[A-Z]\d+)"
 
-    def test_default_token_config_without_region(self, tmp_path):
+    def test_default_token_config_without_fov(self, tmp_path):
         plan = ImportPlan(
             source_path=tmp_path / "tiffs",
             condition="ctrl",
             channel_mappings=[],
-            region_names={},
+            fov_names={},
             z_transform=ZTransform(method="mip"),
             pixel_size_um=None,
-            token_config=TokenConfig(),  # region=None by default
+            token_config=TokenConfig(),  # fov=None by default
         )
         yaml_path = tmp_path / "plan.yaml"
 
         plan.to_yaml(yaml_path)
         loaded = ImportPlan.from_yaml(yaml_path)
 
-        assert loaded.token_config.region is None
+        assert loaded.token_config.fov is None

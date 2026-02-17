@@ -39,7 +39,7 @@ class ImportLif(WorkflowStep):
 
     @property
     def outputs(self) -> list[StepOutput]:
-        return [StepOutput("images"), StepOutput("channels"), StepOutput("regions")]
+        return [StepOutput("images"), StepOutput("channels"), StepOutput("fovs")]
 
     @property
     def parameters(self) -> list[StepParameter]:
@@ -60,7 +60,7 @@ class ImportLif(WorkflowStep):
         reader.read(store, Path(params["path"]), condition=params.get("condition", ""))
         return StepResult(
             status="completed",
-            outputs_produced=["images", "channels", "regions"],
+            outputs_produced=["images", "channels", "fovs"],
         )
 
 
@@ -78,7 +78,7 @@ class ImportTiff(WorkflowStep):
 
     @property
     def outputs(self) -> list[StepOutput]:
-        return [StepOutput("images"), StepOutput("channels"), StepOutput("regions")]
+        return [StepOutput("images"), StepOutput("channels"), StepOutput("fovs")]
 
     @property
     def parameters(self) -> list[StepParameter]:
@@ -99,7 +99,7 @@ class ImportTiff(WorkflowStep):
         reader.read(store, Path(params["path"]), condition=params.get("condition", ""))
         return StepResult(
             status="completed",
-            outputs_produced=["images", "channels", "regions"],
+            outputs_produced=["images", "channels", "fovs"],
         )
 
 

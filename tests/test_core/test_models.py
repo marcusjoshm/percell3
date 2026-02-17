@@ -1,6 +1,6 @@
 """Tests for percell3.core.models."""
 
-from percell3.core.models import ChannelConfig, CellRecord, MeasurementRecord, RegionInfo
+from percell3.core.models import ChannelConfig, CellRecord, MeasurementRecord, FovInfo
 
 
 class TestChannelConfig:
@@ -26,15 +26,15 @@ class TestChannelConfig:
         assert a == b
 
 
-class TestRegionInfo:
+class TestFovInfo:
     def test_construction(self):
-        r = RegionInfo(id=1, name="r1", condition="control", width=2048, height=2048)
+        r = FovInfo(id=1, name="r1", condition="control", width=2048, height=2048)
         assert r.name == "r1"
         assert r.condition == "control"
         assert r.width == 2048
 
     def test_defaults(self):
-        r = RegionInfo(id=1, name="r1", condition="ctrl")
+        r = FovInfo(id=1, name="r1", condition="ctrl")
         assert r.timepoint is None
         assert r.pixel_size_um is None
         assert r.source_file is None
@@ -43,7 +43,7 @@ class TestRegionInfo:
 class TestCellRecord:
     def test_construction(self):
         c = CellRecord(
-            region_id=1, segmentation_id=1, label_value=5,
+            fov_id=1, segmentation_id=1, label_value=5,
             centroid_x=100.0, centroid_y=200.0,
             bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
             area_pixels=1200.0,
@@ -53,7 +53,7 @@ class TestCellRecord:
 
     def test_optional_fields(self):
         c = CellRecord(
-            region_id=1, segmentation_id=1, label_value=1,
+            fov_id=1, segmentation_id=1, label_value=1,
             centroid_x=0, centroid_y=0,
             bbox_x=0, bbox_y=0, bbox_w=10, bbox_h=10,
             area_pixels=100,

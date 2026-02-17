@@ -6,7 +6,7 @@ from percell3.core.exceptions import (
     ChannelNotFoundError,
     ConditionNotFoundError,
     DuplicateError,
-    RegionNotFoundError,
+    FovNotFoundError,
 )
 from percell3.core.models import CellRecord, MeasurementRecord
 from percell3.core import queries
@@ -83,46 +83,46 @@ class TestTimepointQueries:
         assert queries.select_timepoint_id(db_conn, "nope") is None
 
 
-class TestRegionQueries:
+class TestFovQueries:
     def test_insert_and_select(self, db_conn):
         cid = queries.insert_condition(db_conn, "control")
-        rid = queries.insert_region(db_conn, "r1", condition_id=cid, width=2048, height=2048)
+        rid = queries.insert_fov(db_conn, "r1", condition_id=cid, width=2048, height=2048)
         assert rid >= 1
-        regions = queries.select_regions(db_conn, condition_id=cid)
-        assert len(regions) == 1
-        assert regions[0].name == "r1"
-        assert regions[0].condition == "control"
-        assert regions[0].width == 2048
+        fovs = queries.select_fovs(db_conn, condition_id=cid)
+        assert len(fovs) == 1
+        assert fovs[0].name == "r1"
+        assert fovs[0].condition == "control"
+        assert fovs[0].width == 2048
 
     def test_select_by_name(self, db_conn):
         cid = queries.insert_condition(db_conn, "control")
-        queries.insert_region(db_conn, "r1", condition_id=cid)
-        r = queries.select_region_by_name(db_conn, "r1", condition_id=cid)
+        queries.insert_fov(db_conn, "r1", condition_id=cid)
+        r = queries.select_fov_by_name(db_conn, "r1", condition_id=cid)
         assert r.name == "r1"
 
     def test_select_by_name_not_found(self, db_conn):
         cid = queries.insert_condition(db_conn, "control")
-        with pytest.raises(RegionNotFoundError):
-            queries.select_region_by_name(db_conn, "nope", condition_id=cid)
+        with pytest.raises(FovNotFoundError):
+            queries.select_fov_by_name(db_conn, "nope", condition_id=cid)
 
-    def test_duplicate_region_same_condition(self, db_conn):
+    def test_duplicate_fov_same_condition(self, db_conn):
         cid = queries.insert_condition(db_conn, "control")
-        queries.insert_region(db_conn, "r1", condition_id=cid)
+        queries.insert_fov(db_conn, "r1", condition_id=cid)
         with pytest.raises(DuplicateError):
-            queries.insert_region(db_conn, "r1", condition_id=cid)
+            queries.insert_fov(db_conn, "r1", condition_id=cid)
 
     def test_same_name_different_condition(self, db_conn):
         c1 = queries.insert_condition(db_conn, "control")
         c2 = queries.insert_condition(db_conn, "treated")
-        queries.insert_region(db_conn, "r1", condition_id=c1)
-        queries.insert_region(db_conn, "r1", condition_id=c2)
-        assert len(queries.select_regions(db_conn)) == 2
+        queries.insert_fov(db_conn, "r1", condition_id=c1)
+        queries.insert_fov(db_conn, "r1", condition_id=c2)
+        assert len(queries.select_fovs(db_conn)) == 2
 
     def test_with_timepoint(self, db_conn):
         cid = queries.insert_condition(db_conn, "control")
         tid = queries.insert_timepoint(db_conn, "t0")
-        queries.insert_region(db_conn, "r1", condition_id=cid, timepoint_id=tid)
-        r = queries.select_region_by_name(db_conn, "r1", condition_id=cid, timepoint_id=tid)
+        queries.insert_fov(db_conn, "r1", condition_id=cid, timepoint_id=tid)
+        r = queries.select_fov_by_name(db_conn, "r1", condition_id=cid, timepoint_id=tid)
         assert r.timepoint == "t0"
 
 
@@ -130,15 +130,15 @@ class TestCellQueries:
     def _setup(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI", role="nucleus")
         cond_id = queries.insert_condition(db_conn, "control")
-        reg_id = queries.insert_region(db_conn, "r1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
-        return cond_id, reg_id, seg_id
+        return cond_id, fov_id, seg_id
 
     def test_insert_and_select(self, db_conn):
-        cond_id, reg_id, seg_id = self._setup(db_conn)
+        cond_id, fov_id, seg_id = self._setup(db_conn)
         cells = [
             CellRecord(
-                region_id=reg_id, segmentation_id=seg_id, label_value=i,
+                fov_id=fov_id, segmentation_id=seg_id, label_value=i,
                 centroid_x=100.0 + i, centroid_y=200.0 + i,
                 bbox_x=80 + i, bbox_y=180 + i, bbox_w=40, bbox_h=40,
                 area_pixels=1200.0 + i * 10,
@@ -152,10 +152,10 @@ class TestCellQueries:
         assert len(rows) == 5
 
     def test_count(self, db_conn):
-        cond_id, reg_id, seg_id = self._setup(db_conn)
+        cond_id, fov_id, seg_id = self._setup(db_conn)
         cells = [
             CellRecord(
-                region_id=reg_id, segmentation_id=seg_id, label_value=1,
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
                 centroid_x=100, centroid_y=200,
                 bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
                 area_pixels=1200,
@@ -165,10 +165,10 @@ class TestCellQueries:
         assert queries.count_cells(db_conn) == 1
 
     def test_area_filter(self, db_conn):
-        cond_id, reg_id, seg_id = self._setup(db_conn)
+        cond_id, fov_id, seg_id = self._setup(db_conn)
         cells = [
             CellRecord(
-                region_id=reg_id, segmentation_id=seg_id, label_value=i,
+                fov_id=fov_id, segmentation_id=seg_id, label_value=i,
                 centroid_x=100, centroid_y=200,
                 bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
                 area_pixels=1000.0 + i * 100,
@@ -184,11 +184,11 @@ class TestMeasurementQueries:
     def _setup(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "GFP", role="signal")
         cond_id = queries.insert_condition(db_conn, "control")
-        reg_id = queries.insert_region(db_conn, "r1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
         cells = [
             CellRecord(
-                region_id=reg_id, segmentation_id=seg_id, label_value=i,
+                fov_id=fov_id, segmentation_id=seg_id, label_value=i,
                 centroid_x=100, centroid_y=200,
                 bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
                 area_pixels=1200,
@@ -231,11 +231,11 @@ class TestTagQueries:
     def _setup_cells(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI")
         cond_id = queries.insert_condition(db_conn, "control")
-        reg_id = queries.insert_region(db_conn, "r1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
         cells = [
             CellRecord(
-                region_id=reg_id, segmentation_id=seg_id, label_value=i,
+                fov_id=fov_id, segmentation_id=seg_id, label_value=i,
                 centroid_x=100, centroid_y=200,
                 bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
                 area_pixels=1200,
@@ -282,9 +282,9 @@ class TestEmptyListGuards:
     def _setup(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI")
         cond_id = queries.insert_condition(db_conn, "control")
-        reg_id = queries.insert_region(db_conn, "r1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
-        return ch_id, cond_id, reg_id, seg_id
+        return ch_id, cond_id, fov_id, seg_id
 
     def test_delete_cell_tags_empty_list(self, db_conn):
         tag_id = queries.insert_tag(db_conn, "positive")
@@ -313,17 +313,17 @@ class TestInsertCellsRollback:
     def test_rollback_on_duplicate(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI")
         cond_id = queries.insert_condition(db_conn, "control")
-        reg_id = queries.insert_region(db_conn, "r1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
 
         cells = [
             CellRecord(
-                region_id=reg_id, segmentation_id=seg_id, label_value=1,
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
                 centroid_x=100, centroid_y=200,
                 bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40, area_pixels=1200,
             ),
             CellRecord(
-                region_id=reg_id, segmentation_id=seg_id, label_value=1,  # duplicate
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,  # duplicate
                 centroid_x=100, centroid_y=200,
                 bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40, area_pixels=1200,
             ),

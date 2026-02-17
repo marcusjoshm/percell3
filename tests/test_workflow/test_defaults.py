@@ -38,7 +38,7 @@ class TestBuiltInSteps:
         step = ImportLif()
         assert step.name == "import_lif"
         assert len(step.inputs) == 0
-        assert {o.name for o in step.outputs} == {"images", "channels", "regions"}
+        assert {o.name for o in step.outputs} == {"images", "channels", "fovs"}
         assert any(p.name == "path" for p in step.parameters)
 
     def test_import_tiff_metadata(self):

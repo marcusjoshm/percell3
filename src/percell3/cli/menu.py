@@ -223,24 +223,24 @@ def _import_images(state: MenuState) -> None:
     # Condition auto-detection
     condition = "default"
     condition_map: dict[str, str] = {}
-    region_names: dict[str, str] = {}
+    fov_names: dict[str, str] = {}
 
-    detection = detect_conditions(scan_result.regions)
+    detection = detect_conditions(scan_result.fovs)
     if detection is not None:
         console.print(f"\n[bold]Detected conditions[/bold] (pattern: {detection.pattern_used}):")
-        # Group regions by condition for display
-        cond_regions: dict[str, list[str]] = {}
-        for region_token, cond in sorted(detection.condition_map.items()):
-            site = detection.region_name_map[region_token]
-            cond_regions.setdefault(cond, []).append(site)
-        for cond_name, sites in sorted(cond_regions.items()):
+        # Group FOVs by condition for display
+        cond_fovs: dict[str, list[str]] = {}
+        for fov_token, cond in sorted(detection.condition_map.items()):
+            site = detection.fov_name_map[fov_token]
+            cond_fovs.setdefault(cond, []).append(site)
+        for cond_name, sites in sorted(cond_fovs.items()):
             console.print(f"  {cond_name}: {', '.join(sorted(sites))}")
 
         if Prompt.ask(
             "Use detected conditions?", choices=["y", "n"], default="y"
         ) == "y":
             condition_map = dict(detection.condition_map)
-            region_names = dict(detection.region_name_map)
+            fov_names = dict(detection.fov_name_map)
         else:
             condition = Prompt.ask("Condition name", default="default")
     else:
@@ -275,7 +275,7 @@ def _import_images(state: MenuState) -> None:
     # Pass scan_result to avoid a redundant second scan.
     _run_import(
         store, str(source), condition, channel_maps, z_method, yes=True,
-        condition_map=condition_map, region_names=region_names,
+        condition_map=condition_map, fov_names=fov_names,
         source_files=source_files, scan_result=scan_result,
     )
 
@@ -326,21 +326,21 @@ def _segment_cells(state: MenuState) -> None:
         if cond_str:
             condition = cond_str
 
-    # Optional region filter
-    regions_list: list[str] | None = None
-    regions = store.get_regions(condition=condition)
-    if len(regions) > 1:
-        console.print(f"\n[bold]Regions ({len(regions)}):[/bold] ", end="")
-        names = [r.name for r in regions]
+    # Optional FOV filter
+    fov_filter_list: list[str] | None = None
+    all_fovs = store.get_fovs(condition=condition)
+    if len(all_fovs) > 1:
+        console.print(f"\n[bold]FOVs ({len(all_fovs)}):[/bold] ", end="")
+        names = [f.name for f in all_fovs]
         if len(names) <= 10:
             console.print(", ".join(names))
         else:
             console.print(", ".join(names[:10]) + f" ... ({len(names)} total)")
         filter_str = Prompt.ask(
-            "Region filter (comma-separated, blank = all)", default=""
+            "FOV filter (comma-separated, blank = all)", default=""
         )
         if filter_str:
-            regions_list = [r.strip() for r in filter_str.split(",") if r.strip()]
+            fov_filter_list = [f.strip() for f in filter_str.split(",") if f.strip()]
 
     # Confirm
     console.print(f"\n[bold]Segmentation settings:[/bold]")
@@ -349,10 +349,10 @@ def _segment_cells(state: MenuState) -> None:
     console.print(f"  Diameter: {diameter or 'auto-detect'}")
     if condition:
         console.print(f"  Condition: {condition}")
-    if regions_list:
-        console.print(f"  Regions:  {', '.join(regions_list)}")
+    if fov_filter_list:
+        console.print(f"  FOVs:     {', '.join(fov_filter_list)}")
     else:
-        console.print(f"  Regions:  all ({len(regions)})")
+        console.print(f"  FOVs:     all ({len(all_fovs)})")
 
     if Prompt.ask("\nProceed?", choices=["y", "n"], default="y") != "y":
         console.print("[yellow]Segmentation cancelled.[/yellow]")
@@ -366,10 +366,10 @@ def _segment_cells(state: MenuState) -> None:
     with make_progress() as progress:
         task = progress.add_task("Segmenting...", total=None)
 
-        def on_progress(current: int, total: int, region_name: str) -> None:
+        def on_progress(current: int, total: int, fov_name: str) -> None:
             progress.update(
                 task, total=total, completed=current,
-                description=f"Segmenting {region_name}",
+                description=f"Segmenting {fov_name}",
             )
 
         result = engine.run(
@@ -377,14 +377,14 @@ def _segment_cells(state: MenuState) -> None:
             channel=channel,
             model=model,
             diameter=diameter,
-            regions=regions_list,
+            fovs=fov_filter_list,
             condition=condition,
             progress_callback=on_progress,
         )
 
     console.print()
     console.print("[green]Segmentation complete[/green]")
-    console.print(f"  Regions processed: {result.regions_processed}")
+    console.print(f"  FOVs processed: {result.fovs_processed}")
     console.print(f"  Total cells found: {result.cell_count}")
     console.print(f"  Elapsed: {result.elapsed_seconds:.1f}s")
 
@@ -474,7 +474,7 @@ def _query_experiment(state: MenuState) -> None:
 
     console.print("\n[bold]Query[/bold]")
     console.print("  [1] Channels")
-    console.print("  [2] Regions")
+    console.print("  [2] FOVs")
     console.print("  [3] Conditions")
     console.print("  [b] Back")
 
@@ -493,20 +493,20 @@ def _query_experiment(state: MenuState) -> None:
         format_output(rows, ["name", "role", "color"], "table", "Channels")
 
     elif choice == "2":
-        region_list = store.get_regions()
-        if not region_list:
-            console.print("[dim]No regions found.[/dim]")
+        fov_list = store.get_fovs()
+        if not fov_list:
+            console.print("[dim]No FOVs found.[/dim]")
             return
         rows = [
             {
-                "name": r.name,
-                "condition": r.condition,
-                "size": f"{r.width}x{r.height}" if r.width else "",
-                "pixel_size_um": str(r.pixel_size_um) if r.pixel_size_um else "",
+                "name": f.name,
+                "condition": f.condition,
+                "size": f"{f.width}x{f.height}" if f.width else "",
+                "pixel_size_um": str(f.pixel_size_um) if f.pixel_size_um else "",
             }
-            for r in region_list
+            for f in fov_list
         ]
-        format_output(rows, ["name", "condition", "size", "pixel_size_um"], "table", "Regions")
+        format_output(rows, ["name", "condition", "size", "pixel_size_um"], "table", "FOVs")
 
     elif choice == "3":
         cond_list = store.get_conditions()
