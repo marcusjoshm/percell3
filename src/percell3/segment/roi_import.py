@@ -8,7 +8,7 @@ import numpy as np
 
 from percell3.core import ExperimentStore
 from percell3.core.models import CellRecord, RegionInfo
-from percell3.segment.label_processor import LabelProcessor
+from percell3.segment.label_processor import extract_cells
 
 
 def _validate_region(
@@ -22,26 +22,43 @@ def _validate_region(
     raise ValueError(f"Region {region!r} not found in condition {condition!r}")
 
 
-def _store_labels_and_cells(
+def store_labels_and_cells(
     store: ExperimentStore,
     labels: np.ndarray,
-    region_info: RegionInfo,
     region: str,
     condition: str,
     run_id: int,
-    timepoint: str | None,
-) -> None:
-    """Write labels to zarr, extract cells, insert into DB, update run count."""
+    region_id: int,
+    pixel_size_um: float | None,
+    timepoint: str | None = None,
+) -> int:
+    """Write labels to zarr, extract cells, insert into DB, update run count.
+
+    This is the shared primitive used by both the napari viewer save-back
+    and ``RoiImporter``. Callers are responsible for creating the
+    segmentation run (``store.add_segmentation_run``) beforehand.
+
+    Args:
+        store: An open ExperimentStore.
+        labels: 2D int32 label array.
+        region: Region name.
+        condition: Condition name.
+        run_id: Segmentation run ID (already created).
+        region_id: Database ID of the region.
+        pixel_size_um: Physical pixel size in micrometers (or None).
+        timepoint: Optional timepoint.
+
+    Returns:
+        Number of cells extracted and inserted.
+    """
     store.write_labels(region, condition, labels, run_id, timepoint)
 
-    processor = LabelProcessor()
-    cells = processor.extract_cells(
-        labels, region_info.id, run_id, region_info.pixel_size_um,
-    )
+    cells = extract_cells(labels, region_id, run_id, pixel_size_um)
     if cells:
         store.add_cells(cells)
 
     store.update_segmentation_run_cell_count(run_id, len(cells))
+    return len(cells)
 
 
 class RoiImporter:
@@ -97,8 +114,9 @@ class RoiImporter:
             channel, source, {"source": source, "imported": True}
         )
 
-        _store_labels_and_cells(
-            store, labels_int32, target_region, region, condition, run_id, timepoint,
+        store_labels_and_cells(
+            store, labels_int32, region, condition, run_id,
+            target_region.id, target_region.pixel_size_um, timepoint,
         )
         return run_id
 
@@ -163,7 +181,8 @@ class RoiImporter:
 
         run_id = store.add_segmentation_run(channel, "cellpose-gui", params)
 
-        _store_labels_and_cells(
-            store, masks, target_region, region, condition, run_id, timepoint,
+        store_labels_and_cells(
+            store, masks, region, condition, run_id,
+            target_region.id, target_region.pixel_size_um, timepoint,
         )
         return run_id

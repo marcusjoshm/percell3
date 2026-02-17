@@ -57,8 +57,12 @@ czi = [
 workflow = [
     "pyyaml>=6.0",
 ]
+napari = [
+    "napari>=0.6.0",
+    "PyQt5>=5.15",
+]
 all = [
-    "percell3[lif,czi,workflow]",
+    "percell3[lif,czi,workflow,napari]",
 ]
 dev = [
     "pytest>=7.4",
@@ -84,6 +88,7 @@ testpaths = ["tests"]
 addopts = "-v --tb=short"
 markers = [
     "slow: marks tests as slow (requires cellpose model download, deselect with '-m \"not slow\"')",
+    "gui: marks tests requiring napari (deselect with '-m \"not gui\"')",
 ]
 
 [tool.ruff]
