@@ -365,19 +365,21 @@ class TestSaveEditedLabels:
 
 
 class TestChangeDetection:
-    def test_identical_arrays_equal(self) -> None:
-        a = np.array([[0, 1], [2, 3]], dtype=np.int32)
+    def test_identical_arrays_have_same_hash(self) -> None:
+        """Hash-based change detection: identical arrays produce the same hash."""
+        import hashlib
+
+        a = np.zeros((64, 64), dtype=np.int32)
+        a[10:30, 10:30] = 1
         b = a.copy()
-        assert np.array_equal(a, b)
+        assert hashlib.sha256(a.tobytes()).hexdigest() == hashlib.sha256(b.tobytes()).hexdigest()
 
-    def test_different_arrays_not_equal(self) -> None:
-        a = np.array([[0, 1], [2, 3]], dtype=np.int32)
-        b = np.array([[0, 1], [2, 4]], dtype=np.int32)
-        assert not np.array_equal(a, b)
+    def test_different_arrays_have_different_hash(self) -> None:
+        """Hash-based change detection: different arrays produce different hashes."""
+        import hashlib
 
-    def test_same_shape_different_values(self) -> None:
         original = np.zeros((64, 64), dtype=np.int32)
         original[10:30, 10:30] = 1
         edited = original.copy()
-        edited[40:50, 40:50] = 2  # Added a cell
-        assert not np.array_equal(original, edited)
+        edited[40:50, 40:50] = 2
+        assert hashlib.sha256(original.tobytes()).hexdigest() != hashlib.sha256(edited.tobytes()).hexdigest()

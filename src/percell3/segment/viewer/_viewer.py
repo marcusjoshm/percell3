@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
 if TYPE_CHECKING:
+    import napari
+
     from percell3.core import ExperimentStore
     from percell3.core.models import ChannelConfig
 
@@ -77,10 +80,12 @@ def _launch(
     import napari
 
     # --- Pre-flight validation ---
-    if sys.platform != "darwin" and not os.environ.get("DISPLAY"):
+    if sys.platform not in ("darwin", "win32") and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    ):
         raise RuntimeError(
             "napari requires a display server. "
-            "Set DISPLAY or use X11 forwarding."
+            "Set DISPLAY (X11) or WAYLAND_DISPLAY, or use X11 forwarding."
         )
 
     all_regions = store.get_regions(condition=condition)
@@ -117,7 +122,7 @@ def _launch(
     _load_channel_layers(viewer, store, region, condition, selected_channels)
 
     # --- Load labels ---
-    original_labels, parent_run_id, seg_channel = _load_label_layer(
+    original_hash, parent_run_id, seg_channel = _load_label_layer(
         viewer, store, region, condition, selected_channels,
     )
 
@@ -131,9 +136,11 @@ def _launch(
 
     edited_labels = np.asarray(label_layers[0].data, dtype=np.int32)
 
-    if original_labels is not None and np.array_equal(original_labels, edited_labels):
-        logger.info("No label changes detected.")
-        return None
+    if original_hash is not None:
+        edited_hash = hashlib.sha256(edited_labels.tobytes()).hexdigest()
+        if original_hash == edited_hash:
+            logger.info("No label changes detected.")
+            return None
 
     # Labels changed (or created from scratch)
     channel_name = seg_channel or selected_channels[0].name
@@ -146,7 +153,7 @@ def _launch(
 
 
 def _load_channel_layers(
-    viewer: object,
+    viewer: napari.Viewer,
     store: ExperimentStore,
     region: str,
     condition: str,
@@ -158,7 +165,7 @@ def _load_channel_layers(
         cmap = _channel_colormap(ch)
         limits = _default_contrast_limits(data.dtype)
 
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "name": ch.name,
             "colormap": cmap,
             "blending": "additive",
@@ -166,20 +173,22 @@ def _load_channel_layers(
         if limits is not None:
             kwargs["contrast_limits"] = limits
 
-        viewer.add_image(data, **kwargs)  # type: ignore[union-attr]
+        viewer.add_image(data, **kwargs)
 
 
 def _load_label_layer(
-    viewer: object,
+    viewer: napari.Viewer,
     store: ExperimentStore,
     region: str,
     condition: str,
     channels: list[ChannelConfig],
-) -> tuple[np.ndarray | None, int | None, str | None]:
+) -> tuple[str | None, int | None, str | None]:
     """Load the most recent label layer, or create an empty one.
 
     Returns:
-        (original_labels_copy, parent_run_id, segmentation_channel_name)
+        (original_labels_hash, parent_run_id, segmentation_channel_name)
+        The hash is a SHA-256 hex digest used for change detection without
+        keeping a full copy of the label array in memory.
     """
     runs = store.get_segmentation_runs()
 
@@ -192,16 +201,16 @@ def _load_label_layer(
         seg_channel = latest.get("channel")
 
     # Try to read existing labels
-    original_labels: np.ndarray | None = None
+    original_hash: str | None = None
     try:
         labels = store.read_labels(region, condition)
-        original_labels = labels.copy()
-        viewer.add_labels(labels, name="segmentation", opacity=0.5)  # type: ignore[union-attr]
+        original_hash = hashlib.sha256(labels.tobytes()).hexdigest()
+        viewer.add_labels(labels, name="segmentation", opacity=0.5)
     except KeyError:
         # No labels exist in zarr — create empty layer for painting from scratch
         # Get shape from the first image layer
         image_layers = [
-            lyr for lyr in viewer.layers  # type: ignore[union-attr]
+            lyr for lyr in viewer.layers
             if hasattr(lyr, "data") and not isinstance(lyr, type)
         ]
         if image_layers:
@@ -215,10 +224,9 @@ def _load_label_layer(
             label_shape = (512, 512)
 
         empty = np.zeros(label_shape, dtype=np.int32)
-        original_labels = None  # No original — any paint is a change
-        viewer.add_labels(empty, name="segmentation", opacity=0.5)  # type: ignore[union-attr]
+        viewer.add_labels(empty, name="segmentation", opacity=0.5)
 
-    return original_labels, parent_run_id, seg_channel
+    return original_hash, parent_run_id, seg_channel
 
 
 def save_edited_labels(
