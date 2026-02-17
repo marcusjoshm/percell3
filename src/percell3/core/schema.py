@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
-    percell_version TEXT NOT NULL DEFAULT '3.0.0',
+    percell_version TEXT NOT NULL DEFAULT '3.1.0',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -45,17 +45,22 @@ CREATE TABLE IF NOT EXISTS timepoints (
     display_order INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS bio_reps (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
 CREATE TABLE IF NOT EXISTS fovs (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     condition_id INTEGER NOT NULL REFERENCES conditions(id),
+    bio_rep_id INTEGER NOT NULL REFERENCES bio_reps(id),
     timepoint_id INTEGER REFERENCES timepoints(id),
     width INTEGER,
     height INTEGER,
     pixel_size_um REAL,
     source_file TEXT,
-    zarr_path TEXT,
-    UNIQUE(name, condition_id, timepoint_id)
+    UNIQUE(name, bio_rep_id, condition_id, timepoint_id)
 );
 
 CREATE TABLE IF NOT EXISTS segmentation_runs (
@@ -133,10 +138,11 @@ CREATE INDEX IF NOT EXISTS idx_measurements_cell ON measurements(cell_id);
 CREATE INDEX IF NOT EXISTS idx_measurements_channel ON measurements(channel_id);
 CREATE INDEX IF NOT EXISTS idx_measurements_metric ON measurements(metric);
 CREATE INDEX IF NOT EXISTS idx_fovs_condition ON fovs(condition_id);
+CREATE INDEX IF NOT EXISTS idx_fovs_bio_rep ON fovs(bio_rep_id);
 """
 
 EXPECTED_TABLES = frozenset({
-    "experiments", "channels", "conditions", "timepoints", "fovs",
+    "experiments", "channels", "conditions", "timepoints", "bio_reps", "fovs",
     "segmentation_runs", "cells", "measurements", "threshold_runs",
     "analysis_runs", "tags", "cell_tags",
 })
@@ -144,7 +150,7 @@ EXPECTED_TABLES = frozenset({
 EXPECTED_INDEXES = frozenset({
     "idx_cells_fov", "idx_cells_segmentation", "idx_cells_area",
     "idx_measurements_cell", "idx_measurements_channel", "idx_measurements_metric",
-    "idx_fovs_condition",
+    "idx_fovs_condition", "idx_fovs_bio_rep",
 })
 
 
@@ -170,6 +176,7 @@ def create_schema(
         "INSERT INTO experiments (name, description) VALUES (?, ?)",
         (name, description),
     )
+    conn.execute("INSERT INTO bio_reps (name) VALUES ('N1')")
     conn.commit()
     return conn
 

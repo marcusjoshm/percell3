@@ -26,6 +26,7 @@ class FovInfo:
     id: int
     name: str
     condition: str
+    bio_rep: str = "N1"
     timepoint: str | None = None
     width: int | None = None
     height: int | None = None

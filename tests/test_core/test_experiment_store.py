@@ -303,7 +303,7 @@ class TestNGFFMetadata:
         experiment.write_image("r1", "control", "DAPI", data)
 
         store = zarr.open(str(experiment.images_zarr_path), mode="r")
-        group = store["control/r1"]
+        group = store["N1/control/r1"]
         attrs = dict(group.attrs)
 
         assert "multiscales" in attrs

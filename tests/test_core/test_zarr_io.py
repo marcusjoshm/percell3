@@ -36,13 +36,13 @@ class TestInitZarrStore:
         p = tmp_path / "test.zarr"
         zarr_io.init_zarr_store(p)
         root = zarr.open(str(p), mode="r")
-        assert root.attrs["percell_version"] == "3.0.0"
+        assert root.attrs["percell_version"] == "3.1.0"
 
 
 class TestImageIO:
     def test_write_and_read_single_channel(self, images_zarr):
         data = np.random.randint(0, 65535, (256, 256), dtype=np.uint16)
-        gp = zarr_io.image_group_path("control", "r1")
+        gp = zarr_io.image_group_path("N1", "control", "r1")
         channels_meta = [{"name": "DAPI", "color": "#0000FF"}]
 
         zarr_io.write_image_channel(
@@ -55,7 +55,7 @@ class TestImageIO:
 
     def test_read_as_dask(self, images_zarr):
         data = np.random.randint(0, 65535, (128, 128), dtype=np.uint16)
-        gp = zarr_io.image_group_path("control", "r1")
+        gp = zarr_io.image_group_path("N1", "control", "r1")
         channels_meta = [{"name": "DAPI", "color": "#0000FF"}]
 
         zarr_io.write_image_channel(
@@ -70,7 +70,7 @@ class TestImageIO:
     def test_multi_channel_write(self, images_zarr):
         dapi = np.random.randint(0, 65535, (256, 256), dtype=np.uint16)
         gfp = np.random.randint(0, 65535, (256, 256), dtype=np.uint16)
-        gp = zarr_io.image_group_path("control", "r1")
+        gp = zarr_io.image_group_path("N1", "control", "r1")
         channels_meta = [
             {"name": "DAPI", "color": "#0000FF"},
             {"name": "GFP", "color": "#00FF00"},
@@ -92,7 +92,7 @@ class TestImageIO:
 
     def test_ngff_metadata(self, images_zarr):
         data = np.random.randint(0, 65535, (128, 128), dtype=np.uint16)
-        gp = zarr_io.image_group_path("control", "r1")
+        gp = zarr_io.image_group_path("N1", "control", "r1")
         channels_meta = [{"name": "DAPI", "color": "#0000FF"}]
 
         zarr_io.write_image_channel(
@@ -101,7 +101,7 @@ class TestImageIO:
         )
 
         root = zarr.open(str(images_zarr), mode="r")
-        group = root["control/r1"]
+        group = root["N1/control/r1"]
         attrs = dict(group.attrs)
 
         assert "multiscales" in attrs
@@ -116,8 +116,8 @@ class TestImageIO:
 
     def test_with_timepoint(self, images_zarr):
         data = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
-        gp = zarr_io.image_group_path("control", "r1", timepoint="t0")
-        assert gp == "control/t0/r1"
+        gp = zarr_io.image_group_path("N1", "control", "r1", timepoint="t0")
+        assert gp == "N1/control/t0/r1"
 
         zarr_io.write_image_channel(
             images_zarr, gp, channel_index=0, num_channels=1,
@@ -128,7 +128,7 @@ class TestImageIO:
 
     def test_add_channel_resizes(self, images_zarr):
         """Adding a third channel after creating with 2 resizes the array."""
-        gp = zarr_io.image_group_path("control", "r1")
+        gp = zarr_io.image_group_path("N1", "control", "r1")
         d1 = np.ones((64, 64), dtype=np.uint16)
         d2 = np.ones((64, 64), dtype=np.uint16) * 2
 
@@ -164,7 +164,7 @@ class TestLabelIO:
         labels = np.zeros((256, 256), dtype=np.int32)
         labels[50:100, 50:100] = 1
         labels[150:200, 150:200] = 2
-        gp = zarr_io.label_group_path("control", "r1")
+        gp = zarr_io.label_group_path("N1", "control", "r1")
 
         zarr_io.write_labels(labels_zarr, gp, labels)
         result = zarr_io.read_labels(labels_zarr, gp)
@@ -172,7 +172,7 @@ class TestLabelIO:
 
     def test_label_dtype_int32(self, labels_zarr):
         labels = np.ones((64, 64), dtype=np.uint16) * 5
-        gp = zarr_io.label_group_path("control", "r1")
+        gp = zarr_io.label_group_path("N1", "control", "r1")
         zarr_io.write_labels(labels_zarr, gp, labels)
 
         root = zarr.open(str(labels_zarr), mode="r")
@@ -181,18 +181,18 @@ class TestLabelIO:
 
     def test_label_ngff_metadata(self, labels_zarr):
         labels = np.zeros((64, 64), dtype=np.int32)
-        gp = zarr_io.label_group_path("control", "r1")
+        gp = zarr_io.label_group_path("N1", "control", "r1")
         zarr_io.write_labels(labels_zarr, gp, labels, source_image_path="../../images.zarr/control/r1")
 
         root = zarr.open(str(labels_zarr), mode="r")
-        group = root["control/r1"]
+        group = root["N1/control/r1"]
         attrs = dict(group.attrs)
         assert "image-label" in attrs
         assert attrs["image-label"]["version"] == "0.4"
         assert "multiscales" in attrs
 
     def test_overwrite_labels(self, labels_zarr):
-        gp = zarr_io.label_group_path("control", "r1")
+        gp = zarr_io.label_group_path("N1", "control", "r1")
 
         labels1 = np.ones((64, 64), dtype=np.int32)
         zarr_io.write_labels(labels_zarr, gp, labels1)
@@ -208,7 +208,7 @@ class TestMaskIO:
     def test_write_and_read(self, masks_zarr):
         mask = np.zeros((128, 128), dtype=bool)
         mask[20:80, 20:80] = True
-        gp = zarr_io.mask_group_path("control", "r1", "GFP")
+        gp = zarr_io.mask_group_path("N1", "control", "r1", "GFP")
 
         zarr_io.write_mask(masks_zarr, gp, mask)
         result = zarr_io.read_mask(masks_zarr, gp)
@@ -219,12 +219,12 @@ class TestMaskIO:
         assert result[0, 0] == 0
 
     def test_mask_path(self):
-        gp = zarr_io.mask_group_path("control", "r1", "GFP")
-        assert gp == "control/r1/threshold_GFP"
+        gp = zarr_io.mask_group_path("N1", "control", "r1", "GFP")
+        assert gp == "N1/control/r1/threshold_GFP"
 
     def test_mask_path_with_timepoint(self):
-        gp = zarr_io.mask_group_path("control", "r1", "GFP", timepoint="t0")
-        assert gp == "control/t0/r1/threshold_GFP"
+        gp = zarr_io.mask_group_path("N1", "control", "r1", "GFP", timepoint="t0")
+        assert gp == "N1/control/t0/r1/threshold_GFP"
 
 
 # === ndim validation tests ===
@@ -233,7 +233,7 @@ class TestMaskIO:
 class TestNdimValidation:
     def test_write_image_rejects_3d(self, images_zarr):
         data_3d = np.zeros((1, 64, 64), dtype=np.uint16)
-        gp = zarr_io.image_group_path("control", "r1")
+        gp = zarr_io.image_group_path("N1", "control", "r1")
         with pytest.raises(ValueError, match="Expected 2D"):
             zarr_io.write_image_channel(
                 images_zarr, gp, channel_index=0, num_channels=1,
@@ -242,19 +242,19 @@ class TestNdimValidation:
 
     def test_write_labels_rejects_3d(self, labels_zarr):
         data_3d = np.zeros((64, 64, 1), dtype=np.int32)
-        gp = zarr_io.label_group_path("control", "r1")
+        gp = zarr_io.label_group_path("N1", "control", "r1")
         with pytest.raises(ValueError, match="Expected 2D"):
             zarr_io.write_labels(labels_zarr, gp, data_3d)
 
     def test_write_mask_rejects_1d(self, masks_zarr):
         data_1d = np.zeros((100,), dtype=bool)
-        gp = zarr_io.mask_group_path("control", "r1", "GFP")
+        gp = zarr_io.mask_group_path("N1", "control", "r1", "GFP")
         with pytest.raises(ValueError, match="Expected 2D"):
             zarr_io.write_mask(masks_zarr, gp, data_1d)
 
     def test_write_image_accepts_2d(self, images_zarr):
         data_2d = np.zeros((64, 64), dtype=np.uint16)
-        gp = zarr_io.image_group_path("control", "r1")
+        gp = zarr_io.image_group_path("N1", "control", "r1")
         zarr_io.write_image_channel(
             images_zarr, gp, channel_index=0, num_channels=1,
             data=data_2d, channels_meta=[{"name": "DAPI"}],

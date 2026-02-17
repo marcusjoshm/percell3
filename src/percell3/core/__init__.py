@@ -1,6 +1,7 @@
 """PerCell 3 Core — ExperimentStore, schema, models, Zarr I/O."""
 
 from percell3.core.exceptions import (
+    BioRepNotFoundError,
     ChannelNotFoundError,
     ConditionNotFoundError,
     DuplicateError,
@@ -17,6 +18,7 @@ __all__ = [
     "FovInfo",
     "CellRecord",
     "MeasurementRecord",
+    "BioRepNotFoundError",
     "ExperimentError",
     "ExperimentNotFoundError",
     "ChannelNotFoundError",

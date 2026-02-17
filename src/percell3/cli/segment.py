@@ -41,6 +41,10 @@ from percell3.cli.utils import console, error_handler, make_progress, open_exper
     "--condition", default=None,
     help="Only segment FOVs in this condition.",
 )
+@click.option(
+    "-b", "--bio-rep", default=None,
+    help="Only segment FOVs in this biological replicate.",
+)
 @error_handler
 def segment(
     experiment: str,
@@ -49,6 +53,7 @@ def segment(
     diameter: float | None,
     fovs: str | None,
     condition: str | None,
+    bio_rep: str | None,
 ) -> None:
     """Run cell segmentation on experiment FOVs."""
     from percell3.segment import SegmentationEngine
@@ -77,6 +82,7 @@ def segment(
                 diameter=diameter,
                 fovs=fov_list,
                 condition=condition,
+                bio_rep=bio_rep,
                 progress_callback=on_progress,
             )
 

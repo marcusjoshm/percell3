@@ -86,7 +86,7 @@ class TestTimepointQueries:
 class TestFovQueries:
     def test_insert_and_select(self, db_conn):
         cid = queries.insert_condition(db_conn, "control")
-        rid = queries.insert_fov(db_conn, "r1", condition_id=cid, width=2048, height=2048)
+        rid = queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1, width=2048, height=2048)
         assert rid >= 1
         fovs = queries.select_fovs(db_conn, condition_id=cid)
         assert len(fovs) == 1
@@ -96,7 +96,7 @@ class TestFovQueries:
 
     def test_select_by_name(self, db_conn):
         cid = queries.insert_condition(db_conn, "control")
-        queries.insert_fov(db_conn, "r1", condition_id=cid)
+        queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)
         r = queries.select_fov_by_name(db_conn, "r1", condition_id=cid)
         assert r.name == "r1"
 
@@ -107,21 +107,21 @@ class TestFovQueries:
 
     def test_duplicate_fov_same_condition(self, db_conn):
         cid = queries.insert_condition(db_conn, "control")
-        queries.insert_fov(db_conn, "r1", condition_id=cid)
+        queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)
         with pytest.raises(DuplicateError):
-            queries.insert_fov(db_conn, "r1", condition_id=cid)
+            queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)
 
     def test_same_name_different_condition(self, db_conn):
         c1 = queries.insert_condition(db_conn, "control")
         c2 = queries.insert_condition(db_conn, "treated")
-        queries.insert_fov(db_conn, "r1", condition_id=c1)
-        queries.insert_fov(db_conn, "r1", condition_id=c2)
+        queries.insert_fov(db_conn, "r1", condition_id=c1, bio_rep_id=1)
+        queries.insert_fov(db_conn, "r1", condition_id=c2, bio_rep_id=1)
         assert len(queries.select_fovs(db_conn)) == 2
 
     def test_with_timepoint(self, db_conn):
         cid = queries.insert_condition(db_conn, "control")
         tid = queries.insert_timepoint(db_conn, "t0")
-        queries.insert_fov(db_conn, "r1", condition_id=cid, timepoint_id=tid)
+        queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1, timepoint_id=tid)
         r = queries.select_fov_by_name(db_conn, "r1", condition_id=cid, timepoint_id=tid)
         assert r.timepoint == "t0"
 
@@ -130,7 +130,7 @@ class TestCellQueries:
     def _setup(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI", role="nucleus")
         cond_id = queries.insert_condition(db_conn, "control")
-        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id, bio_rep_id=1)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
         return cond_id, fov_id, seg_id
 
@@ -184,7 +184,7 @@ class TestMeasurementQueries:
     def _setup(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "GFP", role="signal")
         cond_id = queries.insert_condition(db_conn, "control")
-        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id, bio_rep_id=1)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
         cells = [
             CellRecord(
@@ -231,7 +231,7 @@ class TestTagQueries:
     def _setup_cells(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI")
         cond_id = queries.insert_condition(db_conn, "control")
-        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id, bio_rep_id=1)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
         cells = [
             CellRecord(
@@ -282,7 +282,7 @@ class TestEmptyListGuards:
     def _setup(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI")
         cond_id = queries.insert_condition(db_conn, "control")
-        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id, bio_rep_id=1)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
         return ch_id, cond_id, fov_id, seg_id
 
@@ -313,7 +313,7 @@ class TestInsertCellsRollback:
     def test_rollback_on_duplicate(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI")
         cond_id = queries.insert_condition(db_conn, "control")
-        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id, bio_rep_id=1)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
 
         cells = [

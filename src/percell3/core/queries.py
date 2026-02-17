@@ -9,6 +9,7 @@ import json
 import sqlite3
 
 from percell3.core.exceptions import (
+    BioRepNotFoundError,
     ChannelNotFoundError,
     ConditionNotFoundError,
     DuplicateError,
@@ -80,6 +81,7 @@ def _row_to_fov(r: sqlite3.Row) -> FovInfo:
         id=r["id"],
         name=r["name"],
         condition=r["condition"],
+        bio_rep=r["bio_rep"],
         timepoint=r["timepoint"],
         width=r["width"],
         height=r["height"],
@@ -173,6 +175,50 @@ def select_timepoint_id(conn: sqlite3.Connection, name: str) -> int | None:
 
 
 # ---------------------------------------------------------------------------
+# Biological Replicates
+# ---------------------------------------------------------------------------
+
+
+def insert_bio_rep(conn: sqlite3.Connection, name: str) -> int:
+    """Insert a biological replicate. Returns the bio rep ID."""
+    try:
+        cur = conn.execute(
+            "INSERT INTO bio_reps (name) VALUES (?)",
+            (name,),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        raise DuplicateError("bio_rep", name)
+    return cur.lastrowid  # type: ignore[return-value]
+
+
+def select_bio_reps(conn: sqlite3.Connection) -> list[str]:
+    """Return all bio rep names in creation order."""
+    rows = conn.execute("SELECT name FROM bio_reps ORDER BY id").fetchall()
+    return [r["name"] for r in rows]
+
+
+def select_bio_rep_by_name(conn: sqlite3.Connection, name: str) -> sqlite3.Row:
+    """Look up a bio rep by name. Raises BioRepNotFoundError if not found."""
+    row = conn.execute(
+        "SELECT id, name FROM bio_reps WHERE name = ?", (name,)
+    ).fetchone()
+    if row is None:
+        raise BioRepNotFoundError(name)
+    return row
+
+
+def select_bio_rep_id(conn: sqlite3.Connection, name: str) -> int:
+    """Resolve a bio rep name to its ID. Raises BioRepNotFoundError if not found."""
+    row = conn.execute(
+        "SELECT id FROM bio_reps WHERE name = ?", (name,)
+    ).fetchone()
+    if row is None:
+        raise BioRepNotFoundError(name)
+    return row["id"]
+
+
+# ---------------------------------------------------------------------------
 # FOVs
 # ---------------------------------------------------------------------------
 
@@ -181,34 +227,35 @@ def insert_fov(
     conn: sqlite3.Connection,
     name: str,
     condition_id: int,
+    bio_rep_id: int,
     timepoint_id: int | None = None,
     width: int | None = None,
     height: int | None = None,
     pixel_size_um: float | None = None,
     source_file: str | None = None,
-    zarr_path: str | None = None,
 ) -> int:
     # SQLite treats NULLs as distinct in UNIQUE constraints, so check manually
     if timepoint_id is None:
         existing = conn.execute(
-            "SELECT id FROM fovs WHERE name = ? AND condition_id = ? "
-            "AND timepoint_id IS NULL",
-            (name, condition_id),
+            "SELECT id FROM fovs WHERE name = ? AND bio_rep_id = ? "
+            "AND condition_id = ? AND timepoint_id IS NULL",
+            (name, bio_rep_id, condition_id),
         ).fetchone()
     else:
         existing = conn.execute(
-            "SELECT id FROM fovs WHERE name = ? AND condition_id = ? "
-            "AND timepoint_id = ?",
-            (name, condition_id, timepoint_id),
+            "SELECT id FROM fovs WHERE name = ? AND bio_rep_id = ? "
+            "AND condition_id = ? AND timepoint_id = ?",
+            (name, bio_rep_id, condition_id, timepoint_id),
         ).fetchone()
     if existing:
         raise DuplicateError("fov", name)
     try:
         cur = conn.execute(
-            "INSERT INTO fovs (name, condition_id, timepoint_id, width, height, "
-            "pixel_size_um, source_file, zarr_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (name, condition_id, timepoint_id, width, height, pixel_size_um,
-             source_file, zarr_path),
+            "INSERT INTO fovs (name, condition_id, bio_rep_id, timepoint_id, "
+            "width, height, pixel_size_um, source_file) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, condition_id, bio_rep_id, timepoint_id, width, height,
+             pixel_size_um, source_file),
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -219,13 +266,16 @@ def insert_fov(
 def select_fovs(
     conn: sqlite3.Connection,
     condition_id: int | None = None,
+    bio_rep_id: int | None = None,
     timepoint_id: int | None = None,
 ) -> list[FovInfo]:
     query = (
-        "SELECT f.id, f.name, c.name AS condition, t.name AS timepoint, "
+        "SELECT f.id, f.name, c.name AS condition, b.name AS bio_rep, "
+        "t.name AS timepoint, "
         "f.width, f.height, f.pixel_size_um, f.source_file "
         "FROM fovs f "
         "JOIN conditions c ON f.condition_id = c.id "
+        "JOIN bio_reps b ON f.bio_rep_id = b.id "
         "LEFT JOIN timepoints t ON f.timepoint_id = t.id"
     )
     params: list = []
@@ -233,6 +283,9 @@ def select_fovs(
     if condition_id is not None:
         clauses.append("f.condition_id = ?")
         params.append(condition_id)
+    if bio_rep_id is not None:
+        clauses.append("f.bio_rep_id = ?")
+        params.append(bio_rep_id)
     if timepoint_id is not None:
         clauses.append("f.timepoint_id = ?")
         params.append(timepoint_id)
@@ -248,28 +301,32 @@ def select_fov_by_name(
     conn: sqlite3.Connection,
     name: str,
     condition_id: int,
+    bio_rep_id: int | None = None,
     timepoint_id: int | None = None,
 ) -> FovInfo:
+    base = (
+        "SELECT f.id, f.name, c.name AS condition, b.name AS bio_rep, "
+        "t.name AS timepoint, "
+        "f.width, f.height, f.pixel_size_um, f.source_file "
+        "FROM fovs f "
+        "JOIN conditions c ON f.condition_id = c.id "
+        "JOIN bio_reps b ON f.bio_rep_id = b.id "
+        "LEFT JOIN timepoints t ON f.timepoint_id = t.id "
+        "WHERE f.name = ? AND f.condition_id = ?"
+    )
+    params: list = [name, condition_id]
+
+    if bio_rep_id is not None:
+        base += " AND f.bio_rep_id = ?"
+        params.append(bio_rep_id)
+
     if timepoint_id is not None:
-        row = conn.execute(
-            "SELECT f.id, f.name, c.name AS condition, t.name AS timepoint, "
-            "f.width, f.height, f.pixel_size_um, f.source_file "
-            "FROM fovs f "
-            "JOIN conditions c ON f.condition_id = c.id "
-            "LEFT JOIN timepoints t ON f.timepoint_id = t.id "
-            "WHERE f.name = ? AND f.condition_id = ? AND f.timepoint_id = ?",
-            (name, condition_id, timepoint_id),
-        ).fetchone()
+        base += " AND f.timepoint_id = ?"
+        params.append(timepoint_id)
     else:
-        row = conn.execute(
-            "SELECT f.id, f.name, c.name AS condition, t.name AS timepoint, "
-            "f.width, f.height, f.pixel_size_um, f.source_file "
-            "FROM fovs f "
-            "JOIN conditions c ON f.condition_id = c.id "
-            "LEFT JOIN timepoints t ON f.timepoint_id = t.id "
-            "WHERE f.name = ? AND f.condition_id = ? AND f.timepoint_id IS NULL",
-            (name, condition_id),
-        ).fetchone()
+        base += " AND f.timepoint_id IS NULL"
+
+    row = conn.execute(base, params).fetchone()
     if row is None:
         raise FovNotFoundError(name)
     return _row_to_fov(row)
@@ -369,6 +426,7 @@ def insert_cells(conn: sqlite3.Connection, cells: list[CellRecord]) -> list[int]
 def select_cells(
     conn: sqlite3.Connection,
     condition_id: int | None = None,
+    bio_rep_id: int | None = None,
     fov_id: int | None = None,
     timepoint_id: int | None = None,
     is_valid: bool = True,
@@ -382,10 +440,12 @@ def select_cells(
         "c.centroid_x, c.centroid_y, c.bbox_x, c.bbox_y, c.bbox_w, c.bbox_h, "
         "c.area_pixels, c.area_um2, c.perimeter, c.circularity, c.is_valid, "
         "f.name AS fov_name, cond.name AS condition_name, "
+        "b.name AS bio_rep_name, "
         "t.name AS timepoint_name "
         "FROM cells c "
         "JOIN fovs f ON c.fov_id = f.id "
         "JOIN conditions cond ON f.condition_id = cond.id "
+        "JOIN bio_reps b ON f.bio_rep_id = b.id "
         "LEFT JOIN timepoints t ON f.timepoint_id = t.id"
     )
     params: list = []
@@ -396,6 +456,9 @@ def select_cells(
     if condition_id is not None:
         clauses.append("f.condition_id = ?")
         params.append(condition_id)
+    if bio_rep_id is not None:
+        clauses.append("f.bio_rep_id = ?")
+        params.append(bio_rep_id)
     if fov_id is not None:
         clauses.append("c.fov_id = ?")
         params.append(fov_id)
@@ -426,6 +489,7 @@ def select_cells(
 def count_cells(
     conn: sqlite3.Connection,
     condition_id: int | None = None,
+    bio_rep_id: int | None = None,
     fov_id: int | None = None,
     is_valid: bool = True,
 ) -> int:
@@ -437,6 +501,9 @@ def count_cells(
     if condition_id is not None:
         clauses.append("f.condition_id = ?")
         params.append(condition_id)
+    if bio_rep_id is not None:
+        clauses.append("f.bio_rep_id = ?")
+        params.append(bio_rep_id)
     if fov_id is not None:
         clauses.append("c.fov_id = ?")
         params.append(fov_id)

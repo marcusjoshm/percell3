@@ -43,6 +43,7 @@ class SegmentationEngine:
         diameter: int | float | None = None,
         fovs: list[str] | None = None,
         condition: str | None = None,
+        bio_rep: str | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
         params: SegmentationParams | None = None,
         **kwargs: object,
@@ -97,7 +98,7 @@ class SegmentationEngine:
             segmenter = CellposeAdapter()
 
         # 4. Get FOVs to segment
-        all_fovs = store.get_fovs(condition=condition)
+        all_fovs = store.get_fovs(condition=condition, bio_rep=bio_rep)
         if fovs is not None:
             fov_set = set(fovs)
             all_fovs = [f for f in all_fovs if f.name in fov_set]
@@ -123,7 +124,8 @@ class SegmentationEngine:
             try:
                 # Read image
                 image = store.read_image_numpy(
-                    fov_info.name, fov_info.condition, channel
+                    fov_info.name, fov_info.condition, channel,
+                    bio_rep=fov_info.bio_rep,
                 )
 
                 # Run segmentation
@@ -131,7 +133,8 @@ class SegmentationEngine:
 
                 # Write labels to zarr
                 store.write_labels(
-                    fov_info.name, fov_info.condition, labels, run_id
+                    fov_info.name, fov_info.condition, labels, run_id,
+                    bio_rep=fov_info.bio_rep,
                 )
 
                 # Extract cell properties

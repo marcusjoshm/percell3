@@ -31,6 +31,7 @@ import pandas as pd
 
 from percell3.core import queries, zarr_io
 from percell3.core.exceptions import (
+    BioRepNotFoundError,
     ChannelNotFoundError,
     ExperimentError,
     ExperimentNotFoundError,
@@ -155,6 +156,30 @@ class ExperimentStore:
     def get_channel(self, name: str) -> ChannelConfig:
         return queries.select_channel_by_name(self._conn, name)
 
+    # --- Biological Replicate Management ---
+
+    def add_bio_rep(self, name: str) -> int:
+        _validate_name(name, "bio_rep name")
+        return queries.insert_bio_rep(self._conn, name)
+
+    def get_bio_reps(self) -> list[str]:
+        return queries.select_bio_reps(self._conn)
+
+    def get_bio_rep(self, name: str) -> str:
+        row = queries.select_bio_rep_by_name(self._conn, name)
+        return row["name"]
+
+    def _resolve_bio_rep(self, bio_rep: str | None) -> tuple[int, str]:
+        """Resolve bio_rep name to (id, name). Auto-resolves when only 1 exists."""
+        if bio_rep is not None:
+            return queries.select_bio_rep_id(self._conn, bio_rep), bio_rep
+        reps = queries.select_bio_reps(self._conn)
+        if len(reps) == 1:
+            return queries.select_bio_rep_id(self._conn, reps[0]), reps[0]
+        raise BioRepNotFoundError(
+            f"Multiple bio reps exist ({', '.join(reps)}); specify one explicitly"
+        )
+
     # --- Condition/Timepoint/FOV Management ---
 
     def add_condition(self, name: str, description: str = "") -> int:
@@ -169,6 +194,7 @@ class ExperimentStore:
         self,
         name: str,
         condition: str,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
         width: int | None = None,
         height: int | None = None,
@@ -176,13 +202,13 @@ class ExperimentStore:
         source_file: str | None = None,
     ) -> int:
         _validate_name(name, "fov name")
+        bio_rep_id, _ = self._resolve_bio_rep(bio_rep)
         cond_id = queries.select_condition_id(self._conn, condition)
         tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
-        gp = zarr_io.image_group_path(condition, name, timepoint)
         return queries.insert_fov(
-            self._conn, name, condition_id=cond_id, timepoint_id=tp_id,
-            width=width, height=height, pixel_size_um=pixel_size_um,
-            source_file=source_file, zarr_path=gp,
+            self._conn, name, condition_id=cond_id, bio_rep_id=bio_rep_id,
+            timepoint_id=tp_id, width=width, height=height,
+            pixel_size_um=pixel_size_um, source_file=source_file,
         )
 
     def get_conditions(self) -> list[str]:
@@ -194,11 +220,15 @@ class ExperimentStore:
     def get_fovs(
         self,
         condition: str | None = None,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> list[FovInfo]:
         cond_id = queries.select_condition_id(self._conn, condition) if condition else None
+        br_id = queries.select_bio_rep_id(self._conn, bio_rep) if bio_rep else None
         tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
-        return queries.select_fovs(self._conn, condition_id=cond_id, timepoint_id=tp_id)
+        return queries.select_fovs(
+            self._conn, condition_id=cond_id, bio_rep_id=br_id, timepoint_id=tp_id,
+        )
 
     # --- Image I/O ---
 
@@ -206,15 +236,17 @@ class ExperimentStore:
         self,
         fov: str,
         condition: str,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> tuple[FovInfo, str]:
         """Resolve FOV name to FovInfo and zarr group path."""
+        br_id, br_name = self._resolve_bio_rep(bio_rep)
         cond_id = queries.select_condition_id(self._conn, condition)
         tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
         fov_info = queries.select_fov_by_name(
-            self._conn, fov, condition_id=cond_id, timepoint_id=tp_id
+            self._conn, fov, condition_id=cond_id, bio_rep_id=br_id, timepoint_id=tp_id,
         )
-        gp = zarr_io.image_group_path(condition, fov, timepoint)
+        gp = zarr_io.image_group_path(br_name, condition, fov, timepoint)
         return fov_info, gp
 
     def _channels_meta(self) -> list[dict]:
@@ -228,9 +260,10 @@ class ExperimentStore:
         condition: str,
         channel: str,
         data: np.ndarray,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> None:
-        fov_info, gp = self._resolve_fov(fov, condition, timepoint)
+        fov_info, gp = self._resolve_fov(fov, condition, bio_rep, timepoint)
         ch = self.get_channel(channel)
         channels = self.get_channels()
         num_channels = len(channels)
@@ -250,9 +283,10 @@ class ExperimentStore:
         fov: str,
         condition: str,
         channel: str,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> da.Array:
-        _, gp = self._resolve_fov(fov, condition, timepoint)
+        _, gp = self._resolve_fov(fov, condition, bio_rep, timepoint)
         ch = self.get_channel(channel)
         return zarr_io.read_image_channel(self.images_zarr_path, gp, ch.display_order)
 
@@ -261,9 +295,10 @@ class ExperimentStore:
         fov: str,
         condition: str,
         channel: str,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> np.ndarray:
-        _, gp = self._resolve_fov(fov, condition, timepoint)
+        _, gp = self._resolve_fov(fov, condition, bio_rep, timepoint)
         ch = self.get_channel(channel)
         return zarr_io.read_image_channel_numpy(
             self.images_zarr_path, gp, ch.display_order
@@ -277,11 +312,13 @@ class ExperimentStore:
         condition: str,
         labels: np.ndarray,
         segmentation_run_id: int,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> None:
-        fov_info, _ = self._resolve_fov(fov, condition, timepoint)
-        gp = zarr_io.label_group_path(condition, fov, timepoint)
-        img_gp = zarr_io.image_group_path(condition, fov, timepoint)
+        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
+        br_name = fov_info.bio_rep
+        gp = zarr_io.label_group_path(br_name, condition, fov, timepoint)
+        img_gp = zarr_io.image_group_path(br_name, condition, fov, timepoint)
         source_path = f"../../images.zarr/{img_gp}"
         zarr_io.write_labels(
             self.labels_zarr_path, gp, labels,
@@ -293,9 +330,11 @@ class ExperimentStore:
         self,
         fov: str,
         condition: str,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> np.ndarray:
-        gp = zarr_io.label_group_path(condition, fov, timepoint)
+        _, br_name = self._resolve_bio_rep(bio_rep)
+        gp = zarr_io.label_group_path(br_name, condition, fov, timepoint)
         return zarr_io.read_labels(self.labels_zarr_path, gp)
 
     # --- Cell Records ---
@@ -306,6 +345,7 @@ class ExperimentStore:
     def get_cells(
         self,
         condition: str | None = None,
+        bio_rep: str | None = None,
         fov: str | None = None,
         timepoint: str | None = None,
         is_valid: bool = True,
@@ -314,6 +354,7 @@ class ExperimentStore:
         tags: list[str] | None = None,
     ) -> pd.DataFrame:
         cond_id = queries.select_condition_id(self._conn, condition) if condition else None
+        br_id = queries.select_bio_rep_id(self._conn, bio_rep) if bio_rep else None
 
         # Resolve fov to fov_id if provided
         fov_id = None
@@ -322,7 +363,8 @@ class ExperimentStore:
                 raise ValueError("'condition' is required when filtering by 'fov'")
             tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
             fov_info = queries.select_fov_by_name(
-                self._conn, fov, condition_id=cond_id, timepoint_id=tp_id,
+                self._conn, fov, condition_id=cond_id, bio_rep_id=br_id,
+                timepoint_id=tp_id,
             )
             fov_id = fov_info.id
 
@@ -341,6 +383,7 @@ class ExperimentStore:
         rows = queries.select_cells(
             self._conn,
             condition_id=cond_id,
+            bio_rep_id=br_id,
             fov_id=fov_id,
             timepoint_id=tp_id_filter,
             is_valid=is_valid,
@@ -353,20 +396,26 @@ class ExperimentStore:
     def get_cell_count(
         self,
         condition: str | None = None,
+        bio_rep: str | None = None,
         fov: str | None = None,
         is_valid: bool = True,
     ) -> int:
         cond_id = queries.select_condition_id(self._conn, condition) if condition else None
+        br_id = queries.select_bio_rep_id(self._conn, bio_rep) if bio_rep else None
         fov_id = None
         if fov:
             if condition is None:
                 raise ValueError("'condition' is required when filtering by 'fov'")
             tp_id = None
             fov_info = queries.select_fov_by_name(
-                self._conn, fov, condition_id=cond_id, timepoint_id=tp_id,
+                self._conn, fov, condition_id=cond_id, bio_rep_id=br_id,
+                timepoint_id=tp_id,
             )
             fov_id = fov_info.id
-        return queries.count_cells(self._conn, condition_id=cond_id, fov_id=fov_id, is_valid=is_valid)
+        return queries.count_cells(
+            self._conn, condition_id=cond_id, bio_rep_id=br_id,
+            fov_id=fov_id, is_valid=is_valid,
+        )
 
     # --- Measurements ---
 
@@ -408,8 +457,8 @@ class ExperimentStore:
             cells_df = self.get_cells(is_valid=False)
             if not cells_df.empty:
                 # Merge cell info
-                cell_cols = ["id", "fov_name", "condition_name", "area_pixels",
-                             "centroid_x", "centroid_y"]
+                cell_cols = ["id", "fov_name", "condition_name", "bio_rep_name",
+                             "area_pixels", "centroid_x", "centroid_y"]
                 available = [c for c in cell_cols if c in cells_df.columns]
                 if available:
                     merge_df = cells_df[available].rename(columns={"id": "cell_id"})
@@ -426,10 +475,12 @@ class ExperimentStore:
         channel: str,
         mask: np.ndarray,
         threshold_run_id: int,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> None:
-        fov_info, _ = self._resolve_fov(fov, condition, timepoint)
-        gp = zarr_io.mask_group_path(condition, fov, channel, timepoint)
+        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
+        br_name = fov_info.bio_rep
+        gp = zarr_io.mask_group_path(br_name, condition, fov, channel, timepoint)
         zarr_io.write_mask(
             self.masks_zarr_path, gp, mask,
             pixel_size_um=fov_info.pixel_size_um,
@@ -440,9 +491,11 @@ class ExperimentStore:
         fov: str,
         condition: str,
         channel: str,
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> np.ndarray:
-        gp = zarr_io.mask_group_path(condition, fov, channel, timepoint)
+        _, br_name = self._resolve_bio_rep(bio_rep)
+        gp = zarr_io.mask_group_path(br_name, condition, fov, channel, timepoint)
         return zarr_io.read_mask(self.masks_zarr_path, gp)
 
     # --- Segmentation Runs ---

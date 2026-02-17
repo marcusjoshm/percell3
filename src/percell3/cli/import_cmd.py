@@ -26,6 +26,10 @@ if TYPE_CHECKING:
     help="Condition name for imported images.",
 )
 @click.option(
+    "-b", "--bio-rep", default="N1",
+    help="Biological replicate name (default: N1).",
+)
+@click.option(
     "--channel-map", multiple=True,
     help="Channel mapping, e.g. '00:DAPI'. Can be repeated.",
 )
@@ -52,6 +56,7 @@ def import_cmd(
     source: str,
     experiment: str,
     condition: str,
+    bio_rep: str,
     channel_map: tuple[str, ...],
     z_projection: str,
     auto_conditions: bool,
@@ -85,6 +90,7 @@ def import_cmd(
 
         _run_import(
             store, source, condition, channel_map, z_projection, yes,
+            bio_rep=bio_rep,
             condition_map=condition_map, fov_names=fov_names,
             source_files=source_files,
         )
@@ -99,6 +105,7 @@ def _run_import(
     channel_map: tuple[str, ...],
     z_projection: str,
     yes: bool,
+    bio_rep: str = "N1",
     condition_map: dict[str, str] | None = None,
     fov_names: dict[str, str] | None = None,
     source_files: list[Path] | None = None,
@@ -140,6 +147,7 @@ def _run_import(
         z_transform=ZTransform(method=z_projection),
         pixel_size_um=scan_result.pixel_size_um,
         token_config=TokenConfig(),
+        bio_rep=bio_rep,
         condition_map=condition_map or {},
         source_files=source_files,
     )

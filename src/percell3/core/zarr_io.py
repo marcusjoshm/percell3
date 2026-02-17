@@ -33,35 +33,39 @@ MASK_CHUNKS = (512, 512)
 
 
 def _fov_group_path(
+    bio_rep: str,
     condition: str,
     fov: str,
     timepoint: str | None = None,
 ) -> str:
-    """Build the zarr group path for a condition/FOV (shared by images and labels)."""
+    """Build the zarr group path for a bio_rep/condition/FOV."""
     if timepoint:
-        return f"{condition}/{timepoint}/{fov}"
-    return f"{condition}/{fov}"
+        return f"{bio_rep}/{condition}/{timepoint}/{fov}"
+    return f"{bio_rep}/{condition}/{fov}"
 
 
 def image_group_path(
+    bio_rep: str,
     condition: str,
     fov: str,
     timepoint: str | None = None,
 ) -> str:
     """Build the zarr group path for an image FOV."""
-    return _fov_group_path(condition, fov, timepoint)
+    return _fov_group_path(bio_rep, condition, fov, timepoint)
 
 
 def label_group_path(
+    bio_rep: str,
     condition: str,
     fov: str,
     timepoint: str | None = None,
 ) -> str:
     """Build the zarr group path for a label FOV."""
-    return _fov_group_path(condition, fov, timepoint)
+    return _fov_group_path(bio_rep, condition, fov, timepoint)
 
 
 def mask_group_path(
+    bio_rep: str,
     condition: str,
     fov: str,
     channel: str,
@@ -69,8 +73,8 @@ def mask_group_path(
 ) -> str:
     """Build the zarr group path for a mask."""
     if timepoint:
-        return f"{condition}/{timepoint}/{fov}/threshold_{channel}"
-    return f"{condition}/{fov}/threshold_{channel}"
+        return f"{bio_rep}/{condition}/{timepoint}/{fov}/threshold_{channel}"
+    return f"{bio_rep}/{condition}/{fov}/threshold_{channel}"
 
 
 # ---------------------------------------------------------------------------
@@ -351,4 +355,4 @@ def read_mask(
 def init_zarr_store(zarr_path: Path) -> None:
     """Create an empty zarr group at the given path."""
     root = zarr.open(str(zarr_path), mode="w")
-    root.attrs["percell_version"] = "3.0.0"
+    root.attrs["percell_version"] = "3.1.0"

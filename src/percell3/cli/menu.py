@@ -476,9 +476,10 @@ def _query_experiment(state: MenuState) -> None:
     console.print("  [1] Channels")
     console.print("  [2] FOVs")
     console.print("  [3] Conditions")
+    console.print("  [4] Biological replicates")
     console.print("  [b] Back")
 
-    choice = Prompt.ask("Select", choices=["1", "2", "3", "b"], default="1")
+    choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "b"], default="1")
 
     if choice == "b":
         raise _MenuCancel()
@@ -501,12 +502,16 @@ def _query_experiment(state: MenuState) -> None:
             {
                 "name": f.name,
                 "condition": f.condition,
+                "bio_rep": f.bio_rep,
                 "size": f"{f.width}x{f.height}" if f.width else "",
                 "pixel_size_um": str(f.pixel_size_um) if f.pixel_size_um else "",
             }
             for f in fov_list
         ]
-        format_output(rows, ["name", "condition", "size", "pixel_size_um"], "table", "FOVs")
+        format_output(
+            rows, ["name", "condition", "bio_rep", "size", "pixel_size_um"],
+            "table", "FOVs",
+        )
 
     elif choice == "3":
         cond_list = store.get_conditions()
@@ -515,6 +520,14 @@ def _query_experiment(state: MenuState) -> None:
             return
         rows = [{"name": c} for c in cond_list]
         format_output(rows, ["name"], "table", "Conditions")
+
+    elif choice == "4":
+        rep_list = store.get_bio_reps()
+        if not rep_list:
+            console.print("[dim]No biological replicates found.[/dim]")
+            return
+        rows = [{"name": r} for r in rep_list]
+        format_output(rows, ["name"], "table", "Biological Replicates")
 
 
 def _export_csv(state: MenuState) -> None:

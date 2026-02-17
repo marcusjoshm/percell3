@@ -13,9 +13,10 @@ from percell3.segment.label_processor import LabelProcessor
 
 def _validate_fov(
     store: ExperimentStore, fov: str, condition: str,
+    bio_rep: str | None = None,
 ) -> FovInfo:
     """Look up a FOV by name, raising ValueError if not found."""
-    fov_list = store.get_fovs(condition=condition)
+    fov_list = store.get_fovs(condition=condition, bio_rep=bio_rep)
     for f in fov_list:
         if f.name == fov:
             return f
@@ -30,9 +31,10 @@ def _store_labels_and_cells(
     condition: str,
     run_id: int,
     timepoint: str | None,
+    bio_rep: str | None = None,
 ) -> None:
     """Write labels to zarr, extract cells, insert into DB, update run count."""
-    store.write_labels(fov, condition, labels, run_id, timepoint)
+    store.write_labels(fov, condition, labels, run_id, bio_rep=bio_rep, timepoint=timepoint)
 
     processor = LabelProcessor()
     cells = processor.extract_cells(
@@ -60,6 +62,7 @@ class RoiImporter:
         condition: str,
         channel: str = "manual",
         source: str = "manual",
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> int:
         """Import a pre-computed label image.
@@ -91,7 +94,7 @@ class RoiImporter:
 
         labels_int32 = np.asarray(labels, dtype=np.int32)
 
-        target_fov = _validate_fov(store, fov, condition)
+        target_fov = _validate_fov(store, fov, condition, bio_rep)
 
         run_id = store.add_segmentation_run(
             channel, source, {"source": source, "imported": True}
@@ -99,6 +102,7 @@ class RoiImporter:
 
         _store_labels_and_cells(
             store, labels_int32, target_fov, fov, condition, run_id, timepoint,
+            bio_rep=bio_rep,
         )
         return run_id
 
@@ -109,6 +113,7 @@ class RoiImporter:
         fov: str,
         condition: str,
         channel: str = "manual",
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> int:
         """Import a Cellpose ``_seg.npy`` file.
@@ -153,7 +158,7 @@ class RoiImporter:
 
         masks = np.asarray(seg_data["masks"], dtype=np.int32)
 
-        target_fov = _validate_fov(store, fov, condition)
+        target_fov = _validate_fov(store, fov, condition, bio_rep)
 
         params: dict = {"source": "cellpose-gui", "imported": True}
         if "est_diam" in seg_data:
@@ -165,5 +170,6 @@ class RoiImporter:
 
         _store_labels_and_cells(
             store, masks, target_fov, fov, condition, run_id, timepoint,
+            bio_rep=bio_rep,
         )
         return run_id

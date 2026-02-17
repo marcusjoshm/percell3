@@ -81,6 +81,11 @@ class ImportEngine:
             except DuplicateError:
                 pass
 
+        # Register bio rep (idempotent)
+        existing_bio_reps = store.get_bio_reps()
+        if plan.bio_rep not in existing_bio_reps:
+            store.add_bio_rep(sanitize_name(plan.bio_rep))
+
         # Register conditions (idempotent)
         if plan.condition_map:
             unique_conditions = sorted(set(
@@ -127,7 +132,9 @@ class ImportEngine:
             # Check existing FOVs (cached per condition)
             if condition not in _existing_cache:
                 _existing_cache[condition] = {
-                    f.name for f in store.get_fovs(condition=condition)
+                    f.name for f in store.get_fovs(
+                        condition=condition, bio_rep=plan.bio_rep,
+                    )
                 }
 
             if fov_name in _existing_cache[condition]:
@@ -146,6 +153,7 @@ class ImportEngine:
             store.add_fov(
                 fov_name,
                 condition,
+                bio_rep=plan.bio_rep,
                 width=w,
                 height=h,
                 pixel_size_um=pixel_size,
@@ -169,7 +177,7 @@ class ImportEngine:
                         # Multi-page TIFF — apply projection
                         data = _project_array(data, plan.z_transform)
 
-                store.write_image(fov_name, condition, ch_name, data)
+                store.write_image(fov_name, condition, ch_name, data, bio_rep=plan.bio_rep)
                 images_written += 1
 
             fovs_imported += 1

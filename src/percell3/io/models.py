@@ -108,6 +108,7 @@ class ImportPlan:
     z_transform: ZTransform
     pixel_size_um: float | None
     token_config: TokenConfig
+    bio_rep: str = "N1"
     condition_map: dict[str, str] = field(default_factory=dict)
     source_files: list[Path] | None = None  # Transient — not serialized to YAML
 
