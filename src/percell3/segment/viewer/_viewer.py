@@ -6,7 +6,7 @@ import hashlib
 import logging
 import os
 import sys
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -30,17 +30,9 @@ _COLOR_TO_COLORMAP: dict[str, str] = {
 
 _NAME_TO_COLORMAP: dict[str, str] = {
     "dapi": "blue",
-    "hoechst": "blue",
     "gfp": "green",
-    "fitc": "green",
     "rfp": "red",
-    "cy3": "red",
-    "cy5": "magenta",
-    "tritc": "red",
     "brightfield": "gray",
-    "bf": "gray",
-    "dic": "gray",
-    "phase": "gray",
 }
 
 
@@ -59,15 +51,6 @@ def _channel_colormap(ch: ChannelConfig) -> str:
             return cmap
 
     return "gray"
-
-
-def _default_contrast_limits(dtype: np.dtype) -> tuple[float, float] | None:
-    """Return sensible contrast limits for a given dtype, or None for auto."""
-    if dtype == np.uint16:
-        return (0.0, 65535.0)
-    if dtype == np.uint8:
-        return (0.0, 255.0)
-    return None
 
 
 def _launch(
@@ -163,17 +146,13 @@ def _load_channel_layers(
     for ch in channels:
         data = store.read_image(region, condition, ch.name)
         cmap = _channel_colormap(ch)
-        limits = _default_contrast_limits(data.dtype)
 
-        kwargs: dict[str, Any] = {
-            "name": ch.name,
-            "colormap": cmap,
-            "blending": "additive",
-        }
-        if limits is not None:
-            kwargs["contrast_limits"] = limits
-
-        viewer.add_image(data, **kwargs)
+        viewer.add_image(
+            data,
+            name=ch.name,
+            colormap=cmap,
+            blending="additive",
+        )
 
 
 def _load_label_layer(
@@ -209,21 +188,12 @@ def _load_label_layer(
     except KeyError:
         # No labels exist in zarr — create empty layer for painting from scratch
         # Get shape from the first image layer
-        image_layers = [
-            lyr for lyr in viewer.layers
-            if hasattr(lyr, "data") and not isinstance(lyr, type)
-        ]
-        if image_layers:
-            shape = image_layers[0].data.shape
-            # Handle dask arrays
-            if hasattr(shape, '__len__') and len(shape) >= 2:
-                label_shape = shape[-2:]
-            else:
-                label_shape = shape
-        else:
-            label_shape = (512, 512)
-
-        empty = np.zeros(label_shape, dtype=np.int32)
+        if not viewer.layers:
+            raise RuntimeError(
+                "Cannot create empty label layer: no image layers loaded."
+            )
+        shape = viewer.layers[0].data.shape[-2:]
+        empty = np.zeros(shape, dtype=np.int32)
         viewer.add_labels(empty, name="segmentation", opacity=0.5)
 
     return original_hash, parent_run_id, seg_channel

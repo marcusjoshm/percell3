@@ -2,14 +2,14 @@
 
 Since napari is an optional dependency that may not be installed in the
 test environment, these tests mock the napari layer and viewer APIs.
-The save-back logic (_save_edited_labels) is tested against a real
+The save-back logic (save_edited_labels) is tested against a real
 ExperimentStore without needing napari at all.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -144,29 +144,7 @@ class TestChannelColormap:
 
 
 # ---------------------------------------------------------------------------
-# Contrast limits
-# ---------------------------------------------------------------------------
-
-
-class TestContrastLimits:
-    def test_uint16_limits(self) -> None:
-        from percell3.segment.viewer._viewer import _default_contrast_limits
-
-        assert _default_contrast_limits(np.dtype(np.uint16)) == (0.0, 65535.0)
-
-    def test_uint8_limits(self) -> None:
-        from percell3.segment.viewer._viewer import _default_contrast_limits
-
-        assert _default_contrast_limits(np.dtype(np.uint8)) == (0.0, 255.0)
-
-    def test_float64_returns_none(self) -> None:
-        from percell3.segment.viewer._viewer import _default_contrast_limits
-
-        assert _default_contrast_limits(np.dtype(np.float64)) is None
-
-
-# ---------------------------------------------------------------------------
-# Save-back logic (_save_edited_labels)
+# Save-back logic (save_edited_labels)
 # ---------------------------------------------------------------------------
 
 

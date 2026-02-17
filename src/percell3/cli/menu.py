@@ -398,15 +398,6 @@ def _segment_cells(state: MenuState) -> None:
 
 def _view_napari(state: MenuState) -> None:
     """Launch napari to view and edit segmentation labels."""
-    from percell3.segment.viewer import NAPARI_AVAILABLE
-
-    if not NAPARI_AVAILABLE:
-        console.print(
-            "[red]napari is not installed.[/red]\n"
-            "Install with: [bold]pip install 'percell3[napari]'[/bold]"
-        )
-        return
-
     store = state.require_experiment()
 
     # Select condition
@@ -442,7 +433,14 @@ def _view_napari(state: MenuState) -> None:
 
     from percell3.segment.viewer import launch_viewer
 
-    run_id = launch_viewer(store, region, condition)
+    try:
+        run_id = launch_viewer(store, region, condition)
+    except ImportError:
+        console.print(
+            "[red]napari is not installed.[/red]\n"
+            "Install with: [bold]pip install 'percell3[napari]'[/bold]"
+        )
+        return
 
     if run_id is not None:
         console.print(f"\n[green]Labels saved[/green] (run_id={run_id})")

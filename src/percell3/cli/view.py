@@ -32,14 +32,7 @@ def view(
     channels: str | None,
 ) -> None:
     """Launch napari to view and edit segmentation labels."""
-    from percell3.segment.viewer import NAPARI_AVAILABLE, launch_viewer
-
-    if not NAPARI_AVAILABLE:
-        console.print(
-            "[red]Error:[/red] napari is not installed.\n"
-            "Install with: [bold]pip install 'percell3[napari]'[/bold]"
-        )
-        raise SystemExit(1)
+    from percell3.segment.viewer import launch_viewer
 
     store = open_experiment(experiment)
     try:
@@ -66,7 +59,14 @@ def view(
         console.print(f"Opening [cyan]{region}[/cyan] ({condition}) in napari...")
         console.print("[dim]Close the napari window to save any label edits.[/dim]\n")
 
-        run_id = launch_viewer(store, region, condition, channel_list)
+        try:
+            run_id = launch_viewer(store, region, condition, channel_list)
+        except ImportError:
+            console.print(
+                "[red]Error:[/red] napari is not installed.\n"
+                "Install with: [bold]pip install 'percell3[napari]'[/bold]"
+            )
+            raise SystemExit(1)
 
         if run_id is not None:
             console.print(f"\n[green]Labels saved[/green] (run_id={run_id})")
