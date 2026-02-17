@@ -3,6 +3,7 @@
 import pytest
 
 from percell3.core.exceptions import (
+    BioRepNotFoundError,
     ChannelNotFoundError,
     ConditionNotFoundError,
     DuplicateError,
@@ -81,6 +82,119 @@ class TestTimepointQueries:
 
     def test_select_id_not_found(self, db_conn):
         assert queries.select_timepoint_id(db_conn, "nope") is None
+
+
+class TestBioRepQueries:
+    def test_default_bio_rep_exists(self, db_conn):
+        """Schema creates default N1 bio rep."""
+        reps = queries.select_bio_reps(db_conn)
+        assert reps == ["N1"]
+
+    def test_insert_and_select(self, db_conn):
+        bid = queries.insert_bio_rep(db_conn, "N2")
+        assert bid >= 1
+        reps = queries.select_bio_reps(db_conn)
+        assert reps == ["N1", "N2"]
+
+    def test_select_by_name(self, db_conn):
+        row = queries.select_bio_rep_by_name(db_conn, "N1")
+        assert row["name"] == "N1"
+
+    def test_select_by_name_not_found(self, db_conn):
+        with pytest.raises(BioRepNotFoundError):
+            queries.select_bio_rep_by_name(db_conn, "NOPE")
+
+    def test_select_id(self, db_conn):
+        bid = queries.select_bio_rep_id(db_conn, "N1")
+        assert bid >= 1
+
+    def test_select_id_not_found(self, db_conn):
+        with pytest.raises(BioRepNotFoundError):
+            queries.select_bio_rep_id(db_conn, "NOPE")
+
+    def test_duplicate_raises(self, db_conn):
+        with pytest.raises(DuplicateError):
+            queries.insert_bio_rep(db_conn, "N1")
+
+    def test_fov_with_bio_rep_id(self, db_conn):
+        """FOVs correctly store and query bio_rep_id."""
+        cid = queries.insert_condition(db_conn, "control")
+        n2_id = queries.insert_bio_rep(db_conn, "N2")
+
+        queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)  # N1
+        queries.insert_fov(db_conn, "r2", condition_id=cid, bio_rep_id=n2_id)
+
+        n1_fovs = queries.select_fovs(db_conn, bio_rep_id=1)
+        assert len(n1_fovs) == 1
+        assert n1_fovs[0].name == "r1"
+        assert n1_fovs[0].bio_rep == "N1"
+
+        n2_fovs = queries.select_fovs(db_conn, bio_rep_id=n2_id)
+        assert len(n2_fovs) == 1
+        assert n2_fovs[0].name == "r2"
+        assert n2_fovs[0].bio_rep == "N2"
+
+    def test_same_fov_name_different_bio_reps(self, db_conn):
+        """Same FOV name allowed in different bio reps."""
+        cid = queries.insert_condition(db_conn, "control")
+        n2_id = queries.insert_bio_rep(db_conn, "N2")
+
+        queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)
+        queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=n2_id)
+        all_fovs = queries.select_fovs(db_conn, condition_id=cid)
+        assert len(all_fovs) == 2
+
+    def test_cells_include_bio_rep_name(self, db_conn):
+        """select_cells returns bio_rep_name column."""
+        ch_id = queries.insert_channel(db_conn, "DAPI")
+        cid = queries.insert_condition(db_conn, "control")
+        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)
+        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+        ]
+        queries.insert_cells(db_conn, cells)
+        rows = queries.select_cells(db_conn, condition_id=cid)
+        assert rows[0]["bio_rep_name"] == "N1"
+
+    def test_count_cells_filter_bio_rep(self, db_conn):
+        """count_cells can filter by bio_rep_id."""
+        ch_id = queries.insert_channel(db_conn, "DAPI")
+        cid = queries.insert_condition(db_conn, "control")
+        n2_id = queries.insert_bio_rep(db_conn, "N2")
+        fov1 = queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)
+        fov2 = queries.insert_fov(db_conn, "r2", condition_id=cid, bio_rep_id=n2_id)
+        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+
+        cells_n1 = [
+            CellRecord(
+                fov_id=fov1, segmentation_id=seg_id, label_value=i,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+            for i in range(1, 4)
+        ]
+        cells_n2 = [
+            CellRecord(
+                fov_id=fov2, segmentation_id=seg_id, label_value=i,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+            for i in range(1, 6)
+        ]
+        queries.insert_cells(db_conn, cells_n1)
+        queries.insert_cells(db_conn, cells_n2)
+
+        assert queries.count_cells(db_conn, bio_rep_id=1) == 3
+        assert queries.count_cells(db_conn, bio_rep_id=n2_id) == 5
+        assert queries.count_cells(db_conn) == 8
 
 
 class TestFovQueries:
