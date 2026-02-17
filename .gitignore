@@ -36,3 +36,11 @@ htmlcov/
 
 # Obsidian
 .obsidian/
+
+# Agentic development config (Claude Code, Cursor, etc.)
+CLAUDE.md
+.claude/
+compound-engineering.local.md
+.cursorrules
+.cursor/
+.aider*
