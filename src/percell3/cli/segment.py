@@ -17,7 +17,16 @@ from percell3.cli.utils import console, error_handler, make_progress, open_exper
     help="Channel name to segment (e.g., DAPI).",
 )
 @click.option(
-    "--model", default="cyto3", show_default=True,
+    "--model", default="cpsam", show_default=True,
+    type=click.Choice(sorted([
+        "cpsam", "cyto", "cyto2", "cyto3", "nuclei",
+        "tissuenet", "livecell",
+        "tissuenet_cp3", "livecell_cp3",
+        "deepbacs_cp3", "cyto2_cp3",
+        "yeast_PhC_cp3", "yeast_BF_cp3",
+        "bact_phase_cp3", "bact_fluor_cp3",
+        "plant_cp3",
+    ]), case_sensitive=False),
     help="Cellpose model name.",
 )
 @click.option(

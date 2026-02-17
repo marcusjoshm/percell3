@@ -300,10 +300,9 @@ def _segment_cells(state: MenuState) -> None:
         choices=[ch.name for ch in channels],
     )
 
-    # Model selection — show common models
-    common_models = ["cyto3", "cyto2", "nuclei", "cyto"]
-    console.print("\n[bold]Common models:[/bold] " + ", ".join(common_models))
-    model = Prompt.ask("Model", default="cyto3")
+    # Model selection
+    console.print("\n[bold]Model:[/bold] cpsam (Cellpose-SAM, default for Cellpose 4.x)")
+    model = Prompt.ask("Model", default="cpsam")
 
     # Diameter
     diam_str = Prompt.ask("Cell diameter in pixels (blank = auto-detect)", default="")

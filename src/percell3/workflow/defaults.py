@@ -124,8 +124,8 @@ class Segment(WorkflowStep):
         return [
             StepParameter("channel", "str", default="DAPI", description="Channel to segment"),
             StepParameter(
-                "model", "choice", default="cyto3",
-                choices=["cyto3", "nuclei", "cyto2"],
+                "model", "choice", default="cpsam",
+                choices=["cpsam", "cyto3", "nuclei", "cyto2"],
                 description="Cellpose model",
             ),
             StepParameter("diameter", "int", default=60, description="Expected cell diameter"),

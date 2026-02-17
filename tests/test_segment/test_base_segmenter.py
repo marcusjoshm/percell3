@@ -18,7 +18,7 @@ class TestSegmentationParams:
     def test_defaults(self) -> None:
         params = SegmentationParams(channel="DAPI")
         assert params.channel == "DAPI"
-        assert params.model_name == "cyto3"
+        assert params.model_name == "cpsam"
         assert params.diameter is None
         assert params.flow_threshold == 0.4
         assert params.cellprob_threshold == 0.0
@@ -96,7 +96,7 @@ class TestSegmentationParams:
         d = params.to_dict()
         assert d["channel"] == "DAPI"
         assert d["diameter"] == 60.0
-        assert d["model_name"] == "cyto3"
+        assert d["model_name"] == "cpsam"
         assert d["gpu"] is True
         assert isinstance(d, dict)
 

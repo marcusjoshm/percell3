@@ -52,7 +52,7 @@ class TestBuiltInSteps:
         assert {i.name for i in step.inputs} == {"images", "channels"}
         assert {o.name for o in step.outputs} == {"labels", "cells"}
         model_param = next(p for p in step.parameters if p.name == "model")
-        assert "cyto3" in model_param.choices
+        assert "cpsam" in model_param.choices
 
     def test_measure_metadata(self):
         step = Measure()

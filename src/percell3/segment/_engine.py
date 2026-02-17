@@ -37,7 +37,7 @@ class SegmentationEngine:
         self,
         store: ExperimentStore,
         channel: str = "DAPI",
-        model: str = "cyto3",
+        model: str = "cpsam",
         diameter: int | float | None = None,
         regions: list[str] | None = None,
         condition: str | None = None,
@@ -48,7 +48,7 @@ class SegmentationEngine:
         Args:
             store: Target ExperimentStore.
             channel: Channel name to segment.
-            model: Cellpose model name (e.g., "cyto3", "nuclei").
+            model: Cellpose model name (e.g., "cpsam", "cyto3", "nuclei").
             diameter: Expected cell diameter in pixels. None = auto-detect.
             regions: Optional list of region names to process. None = all.
             condition: Optional condition filter.

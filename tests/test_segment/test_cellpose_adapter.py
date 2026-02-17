@@ -15,6 +15,14 @@ from percell3.segment.base_segmenter import SegmentationParams
 from percell3.segment.cellpose_adapter import KNOWN_CELLPOSE_MODELS, CellposeAdapter
 
 
+def _cellpose_available() -> bool:
+    try:
+        import cellpose  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 class TestModelNameValidation:
     """Tests for model name allowlist (security: prevents arbitrary torch.load)."""
 
@@ -23,7 +31,7 @@ class TestModelNameValidation:
         adapter = CellposeAdapter()
         # Inject a mock to avoid actually loading cellpose
         mock_model = MagicMock()
-        for name in ("cyto", "cyto2", "cyto3", "nuclei"):
+        for name in ("cpsam", "cyto", "cyto2", "cyto3", "nuclei"):
             adapter._model_cache.clear()
             adapter._model_cache[(name, False)] = mock_model
             # Should not raise — model is in cache and name is valid
@@ -56,8 +64,52 @@ class TestModelNameValidation:
     def test_known_models_constant_nonempty(self) -> None:
         """The allowlist should contain the core Cellpose models."""
         assert len(KNOWN_CELLPOSE_MODELS) > 0
+        assert "cpsam" in KNOWN_CELLPOSE_MODELS
         assert "cyto3" in KNOWN_CELLPOSE_MODELS
         assert "nuclei" in KNOWN_CELLPOSE_MODELS
+
+
+class TestVersionAwareInstantiation:
+    """Tests for version-aware model instantiation (3.x vs 4.x)."""
+
+    @pytest.mark.skipif(
+        not _cellpose_available(), reason="cellpose not installed",
+    )
+    def test_cellpose4_uses_pretrained_model(self) -> None:
+        """On Cellpose 4.x, should use pretrained_model kwarg."""
+        adapter = CellposeAdapter()
+        mock_instance = MagicMock()
+
+        with patch("cellpose.models.CellposeModel", return_value=mock_instance) as mock_cls:
+            adapter._get_model("cpsam", gpu=False)
+
+        mock_cls.assert_called_once_with(pretrained_model="cpsam", gpu=False)
+        assert adapter._cellpose_major == 4
+
+    @pytest.mark.skipif(
+        not _cellpose_available(), reason="cellpose not installed",
+    )
+    def test_cellpose3_branch_uses_model_type(self) -> None:
+        """When version is forced to 3, should use model_type kwarg."""
+        adapter = CellposeAdapter()
+        adapter._cellpose_major = 3  # Force 3.x behavior
+        mock_instance = MagicMock()
+
+        with patch("cellpose.models.CellposeModel", return_value=mock_instance) as mock_cls:
+            adapter._get_model("cyto3", gpu=False)
+
+        mock_cls.assert_called_once_with(model_type="cyto3", gpu=False)
+
+    def test_version_cached_after_first_call(self) -> None:
+        """Cellpose version should be cached on the adapter instance."""
+        adapter = CellposeAdapter()
+        assert adapter._cellpose_major is None
+
+        mock_model = MagicMock()
+        adapter._model_cache[("cpsam", False)] = mock_model
+        adapter._cellpose_major = 4
+
+        assert adapter._cellpose_major == 4
 
 
 class TestCellposeAdapterUnit:
@@ -194,7 +246,7 @@ class TestCellposeAdapterIntegration:
 
         params = SegmentationParams(
             channel="DAPI",
-            model_name="cyto3",
+            model_name="cpsam",
             diameter=60.0,
             gpu=False,
             min_size=15,
@@ -214,7 +266,7 @@ class TestCellposeAdapterIntegration:
 
         params = SegmentationParams(
             channel="DAPI",
-            model_name="cyto3",
+            model_name="cpsam",
             diameter=30.0,
             gpu=False,
         )

@@ -10,7 +10,8 @@ from percell3.segment.base_segmenter import BaseSegmenter, SegmentationParams
 
 
 KNOWN_CELLPOSE_MODELS = frozenset({
-    "cyto", "cyto2", "cyto3", "nuclei",
+    "cpsam",  # Cellpose 4.x default (SAM-based)
+    "cyto", "cyto2", "cyto3", "nuclei",  # 3.x models (map to cpsam on 4.x)
     "tissuenet", "livecell",
     "tissuenet_cp3", "livecell_cp3",
     "deepbacs_cp3", "cyto2_cp3",
@@ -30,12 +31,13 @@ class CellposeAdapter(BaseSegmenter):
 
     def __init__(self) -> None:
         self._model_cache: dict[tuple[str, bool], Any] = {}
+        self._cellpose_major: int | None = None
 
     def _get_model(self, model_name: str, gpu: bool) -> Any:
         """Get or create a cached Cellpose model instance.
 
         Args:
-            model_name: Cellpose model type (e.g., "cyto3", "nuclei").
+            model_name: Cellpose model name (e.g., "cpsam", "cyto3", "nuclei").
             gpu: Whether to use GPU acceleration.
 
         Returns:
@@ -59,13 +61,20 @@ class CellposeAdapter(BaseSegmenter):
                     "cellpose is required for segmentation. "
                     "Install it with: pip install 'percell3[all]' or pip install cellpose"
                 ) from exc
+            if self._cellpose_major is None:
+                from importlib.metadata import version as _pkg_version
+                self._cellpose_major = int(_pkg_version("cellpose").split(".")[0])
             model_cls = getattr(models, "CellposeModel", None) or getattr(
                 models, "Cellpose"
             )
-            self._model_cache[key] = model_cls(
-                model_type=model_name,
-                gpu=gpu,
-            )
+            if self._cellpose_major >= 4:
+                self._model_cache[key] = model_cls(
+                    pretrained_model=model_name, gpu=gpu,
+                )
+            else:
+                self._model_cache[key] = model_cls(
+                    model_type=model_name, gpu=gpu,
+                )
         return self._model_cache[key]
 
     def segment(self, image: np.ndarray, params: SegmentationParams) -> np.ndarray:

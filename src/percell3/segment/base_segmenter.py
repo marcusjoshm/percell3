@@ -16,7 +16,7 @@ class SegmentationParams:
 
     Attributes:
         channel: Which channel to segment.
-        model_name: Cellpose model name (e.g., "cyto3", "nuclei", "cyto2").
+        model_name: Cellpose model name (e.g., "cpsam", "cyto3", "nuclei").
         diameter: Expected cell diameter in pixels. None = auto-detect.
         flow_threshold: Cellpose flow error threshold (0-3).
         cellprob_threshold: Cell probability threshold (-6 to 6).
@@ -27,7 +27,7 @@ class SegmentationParams:
     """
 
     channel: str
-    model_name: str = "cyto3"
+    model_name: str = "cpsam"
     diameter: float | None = None
     flow_threshold: float = 0.4
     cellprob_threshold: float = 0.0
