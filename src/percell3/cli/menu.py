@@ -73,12 +73,13 @@ def run_interactive_menu() -> None:
         MenuItem("1", "Create experiment", _create_experiment, enabled=True),
         MenuItem("2", "Import images", _import_images, enabled=True),
         MenuItem("3", "Segment cells", _segment_cells, enabled=True),
-        MenuItem("4", "Measure channels", None, enabled=False),
-        MenuItem("5", "Apply threshold", None, enabled=False),
-        MenuItem("6", "Query experiment", _query_experiment, enabled=True),
-        MenuItem("7", "Export to CSV", _export_csv, enabled=True),
-        MenuItem("8", "Run workflow", _run_workflow, enabled=True),
-        MenuItem("9", "Plugin manager", None, enabled=False),
+        MenuItem("4", "View in napari", _view_napari, enabled=True),
+        MenuItem("5", "Measure channels", None, enabled=False),
+        MenuItem("6", "Apply threshold", None, enabled=False),
+        MenuItem("7", "Query experiment", _query_experiment, enabled=True),
+        MenuItem("8", "Export to CSV", _export_csv, enabled=True),
+        MenuItem("9", "Run workflow", _run_workflow, enabled=True),
+        MenuItem("0", "Plugin manager", None, enabled=False),
         MenuItem("e", "Select experiment", _select_experiment, enabled=True),
         MenuItem("h", "Help", _show_help, enabled=True),
         MenuItem("q", "Quit", None, enabled=True),
@@ -392,6 +393,61 @@ def _segment_cells(state: MenuState) -> None:
         console.print(f"\n[yellow]Warnings ({len(result.warnings)}):[/yellow]")
         for w in result.warnings:
             console.print(f"  [dim]- {w}[/dim]")
+    console.print()
+
+
+def _view_napari(state: MenuState) -> None:
+    """Launch napari to view and edit segmentation labels."""
+    from percell3.segment.viewer import NAPARI_AVAILABLE
+
+    if not NAPARI_AVAILABLE:
+        console.print(
+            "[red]napari is not installed.[/red]\n"
+            "Install with: [bold]pip install 'percell3[napari]'[/bold]"
+        )
+        return
+
+    store = state.require_experiment()
+
+    # Select condition
+    conditions = store.get_conditions()
+    if not conditions:
+        console.print("[red]No conditions found.[/red] Import images first.")
+        return
+
+    if len(conditions) == 1:
+        condition = conditions[0]
+    else:
+        console.print(f"\n[bold]Conditions:[/bold] {', '.join(conditions)}")
+        condition = Prompt.ask("Condition", choices=conditions)
+
+    # Select region
+    regions = store.get_regions(condition=condition)
+    if not regions:
+        console.print(f"[red]No regions found for condition {condition!r}.[/red]")
+        return
+
+    region_names = [r.name for r in regions]
+    if len(region_names) == 1:
+        region = region_names[0]
+        console.print(f"\nRegion: [cyan]{region}[/cyan]")
+    else:
+        console.print(f"\n[bold]Regions ({len(region_names)}):[/bold]")
+        for name in region_names:
+            console.print(f"  {name}")
+        region = Prompt.ask("Region to view", choices=region_names)
+
+    console.print(f"\nOpening [cyan]{region}[/cyan] ({condition}) in napari...")
+    console.print("[dim]Close the napari window to save any label edits.[/dim]\n")
+
+    from percell3.segment.viewer import launch_viewer
+
+    run_id = launch_viewer(store, region, condition)
+
+    if run_id is not None:
+        console.print(f"\n[green]Labels saved[/green] (run_id={run_id})")
+    else:
+        console.print("\n[dim]No changes detected.[/dim]")
     console.print()
 
 

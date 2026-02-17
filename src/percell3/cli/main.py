@@ -39,6 +39,7 @@ def _register_commands() -> None:
     from percell3.cli.query import query
     from percell3.cli.segment import segment
     from percell3.cli.stubs import measure, threshold
+    from percell3.cli.view import view
     from percell3.cli.workflow import workflow
 
     cli.add_command(create)
@@ -48,6 +49,7 @@ def _register_commands() -> None:
     cli.add_command(query)
     cli.add_command(segment)
     cli.add_command(threshold)
+    cli.add_command(view)
     cli.add_command(workflow)
 
 
