@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from percell3.core import ExperimentStore
+from percell3.core.exceptions import FovNotFoundError
 from percell3.core.models import CellRecord, FovInfo
 from percell3.segment.label_processor import LabelProcessor
 
@@ -16,11 +17,11 @@ def _validate_fov(
     bio_rep: str | None = None,
 ) -> FovInfo:
     """Look up a FOV by name, raising ValueError if not found."""
-    fov_list = store.get_fovs(condition=condition, bio_rep=bio_rep)
-    for f in fov_list:
-        if f.name == fov:
-            return f
-    raise ValueError(f"FOV {fov!r} not found in condition {condition!r}")
+    try:
+        fov_info, _ = store._resolve_fov(fov, condition, bio_rep)
+    except FovNotFoundError:
+        raise ValueError(f"FOV {fov!r} not found in condition {condition!r}")
+    return fov_info
 
 
 def _store_labels_and_cells(

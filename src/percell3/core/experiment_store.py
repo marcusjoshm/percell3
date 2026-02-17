@@ -172,12 +172,16 @@ class ExperimentStore:
     def _resolve_bio_rep(self, bio_rep: str | None) -> tuple[int, str]:
         """Resolve bio_rep name to (id, name). Auto-resolves when only 1 exists."""
         if bio_rep is not None:
-            return queries.select_bio_rep_id(self._conn, bio_rep), bio_rep
-        reps = queries.select_bio_reps(self._conn)
-        if len(reps) == 1:
-            return queries.select_bio_rep_id(self._conn, reps[0]), reps[0]
-        raise BioRepNotFoundError(
-            f"Multiple bio reps exist ({', '.join(reps)}); specify one explicitly"
+            row = queries.select_bio_rep_by_name(self._conn, bio_rep)
+            return row["id"], row["name"]
+        rows = self._conn.execute(
+            "SELECT id, name FROM bio_reps ORDER BY id"
+        ).fetchall()
+        if len(rows) == 1:
+            return rows[0]["id"], rows[0]["name"]
+        names = [r["name"] for r in rows]
+        raise ValueError(
+            f"Multiple bio reps exist ({', '.join(names)}); specify one explicitly"
         )
 
     # --- Condition/Timepoint/FOV Management ---

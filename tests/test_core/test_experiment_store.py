@@ -587,7 +587,7 @@ class TestBioReps:
         """When N2+ bio reps exist, bio_rep=None must raise."""
         experiment.add_bio_rep("N2")
         experiment.add_condition("control")
-        with pytest.raises(BioRepNotFoundError, match="Multiple bio reps"):
+        with pytest.raises(ValueError, match="Multiple bio reps"):
             experiment.add_fov("r1", condition="control")
 
     def test_get_fovs_filter_by_bio_rep(self, experiment):

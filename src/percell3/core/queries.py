@@ -493,7 +493,11 @@ def count_cells(
     fov_id: int | None = None,
     is_valid: bool = True,
 ) -> int:
-    query = "SELECT COUNT(*) FROM cells c JOIN fovs f ON c.fov_id = f.id"
+    needs_join = condition_id is not None or bio_rep_id is not None
+    if needs_join:
+        query = "SELECT COUNT(*) FROM cells c JOIN fovs f ON c.fov_id = f.id"
+    else:
+        query = "SELECT COUNT(*) FROM cells c"
     params: list = []
     clauses: list[str] = []
     if is_valid:

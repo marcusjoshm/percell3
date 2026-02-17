@@ -266,6 +266,9 @@ def _import_images(state: MenuState) -> None:
             default="mip",
         )
 
+    # Biological replicate
+    bio_rep = _prompt_bio_rep(store)
+
     # Confirm
     if Prompt.ask("Proceed with import?", choices=["y", "n"], default="y") != "y":
         console.print("[yellow]Import cancelled.[/yellow]")
@@ -275,6 +278,7 @@ def _import_images(state: MenuState) -> None:
     # Pass scan_result to avoid a redundant second scan.
     _run_import(
         store, str(source), condition, channel_maps, z_method, yes=True,
+        bio_rep=bio_rep,
         condition_map=condition_map, fov_names=fov_names,
         source_files=source_files, scan_result=scan_result,
     )
@@ -326,9 +330,12 @@ def _segment_cells(state: MenuState) -> None:
         if cond_str:
             condition = cond_str
 
+    # Biological replicate filter
+    bio_rep = _prompt_bio_rep(store)
+
     # Optional FOV filter
     fov_filter_list: list[str] | None = None
-    all_fovs = store.get_fovs(condition=condition)
+    all_fovs = store.get_fovs(condition=condition, bio_rep=bio_rep)
     if len(all_fovs) > 1:
         console.print(f"\n[bold]FOVs ({len(all_fovs)}):[/bold] ", end="")
         names = [f.name for f in all_fovs]
@@ -379,6 +386,7 @@ def _segment_cells(state: MenuState) -> None:
             diameter=diameter,
             fovs=fov_filter_list,
             condition=condition,
+            bio_rep=bio_rep,
             progress_callback=on_progress,
         )
 
@@ -393,6 +401,15 @@ def _segment_cells(state: MenuState) -> None:
         for w in result.warnings:
             console.print(f"  [dim]- {w}[/dim]")
     console.print()
+
+
+def _prompt_bio_rep(store: ExperimentStore) -> str:
+    """Prompt for biological replicate. Auto-resolves when only 1 exists."""
+    reps = store.get_bio_reps()
+    if len(reps) <= 1:
+        return reps[0] if reps else "N1"
+    console.print(f"\n[bold]Biological replicates:[/bold] {', '.join(reps)}")
+    return Prompt.ask("Biological replicate", choices=reps, default=reps[0])
 
 
 def _prompt_source_path() -> tuple[str | None, list[Path] | None]:
