@@ -60,3 +60,26 @@ def launch_viewer(
     from percell3.segment.viewer._viewer import _launch
 
     return _launch(store, region, condition, channels)
+
+
+def save_edited_labels(
+    store: ExperimentStore,
+    region: str,
+    condition: str,
+    edited_labels: "np.ndarray",
+    parent_run_id: int | None,
+    channel: str,
+    pixel_size_um: float | None,
+    region_id: int,
+) -> int:
+    """Save edited labels back to ExperimentStore (headless-safe).
+
+    See :func:`percell3.segment.viewer._viewer.save_edited_labels` for
+    full documentation. This wrapper does NOT require napari.
+    """
+    from percell3.segment.viewer._viewer import save_edited_labels as _impl
+
+    return _impl(
+        store, region, condition, edited_labels,
+        parent_run_id, channel, pixel_size_um, region_id,
+    )

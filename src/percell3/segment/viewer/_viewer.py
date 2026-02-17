@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sys
@@ -138,7 +137,7 @@ def _launch(
 
     # Labels changed (or created from scratch)
     channel_name = seg_channel or selected_channels[0].name
-    run_id = _save_edited_labels(
+    run_id = save_edited_labels(
         store, region, condition, edited_labels,
         parent_run_id, channel_name, region_info.pixel_size_um,
         region_info.id,
@@ -190,7 +189,7 @@ def _load_label_layer(
     if runs:
         latest = max(runs, key=lambda r: r["id"])
         parent_run_id = latest["id"]
-        seg_channel = latest.get("channel_name")
+        seg_channel = latest.get("channel")
 
     # Try to read existing labels
     original_labels: np.ndarray | None = None
@@ -198,8 +197,8 @@ def _load_label_layer(
         labels = store.read_labels(region, condition)
         original_labels = labels.copy()
         viewer.add_labels(labels, name="segmentation", opacity=0.5)  # type: ignore[union-attr]
-    except Exception:
-        # No labels exist — create empty layer for painting from scratch
+    except KeyError:
+        # No labels exist in zarr — create empty layer for painting from scratch
         # Get shape from the first image layer
         image_layers = [
             lyr for lyr in viewer.layers  # type: ignore[union-attr]
@@ -222,7 +221,7 @@ def _load_label_layer(
     return original_labels, parent_run_id, seg_channel
 
 
-def _save_edited_labels(
+def save_edited_labels(
     store: ExperimentStore,
     region: str,
     condition: str,
@@ -232,8 +231,29 @@ def _save_edited_labels(
     pixel_size_um: float | None,
     region_id: int,
 ) -> int:
-    """Save edited labels back to ExperimentStore. Returns new run_id."""
-    from percell3.segment.label_processor import extract_cells
+    """Save edited labels back to ExperimentStore.
+
+    Creates a new segmentation run, writes labels to zarr, extracts cells,
+    and updates the run's cell count. This is the public API for saving
+    labels — usable from both the napari viewer and headless scripts.
+
+    Args:
+        store: An open ExperimentStore.
+        region: Region name.
+        condition: Condition name.
+        edited_labels: 2D int32 label array.
+        parent_run_id: ID of the parent segmentation run (or None).
+        channel: Channel name for the segmentation run.
+        pixel_size_um: Physical pixel size in micrometers (or None).
+        region_id: Database ID of the region.
+
+    Returns:
+        The new segmentation run ID.
+
+    Raises:
+        ValueError: If labels are not 2D or contain negative values.
+    """
+    from percell3.segment.roi_import import store_labels_and_cells
 
     # Validate
     if edited_labels.ndim != 2:
@@ -254,15 +274,12 @@ def _save_edited_labels(
     }
     run_id = store.add_segmentation_run(channel, "napari_edit", parameters)
 
-    # Write labels to zarr
-    store.write_labels(region, condition, labels_int32, run_id)
-
-    # Extract cells
+    # Write labels, extract cells, update count
     try:
-        cells = extract_cells(labels_int32, region_id, run_id, pixel_size_um)
-        if cells:
-            store.add_cells(cells)
-        cell_count = len(cells)
+        cell_count = store_labels_and_cells(
+            store, labels_int32, region, condition, run_id,
+            region_id, pixel_size_um,
+        )
     except Exception as exc:
         logger.warning(
             "Cell extraction failed after label save: %s. "
@@ -271,10 +288,7 @@ def _save_edited_labels(
         )
         cell_count = 0
 
-    store.update_segmentation_run_cell_count(run_id, cell_count)
-
-    n_labels = len(np.unique(labels_int32)) - (1 if 0 in labels_int32 else 0)
-    if n_labels == 0:
+    if cell_count == 0:
         logger.warning("All labels erased — saved empty label image with 0 cells.")
 
     logger.info(

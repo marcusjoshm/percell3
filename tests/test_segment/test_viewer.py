@@ -175,14 +175,14 @@ class TestSaveEditedLabels:
         self, experiment_with_segmentation: ExperimentStore,
     ) -> None:
         """Modified labels should be saved and return a new run_id."""
-        from percell3.segment.viewer._viewer import _save_edited_labels
+        from percell3.segment.viewer._viewer import save_edited_labels
 
         edited = np.zeros((64, 64), dtype=np.int32)
         edited[5:25, 5:25] = 1
         edited[30:50, 30:50] = 2
         edited[40:60, 10:30] = 3  # New cell
 
-        run_id = _save_edited_labels(
+        run_id = save_edited_labels(
             experiment_with_segmentation,
             "region_1", "control", edited,
             parent_run_id=1, channel="DAPI",
@@ -195,13 +195,13 @@ class TestSaveEditedLabels:
         self, experiment_with_segmentation: ExperimentStore,
     ) -> None:
         """Labels read back from zarr should match what was saved."""
-        from percell3.segment.viewer._viewer import _save_edited_labels
+        from percell3.segment.viewer._viewer import save_edited_labels
 
         edited = np.zeros((64, 64), dtype=np.int32)
         edited[10:30, 10:30] = 1
         edited[35:55, 35:55] = 2
 
-        _save_edited_labels(
+        save_edited_labels(
             experiment_with_segmentation,
             "region_1", "control", edited,
             parent_run_id=1, channel="DAPI",
@@ -215,14 +215,14 @@ class TestSaveEditedLabels:
         self, experiment_with_segmentation: ExperimentStore,
     ) -> None:
         """Number of cells in DB should match unique non-zero labels."""
-        from percell3.segment.viewer._viewer import _save_edited_labels
+        from percell3.segment.viewer._viewer import save_edited_labels
 
         edited = np.zeros((64, 64), dtype=np.int32)
         edited[5:20, 5:20] = 1
         edited[25:40, 25:40] = 2
         edited[45:60, 45:60] = 3
 
-        run_id = _save_edited_labels(
+        run_id = save_edited_labels(
             experiment_with_segmentation,
             "region_1", "control", edited,
             parent_run_id=1, channel="DAPI",
@@ -237,12 +237,12 @@ class TestSaveEditedLabels:
         self, experiment_with_segmentation: ExperimentStore,
     ) -> None:
         """Cell area should match the painted region."""
-        from percell3.segment.viewer._viewer import _save_edited_labels
+        from percell3.segment.viewer._viewer import save_edited_labels
 
         edited = np.zeros((64, 64), dtype=np.int32)
         edited[10:40, 10:40] = 1  # 30x30 = 900 pixels
 
-        run_id = _save_edited_labels(
+        run_id = save_edited_labels(
             experiment_with_segmentation,
             "region_1", "control", edited,
             parent_run_id=None, channel="DAPI",
@@ -261,11 +261,11 @@ class TestSaveEditedLabels:
         self, experiment_with_segmentation: ExperimentStore,
     ) -> None:
         """All-zero labels should create a run with 0 cells."""
-        from percell3.segment.viewer._viewer import _save_edited_labels
+        from percell3.segment.viewer._viewer import save_edited_labels
 
         empty = np.zeros((64, 64), dtype=np.int32)
 
-        run_id = _save_edited_labels(
+        run_id = save_edited_labels(
             experiment_with_segmentation,
             "region_1", "control", empty,
             parent_run_id=1, channel="DAPI",
@@ -280,12 +280,12 @@ class TestSaveEditedLabels:
         self, experiment_with_segmentation: ExperimentStore,
     ) -> None:
         """Segmentation run should have napari_edit model and provenance params."""
-        from percell3.segment.viewer._viewer import _save_edited_labels
+        from percell3.segment.viewer._viewer import save_edited_labels
 
         edited = np.zeros((64, 64), dtype=np.int32)
         edited[10:30, 10:30] = 1
 
-        run_id = _save_edited_labels(
+        run_id = save_edited_labels(
             experiment_with_segmentation,
             "region_1", "control", edited,
             parent_run_id=1, channel="DAPI",
@@ -308,11 +308,11 @@ class TestSaveEditedLabels:
         self, experiment_with_segmentation: ExperimentStore,
     ) -> None:
         """3D labels should raise ValueError."""
-        from percell3.segment.viewer._viewer import _save_edited_labels
+        from percell3.segment.viewer._viewer import save_edited_labels
 
         labels_3d = np.zeros((10, 64, 64), dtype=np.int32)
         with pytest.raises(ValueError, match="2D"):
-            _save_edited_labels(
+            save_edited_labels(
                 experiment_with_segmentation,
                 "region_1", "control", labels_3d,
                 parent_run_id=None, channel="DAPI",
@@ -323,11 +323,11 @@ class TestSaveEditedLabels:
         self, experiment_with_segmentation: ExperimentStore,
     ) -> None:
         """Labels with negative values should raise ValueError."""
-        from percell3.segment.viewer._viewer import _save_edited_labels
+        from percell3.segment.viewer._viewer import save_edited_labels
 
         labels = np.array([[-1, 0], [0, 1]], dtype=np.int32)
         with pytest.raises(ValueError, match="negative"):
-            _save_edited_labels(
+            save_edited_labels(
                 experiment_with_segmentation,
                 "region_1", "control", labels,
                 parent_run_id=None, channel="DAPI",
@@ -338,12 +338,12 @@ class TestSaveEditedLabels:
         self, experiment_no_segmentation: ExperimentStore,
     ) -> None:
         """Labels from scratch should have parent_run_id=None."""
-        from percell3.segment.viewer._viewer import _save_edited_labels
+        from percell3.segment.viewer._viewer import save_edited_labels
 
         labels = np.zeros((64, 64), dtype=np.int32)
         labels[10:30, 10:30] = 1
 
-        run_id = _save_edited_labels(
+        run_id = save_edited_labels(
             experiment_no_segmentation,
             "region_1", "control", labels,
             parent_run_id=None, channel="DAPI",
