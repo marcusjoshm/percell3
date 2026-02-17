@@ -435,9 +435,9 @@ def _view_napari(state: MenuState) -> None:
 
     try:
         run_id = launch_viewer(store, region, condition)
-    except ImportError:
+    except ImportError as exc:
         console.print(
-            "[red]napari is not installed.[/red]\n"
+            f"[red]napari could not be loaded:[/red] {exc}\n"
             "Install with: [bold]pip install 'percell3[napari]'[/bold]"
         )
         return

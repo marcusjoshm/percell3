@@ -50,7 +50,7 @@ class TestViewCommand:
             ])
 
         assert result.exit_code != 0
-        assert "napari is not installed" in result.output
+        assert "napari could not be loaded" in result.output
         assert "pip install" in result.output
 
     def test_auto_detect_single_condition(
