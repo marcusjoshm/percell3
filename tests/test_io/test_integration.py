@@ -41,7 +41,7 @@ class TestEndToEnd:
         # Step 1: Scan
         result = scan(tiff_dir)
         assert len(result.channels) == 2
-        assert len(result.regions) == 1
+        assert len(result.fovs) == 1
         assert result.files
 
         # Step 2: Create plan from scan result
@@ -52,7 +52,7 @@ class TestEndToEnd:
                 ChannelMapping(token_value="00", name="DAPI"),
                 ChannelMapping(token_value="01", name="GFP"),
             ],
-            region_names={"region1": "Well_A1"},
+            fov_names={"region1": "Well_A1"},
             z_transform=ZTransform(method="mip"),
             pixel_size_um=0.65,
             token_config=TokenConfig(),
@@ -63,7 +63,7 @@ class TestEndToEnd:
             engine = ImportEngine()
             import_result = engine.execute(plan, store)
 
-            assert import_result.regions_imported == 1
+            assert import_result.fovs_imported == 1
             assert import_result.channels_registered == 2
             assert import_result.images_written == 2
 
@@ -71,9 +71,9 @@ class TestEndToEnd:
             channels = store.get_channels()
             assert {ch.name for ch in channels} == {"DAPI", "GFP"}
 
-            regions = store.get_regions(condition="control")
-            assert len(regions) == 1
-            assert regions[0].name == "Well_A1"
+            fovs = store.get_fovs(condition="control")
+            assert len(fovs) == 1
+            assert fovs[0].name == "Well_A1"
 
             img = store.read_image_numpy("Well_A1", "control", "DAPI")
             np.testing.assert_array_equal(img, dapi)
@@ -89,7 +89,7 @@ class TestEndToEnd:
             source_path=tiff_dir,
             condition="treated",
             channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
-            region_names={"img": "Region1"},
+            fov_names={"img": "FOV1"},
             z_transform=ZTransform(method="mip"),
             pixel_size_um=None,
             token_config=TokenConfig(),
@@ -105,10 +105,10 @@ class TestEndToEnd:
             engine = ImportEngine()
             result = engine.execute(loaded_plan, store)
 
-            assert result.regions_imported == 1
+            assert result.fovs_imported == 1
             assert result.images_written == 1
 
-            img = store.read_image_numpy("Region1", "treated", "DAPI")
+            img = store.read_image_numpy("FOV1", "treated", "DAPI")
             np.testing.assert_array_equal(img, data)
 
 

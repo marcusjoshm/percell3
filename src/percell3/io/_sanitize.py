@@ -8,7 +8,7 @@ _INVALID_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def sanitize_name(value: str, fallback: str = "unnamed") -> str:
-    """Sanitize a string for use as a channel/condition/region name.
+    """Sanitize a string for use as a channel/condition/FOV name.
 
     Replaces spaces with underscores, strips invalid chars,
     falls back if result is empty.

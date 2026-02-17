@@ -43,7 +43,7 @@ class TestCreateSchema:
 
     def test_experiment_has_version(self, db_conn):
         row = db_conn.execute("SELECT percell_version FROM experiments").fetchone()
-        assert row["percell_version"] == "3.0.0"
+        assert row["percell_version"] == "3.1.0"
 
 
 class TestOpenDatabase:

@@ -13,12 +13,16 @@ from percell3.cli.utils import console, error_handler, open_experiment
     help="Path to the .percell experiment.",
 )
 @click.option(
-    "-r", "--region", required=True,
-    help="Region name to view.",
+    "-f", "--fov", required=True,
+    help="FOV name to view.",
 )
 @click.option(
     "--condition", default=None,
     help="Condition name (auto-detected if only one exists).",
+)
+@click.option(
+    "--bio-rep", default=None,
+    help="Biological replicate name (auto-detected if only one exists).",
 )
 @click.option(
     "--channels", default=None,
@@ -27,8 +31,9 @@ from percell3.cli.utils import console, error_handler, open_experiment
 @error_handler
 def view(
     experiment: str,
-    region: str,
+    fov: str,
     condition: str | None,
+    bio_rep: str | None,
     channels: str | None,
 ) -> None:
     """Launch napari to view and edit segmentation labels."""
@@ -38,12 +43,12 @@ def view(
     try:
         # Auto-detect condition if only one exists
         if condition is None:
-            regions = store.get_regions()
-            conditions = sorted({r.condition for r in regions})
+            fovs = store.get_fovs()
+            conditions = sorted({f.condition for f in fovs})
             if len(conditions) == 1:
                 condition = conditions[0]
             elif len(conditions) == 0:
-                console.print("[red]Error:[/red] No regions found in experiment.")
+                console.print("[red]Error:[/red] No FOVs found in experiment.")
                 raise SystemExit(1)
             else:
                 console.print(
@@ -56,11 +61,11 @@ def view(
         if channels is not None:
             channel_list = [c.strip() for c in channels.split(",") if c.strip()]
 
-        console.print(f"Opening [cyan]{region}[/cyan] ({condition}) in napari...")
+        console.print(f"Opening [cyan]{fov}[/cyan] ({condition}) in napari...")
         console.print("[dim]Close the napari window to save any label edits.[/dim]\n")
 
         try:
-            run_id = launch_viewer(store, region, condition, channel_list)
+            run_id = launch_viewer(store, fov, condition, channel_list, bio_rep=bio_rep)
         except ImportError as exc:
             console.print(
                 f"[red]Error:[/red] napari could not be loaded: {exc}\n"

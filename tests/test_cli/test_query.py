@@ -47,32 +47,32 @@ class TestQueryChannels:
         assert "No channels found" in result.output
 
 
-class TestQueryRegions:
-    def test_regions_table(
+class TestQueryFovs:
+    def test_fovs_table(
         self, runner: CliRunner, experiment_with_data: ExperimentStore,
     ):
         exp_path = str(experiment_with_data.path)
-        result = runner.invoke(cli, ["query", "-e", exp_path, "regions"])
+        result = runner.invoke(cli, ["query", "-e", exp_path, "fovs"])
         assert result.exit_code == 0
-        assert "region1" in result.output
+        assert "fov1" in result.output
         assert "control" in result.output
 
-    def test_regions_with_condition_filter(
+    def test_fovs_with_condition_filter(
         self, runner: CliRunner, experiment_with_data: ExperimentStore,
     ):
         exp_path = str(experiment_with_data.path)
         result = runner.invoke(
-            cli, ["query", "-e", exp_path, "regions", "--condition", "control"]
+            cli, ["query", "-e", exp_path, "fovs", "--condition", "control"]
         )
         assert result.exit_code == 0
-        assert "region1" in result.output
+        assert "fov1" in result.output
 
-    def test_regions_empty(
+    def test_fovs_empty(
         self, runner: CliRunner, experiment_path: Path,
     ):
-        result = runner.invoke(cli, ["query", "-e", str(experiment_path), "regions"])
+        result = runner.invoke(cli, ["query", "-e", str(experiment_path), "fovs"])
         assert result.exit_code == 0
-        assert "No regions found" in result.output
+        assert "No FOVs found" in result.output
 
 
 class TestQueryConditions:

@@ -32,11 +32,20 @@ class ConditionNotFoundError(ExperimentError):
         self.name = name
 
 
-class RegionNotFoundError(ExperimentError):
-    """Raised when referencing an undefined region."""
+class BioRepNotFoundError(ExperimentError):
+    """Raised when referencing an undefined biological replicate."""
 
     def __init__(self, name: str | None = None) -> None:
-        msg = f"Region not found: {name}" if name else "Region not found"
+        msg = f"Biological replicate not found: {name}" if name else "Biological replicate not found"
+        super().__init__(msg)
+        self.name = name
+
+
+class FovNotFoundError(ExperimentError):
+    """Raised when referencing an undefined FOV."""
+
+    def __init__(self, name: str | None = None) -> None:
+        msg = f"FOV not found: {name}" if name else "FOV not found"
         super().__init__(msg)
         self.name = name
 

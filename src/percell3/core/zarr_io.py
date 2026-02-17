@@ -32,45 +32,49 @@ MASK_CHUNKS = (512, 512)
 # ---------------------------------------------------------------------------
 
 
-def _region_group_path(
+def _fov_group_path(
+    bio_rep: str,
     condition: str,
-    region: str,
+    fov: str,
     timepoint: str | None = None,
 ) -> str:
-    """Build the zarr group path for a condition/region (shared by images and labels)."""
+    """Build the zarr group path for a bio_rep/condition/FOV."""
     if timepoint:
-        return f"{condition}/{timepoint}/{region}"
-    return f"{condition}/{region}"
+        return f"{bio_rep}/{condition}/{timepoint}/{fov}"
+    return f"{bio_rep}/{condition}/{fov}"
 
 
 def image_group_path(
+    bio_rep: str,
     condition: str,
-    region: str,
+    fov: str,
     timepoint: str | None = None,
 ) -> str:
-    """Build the zarr group path for an image region."""
-    return _region_group_path(condition, region, timepoint)
+    """Build the zarr group path for an image FOV."""
+    return _fov_group_path(bio_rep, condition, fov, timepoint)
 
 
 def label_group_path(
+    bio_rep: str,
     condition: str,
-    region: str,
+    fov: str,
     timepoint: str | None = None,
 ) -> str:
-    """Build the zarr group path for a label region."""
-    return _region_group_path(condition, region, timepoint)
+    """Build the zarr group path for a label FOV."""
+    return _fov_group_path(bio_rep, condition, fov, timepoint)
 
 
 def mask_group_path(
+    bio_rep: str,
     condition: str,
-    region: str,
+    fov: str,
     channel: str,
     timepoint: str | None = None,
 ) -> str:
     """Build the zarr group path for a mask."""
     if timepoint:
-        return f"{condition}/{timepoint}/{region}/threshold_{channel}"
-    return f"{condition}/{region}/threshold_{channel}"
+        return f"{bio_rep}/{condition}/{timepoint}/{fov}/threshold_{channel}"
+    return f"{bio_rep}/{condition}/{fov}/threshold_{channel}"
 
 
 # ---------------------------------------------------------------------------
@@ -214,8 +218,8 @@ def write_image_channel(
     arr[channel_index] = data
 
     # Update NGFF metadata
-    region_name = group_path.rsplit("/", 1)[-1]
-    attrs = _build_multiscales_image(region_name, channels_meta, pixel_size_um)
+    fov_name = group_path.rsplit("/", 1)[-1]
+    attrs = _build_multiscales_image(fov_name, channels_meta, pixel_size_um)
     group.attrs.update(attrs)
 
 
@@ -283,8 +287,8 @@ def write_labels(
             overwrite=True,
         )
 
-    region_name = group_path.rsplit("/", 1)[-1]
-    attrs = _build_multiscales_label(region_name, source_image_path, pixel_size_um)
+    fov_name = group_path.rsplit("/", 1)[-1]
+    attrs = _build_multiscales_label(fov_name, source_image_path, pixel_size_um)
     group.attrs.update(attrs)
 
 
@@ -351,4 +355,4 @@ def read_mask(
 def init_zarr_store(zarr_path: Path) -> None:
     """Create an empty zarr group at the given path."""
     root = zarr.open(str(zarr_path), mode="w")
-    root.attrs["percell_version"] = "3.0.0"
+    root.attrs["percell_version"] = "3.1.0"

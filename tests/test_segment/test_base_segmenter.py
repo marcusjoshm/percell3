@@ -105,10 +105,10 @@ class TestSegmentationResult:
     """Tests for SegmentationResult dataclass."""
 
     def test_defaults(self) -> None:
-        result = SegmentationResult(run_id=1, cell_count=100, regions_processed=5)
+        result = SegmentationResult(run_id=1, cell_count=100, fovs_processed=5)
         assert result.run_id == 1
         assert result.cell_count == 100
-        assert result.regions_processed == 5
+        assert result.fovs_processed == 5
         assert result.warnings == []
         assert result.elapsed_seconds == 0.0
 
@@ -116,13 +116,13 @@ class TestSegmentationResult:
         result = SegmentationResult(
             run_id=1,
             cell_count=0,
-            regions_processed=1,
-            warnings=["region_1: 0 cells detected"],
+            fovs_processed=1,
+            warnings=["fov_1: 0 cells detected"],
         )
         assert len(result.warnings) == 1
 
     def test_frozen(self) -> None:
-        result = SegmentationResult(run_id=1, cell_count=0, regions_processed=0)
+        result = SegmentationResult(run_id=1, cell_count=0, fovs_processed=0)
         with pytest.raises(AttributeError):
             result.cell_count = 10  # type: ignore[misc]
 

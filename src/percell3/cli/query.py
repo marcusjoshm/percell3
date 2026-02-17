@@ -94,27 +94,49 @@ def channels(ctx: click.Context, fmt: str) -> None:
 @click.option("--format", "fmt", type=click.Choice(["table", "csv", "json"]),
               default="table", help="Output format.")
 @click.option("--condition", default=None, help="Filter by condition.")
+@click.option("--bio-rep", default=None, help="Filter by biological replicate.")
 @click.pass_context
 @error_handler
-def regions(ctx: click.Context, fmt: str, condition: str | None) -> None:
-    """List regions in the experiment."""
+def fovs(ctx: click.Context, fmt: str, condition: str | None, bio_rep: str | None) -> None:
+    """List FOVs in the experiment."""
     store = ctx.obj["store"]
-    region_list = store.get_regions(condition=condition)
+    fov_list = store.get_fovs(condition=condition, bio_rep=bio_rep)
 
-    if not region_list:
-        console.print("[dim]No regions found.[/dim]")
+    if not fov_list:
+        console.print("[dim]No FOVs found.[/dim]")
         return
 
     rows = [
         {
-            "name": r.name,
-            "condition": r.condition,
-            "size": f"{r.width}x{r.height}" if r.width else "",
-            "pixel_size_um": str(r.pixel_size_um) if r.pixel_size_um else "",
+            "name": f.name,
+            "condition": f.condition,
+            "bio_rep": f.bio_rep,
+            "size": f"{f.width}x{f.height}" if f.width else "",
+            "pixel_size_um": str(f.pixel_size_um) if f.pixel_size_um else "",
         }
-        for r in region_list
+        for f in fov_list
     ]
-    format_output(rows, ["name", "condition", "size", "pixel_size_um"], fmt, "Regions")
+    format_output(
+        rows, ["name", "condition", "bio_rep", "size", "pixel_size_um"], fmt, "FOVs",
+    )
+
+
+@query.command("bio-reps")
+@click.option("--format", "fmt", type=click.Choice(["table", "csv", "json"]),
+              default="table", help="Output format.")
+@click.pass_context
+@error_handler
+def bio_reps(ctx: click.Context, fmt: str) -> None:
+    """List biological replicates in the experiment."""
+    store = ctx.obj["store"]
+    rep_list = store.get_bio_reps()
+
+    if not rep_list:
+        console.print("[dim]No biological replicates found.[/dim]")
+        return
+
+    rows = [{"name": r} for r in rep_list]
+    format_output(rows, ["name"], fmt, "Biological Replicates")
 
 
 @query.command()
@@ -133,3 +155,14 @@ def conditions(ctx: click.Context, fmt: str) -> None:
 
     rows = [{"name": c} for c in cond_list]
     format_output(rows, ["name"], fmt, "Conditions")
+
+
+@query.command("add-bio-rep")
+@click.argument("name")
+@click.pass_context
+@error_handler
+def add_bio_rep(ctx: click.Context, name: str) -> None:
+    """Add a biological replicate to the experiment."""
+    store = ctx.obj["store"]
+    store.add_bio_rep(name)
+    console.print(f"[green]Added bio rep:[/green] {name}")

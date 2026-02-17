@@ -39,13 +39,14 @@ class ImportLif(WorkflowStep):
 
     @property
     def outputs(self) -> list[StepOutput]:
-        return [StepOutput("images"), StepOutput("channels"), StepOutput("regions")]
+        return [StepOutput("images"), StepOutput("channels"), StepOutput("fovs")]
 
     @property
     def parameters(self) -> list[StepParameter]:
         return [
             StepParameter("path", "str", description="Path to .lif file"),
             StepParameter("condition", "str", default="", description="Condition label"),
+            StepParameter("bio_rep", "str", default="N1", description="Biological replicate"),
         ]
 
     def execute(
@@ -60,7 +61,7 @@ class ImportLif(WorkflowStep):
         reader.read(store, Path(params["path"]), condition=params.get("condition", ""))
         return StepResult(
             status="completed",
-            outputs_produced=["images", "channels", "regions"],
+            outputs_produced=["images", "channels", "fovs"],
         )
 
 
@@ -78,13 +79,14 @@ class ImportTiff(WorkflowStep):
 
     @property
     def outputs(self) -> list[StepOutput]:
-        return [StepOutput("images"), StepOutput("channels"), StepOutput("regions")]
+        return [StepOutput("images"), StepOutput("channels"), StepOutput("fovs")]
 
     @property
     def parameters(self) -> list[StepParameter]:
         return [
             StepParameter("path", "str", description="Path to TIFF directory"),
             StepParameter("condition", "str", default="", description="Condition label"),
+            StepParameter("bio_rep", "str", default="N1", description="Biological replicate"),
         ]
 
     def execute(
@@ -99,7 +101,7 @@ class ImportTiff(WorkflowStep):
         reader.read(store, Path(params["path"]), condition=params.get("condition", ""))
         return StepResult(
             status="completed",
-            outputs_produced=["images", "channels", "regions"],
+            outputs_produced=["images", "channels", "fovs"],
         )
 
 
@@ -129,6 +131,7 @@ class Segment(WorkflowStep):
                 description="Cellpose model",
             ),
             StepParameter("diameter", "int", default=60, description="Expected cell diameter"),
+            StepParameter("bio_rep", "str", default="N1", description="Biological replicate"),
         ]
 
     def execute(
@@ -172,6 +175,7 @@ class Measure(WorkflowStep):
                 default="mean_intensity,max_intensity,integrated_intensity",
                 description="Metrics to compute",
             ),
+            StepParameter("bio_rep", "str", default="N1", description="Biological replicate"),
         ]
 
     def execute(
@@ -213,6 +217,7 @@ class Threshold(WorkflowStep):
             StepParameter("method", "choice", default="otsu",
                           choices=["otsu", "manual"], description="Thresholding method"),
             StepParameter("value", "float", default=None, description="Manual threshold value"),
+            StepParameter("bio_rep", "str", default="N1", description="Biological replicate"),
         ]
 
     def execute(

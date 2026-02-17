@@ -12,6 +12,7 @@ import pytest
 import zarr
 
 from percell3.core.exceptions import (
+    BioRepNotFoundError,
     DuplicateError,
     ExperimentError,
     ExperimentNotFoundError,
@@ -30,17 +31,17 @@ def experiment(tmp_path: Path) -> ExperimentStore:
 
 @pytest.fixture
 def experiment_with_data(experiment: ExperimentStore) -> ExperimentStore:
-    """An experiment pre-loaded with channels, conditions, regions, cells, and measurements."""
+    """An experiment pre-loaded with channels, conditions, fovs, cells, and measurements."""
     experiment.add_channel("DAPI", role="nucleus", color="#0000FF")
     experiment.add_channel("GFP", role="signal", color="#00FF00")
     experiment.add_condition("control")
     experiment.add_condition("treated")
-    region_id = experiment.add_region("r1", condition="control", width=256, height=256)
+    fov_id = experiment.add_fov("r1", condition="control", width=256, height=256)
     seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
     cells = [
         CellRecord(
-            region_id=region_id, segmentation_id=seg_id, label_value=i,
+            fov_id=fov_id, segmentation_id=seg_id, label_value=i,
             centroid_x=100.0 + i, centroid_y=200.0 + i,
             bbox_x=80 + i, bbox_y=180 + i, bbox_w=40, bbox_h=40,
             area_pixels=1200.0 + i * 10,
@@ -127,20 +128,20 @@ class TestChannels:
             experiment.add_channel("DAPI")
 
 
-# === Acceptance Test 3: Condition/region hierarchy ===
+# === Acceptance Test 3: Condition/FOV hierarchy ===
 
 
-class TestConditionsAndRegions:
-    def test_conditions_and_regions(self, experiment):
+class TestConditionsAndFovs:
+    def test_conditions_and_fovs(self, experiment):
         experiment.add_condition("control")
         experiment.add_condition("treated")
-        experiment.add_region("region_1", condition="control", width=2048, height=2048)
-        experiment.add_region("region_2", condition="control", width=2048, height=2048)
-        experiment.add_region("region_1", condition="treated", width=2048, height=2048)
+        experiment.add_fov("fov_1", condition="control", width=2048, height=2048)
+        experiment.add_fov("fov_2", condition="control", width=2048, height=2048)
+        experiment.add_fov("fov_1", condition="treated", width=2048, height=2048)
 
         assert experiment.get_conditions() == ["control", "treated"]
-        control_regions = experiment.get_regions(condition="control")
-        assert len(control_regions) == 2
+        control_fovs = experiment.get_fovs(condition="control")
+        assert len(control_fovs) == 2
 
     def test_timepoints(self, experiment):
         experiment.add_timepoint("t0", time_seconds=0.0)
@@ -155,22 +156,22 @@ class TestImageIO:
     def test_write_and_read_image(self, experiment):
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
-        experiment.add_region("region_1", condition="control", width=512, height=512)
+        experiment.add_fov("fov_1", condition="control", width=512, height=512)
 
         data = np.random.randint(0, 65535, (512, 512), dtype=np.uint16)
-        experiment.write_image("region_1", "control", "DAPI", data)
+        experiment.write_image("fov_1", "control", "DAPI", data)
 
-        result_dask = experiment.read_image("region_1", "control", "DAPI")
+        result_dask = experiment.read_image("fov_1", "control", "DAPI")
         assert isinstance(result_dask, da.Array)
 
-        result_np = experiment.read_image_numpy("region_1", "control", "DAPI")
+        result_np = experiment.read_image_numpy("fov_1", "control", "DAPI")
         np.testing.assert_array_equal(result_np, data)
 
     def test_multi_channel_image(self, experiment):
         experiment.add_channel("DAPI")
         experiment.add_channel("GFP")
         experiment.add_condition("control")
-        experiment.add_region("r1", condition="control", width=256, height=256)
+        experiment.add_fov("r1", condition="control", width=256, height=256)
 
         dapi = np.random.randint(0, 65535, (256, 256), dtype=np.uint16)
         gfp = np.random.randint(0, 65535, (256, 256), dtype=np.uint16)
@@ -192,12 +193,12 @@ class TestCells:
     def test_add_and_query_cells(self, experiment):
         experiment.add_channel("DAPI", role="nucleus")
         experiment.add_condition("control")
-        region_id = experiment.add_region("r1", condition="control")
+        fov_id = experiment.add_fov("r1", condition="control")
         seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
         cells = [
             CellRecord(
-                region_id=region_id, segmentation_id=seg_id,
+                fov_id=fov_id, segmentation_id=seg_id,
                 label_value=i, centroid_x=100 + i, centroid_y=200 + i,
                 bbox_x=80 + i, bbox_y=180 + i, bbox_w=40, bbox_h=40,
                 area_pixels=1200 + i * 10,
@@ -236,12 +237,12 @@ class TestMeasurements:
         experiment.add_channel("GFP", role="signal")
         experiment.add_channel("RFP", role="signal")
         experiment.add_condition("control")
-        region_id = experiment.add_region("r1", condition="control")
+        fov_id = experiment.add_fov("r1", condition="control")
         seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
         cells = [
             CellRecord(
-                region_id=region_id, segmentation_id=seg_id,
+                fov_id=fov_id, segmentation_id=seg_id,
                 label_value=i, centroid_x=100, centroid_y=200,
                 bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
                 area_pixels=1200,
@@ -278,7 +279,7 @@ class TestLabels:
     def test_write_and_read_labels(self, experiment):
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
-        experiment.add_region("r1", condition="control", width=512, height=512)
+        experiment.add_fov("r1", condition="control", width=512, height=512)
         seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
         labels = np.zeros((512, 512), dtype=np.int32)
@@ -297,13 +298,13 @@ class TestNGFFMetadata:
     def test_zarr_has_ngff_metadata(self, experiment):
         experiment.add_channel("DAPI", color="#0000FF")
         experiment.add_condition("control")
-        experiment.add_region("r1", condition="control", width=128, height=128)
+        experiment.add_fov("r1", condition="control", width=128, height=128)
 
         data = np.random.randint(0, 65535, (128, 128), dtype=np.uint16)
         experiment.write_image("r1", "control", "DAPI", data)
 
         store = zarr.open(str(experiment.images_zarr_path), mode="r")
-        group = store["control/r1"]
+        group = store["N1/control/r1"]
         attrs = dict(group.attrs)
 
         assert "multiscales" in attrs
@@ -345,7 +346,7 @@ class TestMasks:
     def test_write_and_read_mask(self, experiment):
         experiment.add_channel("GFP")
         experiment.add_condition("control")
-        experiment.add_region("r1", condition="control", width=128, height=128)
+        experiment.add_fov("r1", condition="control", width=128, height=128)
         thr_id = experiment.add_threshold_run(channel="GFP", method="otsu")
 
         mask = np.zeros((128, 128), dtype=bool)
@@ -416,10 +417,10 @@ class TestNameValidation:
         with pytest.raises(ValueError, match="must not be empty"):
             experiment.add_condition("")
 
-    def test_region_name_with_path_traversal(self, experiment):
+    def test_fov_name_with_path_traversal(self, experiment):
         experiment.add_condition("control")
         with pytest.raises(ValueError, match="must not contain"):
-            experiment.add_region("../../etc", condition="control")
+            experiment.add_fov("../../etc", condition="control")
 
     def test_timepoint_name_with_slash(self, experiment):
         with pytest.raises(ValueError, match="invalid characters"):
@@ -442,18 +443,18 @@ class TestGetCellCountExplicit:
     def test_count_by_condition(self, experiment_with_data):
         assert experiment_with_data.get_cell_count(condition="control") == 10
 
-    def test_count_by_condition_and_region(self, experiment_with_data):
-        assert experiment_with_data.get_cell_count(condition="control", region="r1") == 10
+    def test_count_by_condition_and_fov(self, experiment_with_data):
+        assert experiment_with_data.get_cell_count(condition="control", fov="r1") == 10
 
-    def test_count_region_without_condition_raises(self, experiment_with_data):
+    def test_count_fov_without_condition_raises(self, experiment_with_data):
         with pytest.raises(ValueError, match="'condition' is required"):
-            experiment_with_data.get_cell_count(region="r1")
+            experiment_with_data.get_cell_count(fov="r1")
 
 
-class TestGetCellsRegionFilter:
-    def test_region_without_condition_raises(self, experiment_with_data):
+class TestGetCellsFovFilter:
+    def test_fov_without_condition_raises(self, experiment_with_data):
         with pytest.raises(ValueError, match="'condition' is required"):
-            experiment_with_data.get_cells(region="r1")
+            experiment_with_data.get_cells(fov="r1")
 
 
 class TestExportCsvNoKwargs:
@@ -516,15 +517,15 @@ class TestFrozenDataclasses:
         with pytest.raises(AttributeError):
             ch.name = "GFP"
 
-    def test_region_info_frozen(self):
-        from percell3.core.models import RegionInfo
-        r = RegionInfo(id=1, name="r1", condition="control")
+    def test_fov_info_frozen(self):
+        from percell3.core.models import FovInfo
+        r = FovInfo(id=1, name="r1", condition="control")
         with pytest.raises(AttributeError):
             r.name = "r2"
 
     def test_cell_record_frozen(self):
         cell = CellRecord(
-            region_id=1, segmentation_id=1, label_value=1,
+            fov_id=1, segmentation_id=1, label_value=1,
             centroid_x=100, centroid_y=200,
             bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
             area_pixels=1200,
@@ -536,3 +537,214 @@ class TestFrozenDataclasses:
         m = MeasurementRecord(cell_id=1, channel_id=1, metric="mean", value=42.0)
         with pytest.raises(AttributeError):
             m.value = 99.0
+
+
+# === Biological Replicates ===
+
+
+class TestBioReps:
+    """Tests for the biological replicate layer."""
+
+    def test_default_bio_rep_created(self, experiment):
+        """Every new experiment starts with a default N1 bio rep."""
+        reps = experiment.get_bio_reps()
+        assert reps == ["N1"]
+
+    def test_get_bio_rep(self, experiment):
+        rep = experiment.get_bio_rep("N1")
+        assert rep == "N1"
+
+    def test_add_bio_rep(self, experiment):
+        experiment.add_bio_rep("N2")
+        reps = experiment.get_bio_reps()
+        assert reps == ["N1", "N2"]
+
+    def test_add_duplicate_bio_rep_raises(self, experiment):
+        with pytest.raises(DuplicateError):
+            experiment.add_bio_rep("N1")
+
+    def test_get_nonexistent_bio_rep_raises(self, experiment):
+        with pytest.raises(BioRepNotFoundError):
+            experiment.get_bio_rep("N999")
+
+    def test_add_fov_auto_resolves_single_bio_rep(self, experiment):
+        """When only N1 exists, bio_rep=None auto-selects it."""
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("r1", condition="control")
+        fovs = experiment.get_fovs(condition="control")
+        assert len(fovs) == 1
+        assert fovs[0].bio_rep == "N1"
+
+    def test_add_fov_explicit_bio_rep(self, experiment):
+        experiment.add_bio_rep("N2")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("r1", condition="control", bio_rep="N2")
+        fovs = experiment.get_fovs(condition="control", bio_rep="N2")
+        assert len(fovs) == 1
+        assert fovs[0].bio_rep == "N2"
+
+    def test_add_fov_requires_bio_rep_when_multiple(self, experiment):
+        """When N2+ bio reps exist, bio_rep=None must raise."""
+        experiment.add_bio_rep("N2")
+        experiment.add_condition("control")
+        with pytest.raises(ValueError, match="Multiple bio reps"):
+            experiment.add_fov("r1", condition="control")
+
+    def test_get_fovs_filter_by_bio_rep(self, experiment):
+        experiment.add_bio_rep("N2")
+        experiment.add_condition("control")
+        experiment.add_fov("r1", condition="control", bio_rep="N1")
+        experiment.add_fov("r2", condition="control", bio_rep="N2")
+
+        n1_fovs = experiment.get_fovs(condition="control", bio_rep="N1")
+        assert len(n1_fovs) == 1
+        assert n1_fovs[0].name == "r1"
+
+        n2_fovs = experiment.get_fovs(condition="control", bio_rep="N2")
+        assert len(n2_fovs) == 1
+        assert n2_fovs[0].name == "r2"
+
+    def test_same_fov_name_different_bio_reps(self, experiment):
+        """Same FOV name is allowed in different bio reps."""
+        experiment.add_bio_rep("N2")
+        experiment.add_condition("control")
+        experiment.add_fov("r1", condition="control", bio_rep="N1")
+        experiment.add_fov("r1", condition="control", bio_rep="N2")
+
+        all_fovs = experiment.get_fovs(condition="control")
+        assert len(all_fovs) == 2
+
+    def test_fov_info_has_bio_rep(self, experiment):
+        """FovInfo includes bio_rep field."""
+        experiment.add_condition("control")
+        experiment.add_fov("r1", condition="control")
+        fov = experiment.get_fovs(condition="control")[0]
+        assert fov.bio_rep == "N1"
+
+    def test_write_read_image_with_bio_rep(self, experiment):
+        """Image I/O works with explicit bio_rep."""
+        experiment.add_channel("DAPI")
+        experiment.add_condition("control")
+        experiment.add_fov("r1", condition="control")
+
+        data = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
+        experiment.write_image("r1", "control", "DAPI", data, bio_rep="N1")
+        result = experiment.read_image_numpy("r1", "control", "DAPI", bio_rep="N1")
+        np.testing.assert_array_equal(result, data)
+
+    def test_zarr_path_includes_bio_rep(self, experiment):
+        """Zarr group path has bio_rep prefix."""
+        experiment.add_channel("DAPI")
+        experiment.add_condition("control")
+        experiment.add_fov("r1", condition="control")
+
+        data = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
+        experiment.write_image("r1", "control", "DAPI", data)
+
+        store = zarr.open(str(experiment.images_zarr_path), mode="r")
+        assert "N1/control/r1" in store
+
+    def test_get_cells_bio_rep_column(self, experiment):
+        """Cell query results include bio_rep_name."""
+        experiment.add_channel("DAPI")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("r1", condition="control")
+        seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
+
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+        ]
+        experiment.add_cells(cells)
+
+        df = experiment.get_cells(condition="control")
+        assert "bio_rep_name" in df.columns
+        assert df["bio_rep_name"].iloc[0] == "N1"
+
+    def test_get_cells_filter_by_bio_rep(self, experiment):
+        """get_cells(bio_rep=...) filters cells by bio rep."""
+        experiment.add_bio_rep("N2")
+        experiment.add_channel("DAPI")
+        experiment.add_condition("control")
+        fov1 = experiment.add_fov("r1", condition="control", bio_rep="N1")
+        fov2 = experiment.add_fov("r2", condition="control", bio_rep="N2")
+        seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
+
+        cells_n1 = [
+            CellRecord(
+                fov_id=fov1, segmentation_id=seg_id, label_value=i,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+            for i in range(1, 4)
+        ]
+        cells_n2 = [
+            CellRecord(
+                fov_id=fov2, segmentation_id=seg_id, label_value=i,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+            for i in range(1, 6)
+        ]
+        experiment.add_cells(cells_n1)
+        experiment.add_cells(cells_n2)
+
+        assert experiment.get_cell_count(bio_rep="N1") == 3
+        assert experiment.get_cell_count(bio_rep="N2") == 5
+        assert experiment.get_cell_count() == 8
+
+    def test_measurement_pivot_includes_bio_rep(self, experiment):
+        """get_measurement_pivot() result includes bio_rep_name column."""
+        experiment.add_channel("DAPI")
+        experiment.add_channel("GFP")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("r1", condition="control")
+        seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
+
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+        ]
+        cell_ids = experiment.add_cells(cells)
+
+        gfp = experiment.get_channel("GFP")
+        experiment.add_measurements([
+            MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
+                              metric="mean_intensity", value=42.0)
+        ])
+
+        pivot = experiment.get_measurement_pivot()
+        assert "bio_rep_name" in pivot.columns
+        assert pivot["bio_rep_name"].iloc[0] == "N1"
+
+
+class TestBioRepNameValidation:
+    """Security tests: name validation on bio rep names."""
+
+    def test_path_traversal(self, experiment):
+        with pytest.raises(ValueError, match="must not contain"):
+            experiment.add_bio_rep("../evil")
+
+    def test_slash(self, experiment):
+        with pytest.raises(ValueError, match="invalid characters"):
+            experiment.add_bio_rep("N1/evil")
+
+    def test_empty_name(self, experiment):
+        with pytest.raises(ValueError, match="must not be empty"):
+            experiment.add_bio_rep("")
+
+    def test_valid_names(self, experiment):
+        experiment.add_bio_rep("N2")
+        experiment.add_bio_rep("bio-rep-3")
+        experiment.add_bio_rep("sample_A")
+        assert len(experiment.get_bio_reps()) == 4  # N1 + 3 new

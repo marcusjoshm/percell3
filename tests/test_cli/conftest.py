@@ -35,16 +35,16 @@ def experiment_path(experiment: ExperimentStore) -> Path:
 
 @pytest.fixture
 def experiment_with_data(experiment: ExperimentStore) -> ExperimentStore:
-    """Experiment with channels, conditions, regions, and images."""
+    """Experiment with channels, conditions, FOVs, and images."""
     experiment.add_channel("DAPI", role="nuclear")
     experiment.add_channel("GFP")
     experiment.add_condition("control")
     data = np.zeros((64, 64), dtype=np.uint16)
-    experiment.add_region(
-        "region1", "control", width=64, height=64, pixel_size_um=0.65,
+    experiment.add_fov(
+        "fov1", "control", width=64, height=64, pixel_size_um=0.65,
     )
-    experiment.write_image("region1", "control", "DAPI", data)
-    experiment.write_image("region1", "control", "GFP", data)
+    experiment.write_image("fov1", "control", "DAPI", data)
+    experiment.write_image("fov1", "control", "GFP", data)
     return experiment
 
 

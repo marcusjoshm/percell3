@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+DEFAULT_BIO_REP = "N1"
+
 
 @dataclass(frozen=True)
 class ChannelConfig:
@@ -20,12 +22,13 @@ class ChannelConfig:
 
 
 @dataclass(frozen=True)
-class RegionInfo:
-    """Metadata for a region (field of view)."""
+class FovInfo:
+    """Metadata for a field of view (FOV)."""
 
     id: int
     name: str
     condition: str
+    bio_rep: str = DEFAULT_BIO_REP
     timepoint: str | None = None
     width: int | None = None
     height: int | None = None
@@ -37,7 +40,7 @@ class RegionInfo:
 class CellRecord:
     """A segmented cell's spatial properties (no id — assigned by SQLite on insert)."""
 
-    region_id: int
+    fov_id: int
     segmentation_id: int
     label_value: int
     centroid_x: float

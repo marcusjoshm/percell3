@@ -7,30 +7,32 @@ from pathlib import Path
 import numpy as np
 
 from percell3.core import ExperimentStore
-from percell3.core.models import CellRecord, RegionInfo
-from percell3.segment.label_processor import extract_cells
+from percell3.core.exceptions import FovNotFoundError
+from percell3.core.models import CellRecord, FovInfo
+from percell3.segment.label_processor import LabelProcessor
 
 
-def _validate_region(
-    store: ExperimentStore, region: str, condition: str,
-) -> RegionInfo:
-    """Look up a region by name, raising ValueError if not found."""
-    region_info = store.get_regions(condition=condition)
-    for r in region_info:
-        if r.name == region:
-            return r
-    raise ValueError(f"Region {region!r} not found in condition {condition!r}")
+def _validate_fov(
+    store: ExperimentStore, fov: str, condition: str,
+    bio_rep: str | None = None,
+) -> FovInfo:
+    """Look up a FOV by name, raising ValueError if not found."""
+    try:
+        fov_info, _ = store._resolve_fov(fov, condition, bio_rep)
+    except FovNotFoundError:
+        raise ValueError(f"FOV {fov!r} not found in condition {condition!r}")
+    return fov_info
 
 
 def store_labels_and_cells(
     store: ExperimentStore,
     labels: np.ndarray,
-    region: str,
+    fov_info: FovInfo,
+    fov: str,
     condition: str,
     run_id: int,
-    region_id: int,
-    pixel_size_um: float | None,
     timepoint: str | None = None,
+    bio_rep: str | None = None,
 ) -> int:
     """Write labels to zarr, extract cells, insert into DB, update run count.
 
@@ -41,19 +43,22 @@ def store_labels_and_cells(
     Args:
         store: An open ExperimentStore.
         labels: 2D int32 label array.
-        region: Region name.
+        fov_info: FOV metadata (used for id and pixel_size_um).
+        fov: FOV name.
         condition: Condition name.
         run_id: Segmentation run ID (already created).
-        region_id: Database ID of the region.
-        pixel_size_um: Physical pixel size in micrometers (or None).
         timepoint: Optional timepoint.
+        bio_rep: Optional biological replicate name.
 
     Returns:
         Number of cells extracted and inserted.
     """
-    store.write_labels(region, condition, labels, run_id, timepoint)
+    store.write_labels(fov, condition, labels, run_id, bio_rep=bio_rep, timepoint=timepoint)
 
-    cells = extract_cells(labels, region_id, run_id, pixel_size_um)
+    processor = LabelProcessor()
+    cells = processor.extract_cells(
+        labels, fov_info.id, run_id, fov_info.pixel_size_um,
+    )
     if cells:
         store.add_cells(cells)
 
@@ -73,10 +78,11 @@ class RoiImporter:
         self,
         labels: np.ndarray,
         store: ExperimentStore,
-        region: str,
+        fov: str,
         condition: str,
         channel: str = "manual",
         source: str = "manual",
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> int:
         """Import a pre-computed label image.
@@ -84,7 +90,7 @@ class RoiImporter:
         Args:
             labels: 2D integer array where pixel value = cell ID, 0 = background.
             store: Target ExperimentStore.
-            region: Region name.
+            fov: FOV name.
             condition: Condition name.
             channel: Channel name for segmentation run record.
             source: Source identifier (stored as model_name in segmentation run).
@@ -108,15 +114,15 @@ class RoiImporter:
 
         labels_int32 = np.asarray(labels, dtype=np.int32)
 
-        target_region = _validate_region(store, region, condition)
+        target_fov = _validate_fov(store, fov, condition, bio_rep)
 
         run_id = store.add_segmentation_run(
             channel, source, {"source": source, "imported": True}
         )
 
         store_labels_and_cells(
-            store, labels_int32, region, condition, run_id,
-            target_region.id, target_region.pixel_size_um, timepoint,
+            store, labels_int32, target_fov, fov, condition, run_id,
+            timepoint=timepoint, bio_rep=bio_rep,
         )
         return run_id
 
@@ -124,9 +130,10 @@ class RoiImporter:
         self,
         seg_path: Path,
         store: ExperimentStore,
-        region: str,
+        fov: str,
         condition: str,
         channel: str = "manual",
+        bio_rep: str | None = None,
         timepoint: str | None = None,
     ) -> int:
         """Import a Cellpose ``_seg.npy`` file.
@@ -141,7 +148,7 @@ class RoiImporter:
         Args:
             seg_path: Path to the ``_seg.npy`` file.
             store: Target ExperimentStore.
-            region: Region name.
+            fov: FOV name.
             condition: Condition name.
             channel: Channel name for segmentation run record.
             timepoint: Optional timepoint.
@@ -171,7 +178,7 @@ class RoiImporter:
 
         masks = np.asarray(seg_data["masks"], dtype=np.int32)
 
-        target_region = _validate_region(store, region, condition)
+        target_fov = _validate_fov(store, fov, condition, bio_rep)
 
         params: dict = {"source": "cellpose-gui", "imported": True}
         if "est_diam" in seg_data:
@@ -182,7 +189,7 @@ class RoiImporter:
         run_id = store.add_segmentation_run(channel, "cellpose-gui", params)
 
         store_labels_and_cells(
-            store, masks, region, condition, run_id,
-            target_region.id, target_region.pixel_size_um, timepoint,
+            store, masks, target_fov, fov, condition, run_id,
+            timepoint=timepoint, bio_rep=bio_rep,
         )
         return run_id

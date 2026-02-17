@@ -85,7 +85,7 @@ class FileScanner:
 
         # Extract unique dimension values
         channels = sorted({f.tokens["channel"] for f in discovered if "channel" in f.tokens})
-        regions = sorted({f.tokens["region"] for f in discovered if "region" in f.tokens})
+        fovs = sorted({f.tokens["fov"] for f in discovered if "fov" in f.tokens})
         timepoints = sorted({f.tokens["timepoint"] for f in discovered if "timepoint" in f.tokens})
         z_slices = sorted({f.tokens["z_slice"] for f in discovered if "z_slice" in f.tokens})
 
@@ -110,7 +110,7 @@ class FileScanner:
             source_path=path,
             files=discovered,
             channels=channels,
-            regions=regions,
+            fovs=fovs,
             timepoints=timepoints,
             z_slices=z_slices,
             pixel_size_um=scan_pixel_size,
@@ -150,18 +150,18 @@ class FileScanner:
         if m:
             tokens["z_slice"] = m.group(1)
 
-        # Region — use custom pattern or derive from remaining text
-        if config.region is not None:
-            m = re.search(config.region, stem)
+        # FOV — use custom pattern or derive from remaining text
+        if config.fov is not None:
+            m = re.search(config.fov, stem)
             if m:
-                tokens["region"] = m.group(1)
+                tokens["fov"] = m.group(1)
         else:
-            # Derive region by stripping all matched tokens
-            region = stem
+            # Derive FOV by stripping all matched tokens
+            fov = stem
             for pattern in (config.channel, config.timepoint, config.z_slice):
-                region = re.sub(pattern, "", region)
-            region = region.strip("_- ")
-            if region:
-                tokens["region"] = region
+                fov = re.sub(pattern, "", fov)
+            fov = fov.strip("_- ")
+            if fov:
+                tokens["fov"] = fov
 
         return tokens
