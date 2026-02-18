@@ -344,10 +344,13 @@ class ExperimentStore:
         cond_id = queries.select_condition_id(self._conn, condition) if condition else None
         br_id = None
         if bio_rep:
-            br_row = queries.select_bio_rep_by_name(
-                self._conn, bio_rep, condition_id=cond_id,
-            )
-            br_id = br_row["id"]
+            try:
+                br_row = queries.select_bio_rep_by_name(
+                    self._conn, bio_rep, condition_id=cond_id,
+                )
+                br_id = br_row["id"]
+            except BioRepNotFoundError:
+                return []  # No FOVs can exist for a non-existent bio rep
         tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
         return queries.select_fovs(
             self._conn, condition_id=cond_id, bio_rep_id=br_id, timepoint_id=tp_id,

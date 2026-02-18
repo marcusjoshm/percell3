@@ -495,8 +495,8 @@ def _segment_cells(state: MenuState) -> None:
             except ValueError:
                 condition = cond_str
 
-    # Biological replicate filter
-    bio_rep = _prompt_bio_rep(store)
+    # Biological replicate filter (scoped to selected condition)
+    bio_rep = _prompt_bio_rep(store, condition=condition)
 
     # Optional FOV filter
     fov_filter_list: list[str] | None = None
@@ -576,10 +576,7 @@ def _view_napari(state: MenuState) -> None:
     """Launch napari to view and edit segmentation labels."""
     store = state.require_experiment()
 
-    # Select biological replicate
-    bio_rep = _prompt_bio_rep(store)
-
-    # Select condition
+    # Select condition first (bio reps are scoped per condition)
     conditions = store.get_conditions()
     if not conditions:
         console.print("[red]No conditions found.[/red] Import images first.")
@@ -587,6 +584,9 @@ def _view_napari(state: MenuState) -> None:
 
     console.print("\n[bold]Conditions:[/bold]")
     condition = numbered_select_one(conditions, "Condition")
+
+    # Select biological replicate (scoped to condition)
+    bio_rep = _prompt_bio_rep(store, condition=condition)
 
     # Select FOV
     fovs = store.get_fovs(condition=condition, bio_rep=bio_rep)
@@ -619,9 +619,9 @@ def _view_napari(state: MenuState) -> None:
     console.print()
 
 
-def _prompt_bio_rep(store: ExperimentStore) -> str:
+def _prompt_bio_rep(store: ExperimentStore, condition: str | None = None) -> str:
     """Prompt for biological replicate. Auto-resolves when only 1 exists."""
-    reps = store.get_bio_reps()
+    reps = store.get_bio_reps(condition=condition)
     if len(reps) <= 1:
         return reps[0] if reps else "N1"
     console.print("\n[bold]Biological replicates:[/bold]")
@@ -825,12 +825,28 @@ def _query_experiment(state: MenuState) -> None:
         format_output(rows, ["name"], "table", "Conditions")
 
     elif choice == "4":
-        rep_list = store.get_bio_reps()
+        # Optional condition filter for bio reps
+        cond_filter = None
+        cond_list = store.get_conditions()
+        if len(cond_list) > 1:
+            console.print("\n[bold]Conditions:[/bold]")
+            _print_numbered_list(cond_list)
+            cond_str = menu_prompt("Condition filter (number, or blank = all)", default="")
+            if cond_str:
+                try:
+                    idx = int(cond_str)
+                    if 1 <= idx <= len(cond_list):
+                        cond_filter = cond_list[idx - 1]
+                except ValueError:
+                    cond_filter = cond_str
+
+        rep_list = store.get_bio_reps(condition=cond_filter)
         if not rep_list:
             console.print("[dim]No biological replicates found.[/dim]")
             return
         rows = [{"name": r} for r in rep_list]
-        format_output(rows, ["name"], "table", "Biological Replicates")
+        title = f"Biological Replicates ({cond_filter})" if cond_filter else "Biological Replicates"
+        format_output(rows, ["name"], "table", title)
 
 
 def _edit_experiment(state: MenuState) -> None:
@@ -894,14 +910,21 @@ def _edit_experiment(state: MenuState) -> None:
         console.print(f"[green]Channel '{old}' → '{new_name}'[/green]")
 
     elif choice == "5":
-        reps = store.get_bio_reps()
+        # Bio reps are scoped per condition — select condition first
+        conditions = store.get_conditions()
+        if not conditions:
+            console.print("[dim]No conditions found.[/dim]")
+            return
+        console.print("\n[bold]Conditions:[/bold]")
+        cond = numbered_select_one(conditions, "Condition")
+        reps = store.get_bio_reps(condition=cond)
         if not reps:
             console.print("[dim]No biological replicates found.[/dim]")
             return
         console.print("\n[bold]Biological replicates:[/bold]")
         old = numbered_select_one(reps, "Bio-rep to rename")
         new_name = menu_prompt(f"New name for '{old}'")
-        store.rename_bio_rep(old, new_name)
+        store.rename_bio_rep(old, new_name, condition=cond)
         console.print(f"[green]Bio-rep '{old}' → '{new_name}'[/green]")
 
 

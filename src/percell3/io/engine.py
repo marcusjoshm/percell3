@@ -84,12 +84,8 @@ class ImportEngine:
         # Sanitize bio_rep once and use consistently
         bio_rep = sanitize_name(plan.bio_rep)
 
-        # Register bio rep (idempotent)
-        existing_bio_reps = store.get_bio_reps()
-        if bio_rep not in existing_bio_reps:
-            store.add_bio_rep(bio_rep)
-
         # Register conditions (idempotent)
+        # Bio reps are created lazily per condition when FOVs are added.
         if plan.condition_map:
             unique_conditions = sorted(set(
                 sanitize_name(c) for c in plan.condition_map.values()
