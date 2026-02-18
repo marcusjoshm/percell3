@@ -304,7 +304,7 @@ class TestNGFFMetadata:
         experiment.write_image("r1", "control", "DAPI", data)
 
         store = zarr.open(str(experiment.images_zarr_path), mode="r")
-        group = store["N1/control/r1"]
+        group = store["control/N1/r1"]
         attrs = dict(group.attrs)
 
         assert "multiscales" in attrs
@@ -543,56 +543,74 @@ class TestFrozenDataclasses:
 
 
 class TestBioReps:
-    """Tests for the biological replicate layer."""
+    """Tests for the biological replicate layer (condition-scoped)."""
 
-    def test_default_bio_rep_created(self, experiment):
-        """Every new experiment starts with a default N1 bio rep."""
+    def test_no_default_bio_rep_at_creation(self, experiment):
+        """New experiment has no bio reps until a condition is created."""
         reps = experiment.get_bio_reps()
+        assert reps == []
+
+    def test_bio_rep_created_lazily_with_fov(self, experiment):
+        """Default N1 bio rep is created per-condition when first FOV is added."""
+        experiment.add_condition("control")
+        experiment.add_fov("r1", condition="control")
+        reps = experiment.get_bio_reps(condition="control")
         assert reps == ["N1"]
 
-    def test_get_bio_rep(self, experiment):
-        rep = experiment.get_bio_rep("N1")
-        assert rep == "N1"
-
     def test_add_bio_rep(self, experiment):
-        experiment.add_bio_rep("N2")
-        reps = experiment.get_bio_reps()
-        assert reps == ["N1", "N2"]
+        experiment.add_condition("control")
+        experiment.add_bio_rep("N2", condition="control")
+        reps = experiment.get_bio_reps(condition="control")
+        assert "N2" in reps
 
     def test_add_duplicate_bio_rep_raises(self, experiment):
+        experiment.add_condition("control")
+        experiment.add_bio_rep("N1", condition="control")
         with pytest.raises(DuplicateError):
-            experiment.add_bio_rep("N1")
+            experiment.add_bio_rep("N1", condition="control")
+
+    def test_same_bio_rep_name_different_conditions(self, experiment):
+        """N1/control and N1/treated are separate bio reps."""
+        experiment.add_condition("control")
+        experiment.add_condition("treated")
+        experiment.add_bio_rep("N1", condition="control")
+        experiment.add_bio_rep("N1", condition="treated")
+        assert experiment.get_bio_reps(condition="control") == ["N1"]
+        assert experiment.get_bio_reps(condition="treated") == ["N1"]
 
     def test_get_nonexistent_bio_rep_raises(self, experiment):
         with pytest.raises(BioRepNotFoundError):
             experiment.get_bio_rep("N999")
 
-    def test_add_fov_auto_resolves_single_bio_rep(self, experiment):
-        """When only N1 exists, bio_rep=None auto-selects it."""
+    def test_add_fov_auto_creates_default_bio_rep(self, experiment):
+        """Adding FOV without bio_rep auto-creates N1 for the condition."""
         experiment.add_condition("control")
-        fov_id = experiment.add_fov("r1", condition="control")
+        experiment.add_fov("r1", condition="control")
         fovs = experiment.get_fovs(condition="control")
         assert len(fovs) == 1
         assert fovs[0].bio_rep == "N1"
 
     def test_add_fov_explicit_bio_rep(self, experiment):
-        experiment.add_bio_rep("N2")
         experiment.add_condition("control")
-        fov_id = experiment.add_fov("r1", condition="control", bio_rep="N2")
+        experiment.add_bio_rep("N2", condition="control")
+        experiment.add_fov("r1", condition="control", bio_rep="N2")
         fovs = experiment.get_fovs(condition="control", bio_rep="N2")
         assert len(fovs) == 1
         assert fovs[0].bio_rep == "N2"
 
-    def test_add_fov_requires_bio_rep_when_multiple(self, experiment):
-        """When N2+ bio reps exist, bio_rep=None must raise."""
-        experiment.add_bio_rep("N2")
+    def test_add_fov_defaults_to_n1_when_multiple(self, experiment):
+        """When N2+ bio reps exist, bio_rep=None defaults to N1."""
         experiment.add_condition("control")
-        with pytest.raises(ValueError, match="Multiple bio reps"):
-            experiment.add_fov("r1", condition="control")
+        experiment.add_bio_rep("N1", condition="control")
+        experiment.add_bio_rep("N2", condition="control")
+        experiment.add_fov("r1", condition="control")  # should default to N1
+        fovs = experiment.get_fovs(condition="control", bio_rep="N1")
+        assert len(fovs) == 1
+        assert fovs[0].name == "r1"
 
     def test_get_fovs_filter_by_bio_rep(self, experiment):
-        experiment.add_bio_rep("N2")
         experiment.add_condition("control")
+        experiment.add_bio_rep("N2", condition="control")
         experiment.add_fov("r1", condition="control", bio_rep="N1")
         experiment.add_fov("r2", condition="control", bio_rep="N2")
 
@@ -606,8 +624,8 @@ class TestBioReps:
 
     def test_same_fov_name_different_bio_reps(self, experiment):
         """Same FOV name is allowed in different bio reps."""
-        experiment.add_bio_rep("N2")
         experiment.add_condition("control")
+        experiment.add_bio_rep("N2", condition="control")
         experiment.add_fov("r1", condition="control", bio_rep="N1")
         experiment.add_fov("r1", condition="control", bio_rep="N2")
 
@@ -632,8 +650,8 @@ class TestBioReps:
         result = experiment.read_image_numpy("r1", "control", "DAPI", bio_rep="N1")
         np.testing.assert_array_equal(result, data)
 
-    def test_zarr_path_includes_bio_rep(self, experiment):
-        """Zarr group path has bio_rep prefix."""
+    def test_zarr_path_is_condition_bio_rep_fov(self, experiment):
+        """Zarr group path is condition/bio_rep/fov."""
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
         experiment.add_fov("r1", condition="control")
@@ -642,7 +660,7 @@ class TestBioReps:
         experiment.write_image("r1", "control", "DAPI", data)
 
         store = zarr.open(str(experiment.images_zarr_path), mode="r")
-        assert "N1/control/r1" in store
+        assert "control/N1/r1" in store
 
     def test_get_cells_bio_rep_column(self, experiment):
         """Cell query results include bio_rep_name."""
@@ -667,9 +685,9 @@ class TestBioReps:
 
     def test_get_cells_filter_by_bio_rep(self, experiment):
         """get_cells(bio_rep=...) filters cells by bio rep."""
-        experiment.add_bio_rep("N2")
-        experiment.add_channel("DAPI")
         experiment.add_condition("control")
+        experiment.add_bio_rep("N2", condition="control")
+        experiment.add_channel("DAPI")
         fov1 = experiment.add_fov("r1", condition="control", bio_rep="N1")
         fov2 = experiment.add_fov("r2", condition="control", bio_rep="N2")
         seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
@@ -695,8 +713,8 @@ class TestBioReps:
         experiment.add_cells(cells_n1)
         experiment.add_cells(cells_n2)
 
-        assert experiment.get_cell_count(bio_rep="N1") == 3
-        assert experiment.get_cell_count(bio_rep="N2") == 5
+        assert experiment.get_cell_count(condition="control", bio_rep="N1") == 3
+        assert experiment.get_cell_count(condition="control", bio_rep="N2") == 5
         assert experiment.get_cell_count() == 8
 
     def test_measurement_pivot_includes_bio_rep(self, experiment):
@@ -732,22 +750,26 @@ class TestBioRepNameValidation:
     """Security tests: name validation on bio rep names."""
 
     def test_path_traversal(self, experiment):
+        experiment.add_condition("control")
         with pytest.raises(ValueError, match="must not contain"):
-            experiment.add_bio_rep("../evil")
+            experiment.add_bio_rep("../evil", condition="control")
 
     def test_slash(self, experiment):
+        experiment.add_condition("control")
         with pytest.raises(ValueError, match="invalid characters"):
-            experiment.add_bio_rep("N1/evil")
+            experiment.add_bio_rep("N1/evil", condition="control")
 
     def test_empty_name(self, experiment):
+        experiment.add_condition("control")
         with pytest.raises(ValueError, match="must not be empty"):
-            experiment.add_bio_rep("")
+            experiment.add_bio_rep("", condition="control")
 
     def test_valid_names(self, experiment):
-        experiment.add_bio_rep("N2")
-        experiment.add_bio_rep("bio-rep-3")
-        experiment.add_bio_rep("sample_A")
-        assert len(experiment.get_bio_reps()) == 4  # N1 + 3 new
+        experiment.add_condition("control")
+        experiment.add_bio_rep("N1", condition="control")
+        experiment.add_bio_rep("bio-rep-3", condition="control")
+        experiment.add_bio_rep("sample_A", condition="control")
+        assert len(experiment.get_bio_reps(condition="control")) == 3
 
 
 class TestRenameExperiment:
@@ -789,9 +811,11 @@ class TestRenameChannel:
 
 class TestRenameBioRep:
     def test_rename_bio_rep(self, experiment):
-        experiment.rename_bio_rep("N1", "Rep1")
-        assert "Rep1" in experiment.get_bio_reps()
-        assert "N1" not in experiment.get_bio_reps()
+        experiment.add_condition("ctrl")
+        experiment.add_fov("FOV1", "ctrl")  # auto-creates N1
+        experiment.rename_bio_rep("N1", "Rep1", condition="ctrl")
+        assert "Rep1" in experiment.get_bio_reps(condition="ctrl")
+        assert "N1" not in experiment.get_bio_reps(condition="ctrl")
 
     def test_rename_bio_rep_with_data(self, experiment):
         """Rename a bio-rep that has images stored in zarr."""
@@ -801,8 +825,8 @@ class TestRenameBioRep:
         data = np.zeros((64, 64), dtype=np.uint16)
         experiment.write_image("FOV1", "ctrl", "DAPI", data)
 
-        experiment.rename_bio_rep("N1", "Rep1")
-        assert "Rep1" in experiment.get_bio_reps()
+        experiment.rename_bio_rep("N1", "Rep1", condition="ctrl")
+        assert "Rep1" in experiment.get_bio_reps(condition="ctrl")
         img = experiment.read_image("FOV1", "ctrl", "DAPI", bio_rep="Rep1")
         assert img.shape == (64, 64)
 

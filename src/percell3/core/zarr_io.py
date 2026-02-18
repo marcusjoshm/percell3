@@ -38,10 +38,10 @@ def _fov_group_path(
     fov: str,
     timepoint: str | None = None,
 ) -> str:
-    """Build the zarr group path for a bio_rep/condition/FOV."""
+    """Build the zarr group path for a condition/bio_rep/FOV."""
     if timepoint:
-        return f"{bio_rep}/{condition}/{timepoint}/{fov}"
-    return f"{bio_rep}/{condition}/{fov}"
+        return f"{condition}/{bio_rep}/{timepoint}/{fov}"
+    return f"{condition}/{bio_rep}/{fov}"
 
 
 def image_group_path(
@@ -73,8 +73,8 @@ def mask_group_path(
 ) -> str:
     """Build the zarr group path for a mask."""
     if timepoint:
-        return f"{bio_rep}/{condition}/{timepoint}/{fov}/threshold_{channel}"
-    return f"{bio_rep}/{condition}/{fov}/threshold_{channel}"
+        return f"{condition}/{bio_rep}/{timepoint}/{fov}/threshold_{channel}"
+    return f"{condition}/{bio_rep}/{fov}/threshold_{channel}"
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +355,7 @@ def read_mask(
 def init_zarr_store(zarr_path: Path) -> None:
     """Create an empty zarr group at the given path."""
     root = zarr.open(str(zarr_path), mode="w")
-    root.attrs["percell_version"] = "3.1.0"
+    root.attrs["percell_version"] = "3.2.0"
 
 
 # ---------------------------------------------------------------------------

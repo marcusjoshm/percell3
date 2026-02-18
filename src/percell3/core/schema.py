@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
-    percell_version TEXT NOT NULL DEFAULT '3.1.0',
+    percell_version TEXT NOT NULL DEFAULT '3.2.0',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -47,20 +47,21 @@ CREATE TABLE IF NOT EXISTS timepoints (
 
 CREATE TABLE IF NOT EXISTS bio_reps (
     id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE
+    condition_id INTEGER NOT NULL REFERENCES conditions(id),
+    name TEXT NOT NULL DEFAULT 'N1',
+    UNIQUE(condition_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS fovs (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
-    condition_id INTEGER NOT NULL REFERENCES conditions(id),
     bio_rep_id INTEGER NOT NULL REFERENCES bio_reps(id),
     timepoint_id INTEGER REFERENCES timepoints(id),
     width INTEGER,
     height INTEGER,
     pixel_size_um REAL,
     source_file TEXT,
-    UNIQUE(name, bio_rep_id, condition_id, timepoint_id)
+    UNIQUE(name, bio_rep_id, timepoint_id)
 );
 
 CREATE TABLE IF NOT EXISTS segmentation_runs (
@@ -138,7 +139,7 @@ CREATE INDEX IF NOT EXISTS idx_cells_area ON cells(area_pixels);
 CREATE INDEX IF NOT EXISTS idx_measurements_cell ON measurements(cell_id);
 CREATE INDEX IF NOT EXISTS idx_measurements_channel ON measurements(channel_id);
 CREATE INDEX IF NOT EXISTS idx_measurements_metric ON measurements(metric);
-CREATE INDEX IF NOT EXISTS idx_fovs_condition ON fovs(condition_id);
+CREATE INDEX IF NOT EXISTS idx_bio_reps_condition ON bio_reps(condition_id);
 CREATE INDEX IF NOT EXISTS idx_fovs_bio_rep ON fovs(bio_rep_id);
 """
 
@@ -151,10 +152,10 @@ EXPECTED_TABLES = frozenset({
 EXPECTED_INDEXES = frozenset({
     "idx_cells_fov", "idx_cells_fov_valid", "idx_cells_segmentation", "idx_cells_area",
     "idx_measurements_cell", "idx_measurements_channel", "idx_measurements_metric",
-    "idx_fovs_condition", "idx_fovs_bio_rep",
+    "idx_bio_reps_condition", "idx_fovs_bio_rep",
 })
 
-EXPECTED_VERSION = "3.1.0"
+EXPECTED_VERSION = "3.2.0"
 
 
 def create_schema(
@@ -179,9 +180,6 @@ def create_schema(
         "INSERT INTO experiments (name, description) VALUES (?, ?)",
         (name, description),
     )
-    from percell3.core.models import DEFAULT_BIO_REP
-
-    conn.execute("INSERT INTO bio_reps (name) VALUES (?)", (DEFAULT_BIO_REP,))
     conn.commit()
     return conn
 

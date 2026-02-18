@@ -43,7 +43,7 @@ class TestCreateSchema:
 
     def test_experiment_has_version(self, db_conn):
         row = db_conn.execute("SELECT percell_version FROM experiments").fetchone()
-        assert row["percell_version"] == "3.1.0"
+        assert row["percell_version"] == "3.2.0"
 
 
 class TestOpenDatabase:
@@ -73,7 +73,7 @@ class TestOpenDatabase:
         """Different patch version with same major.minor should open fine."""
         db_path = tmp_path / "patch.db"
         conn = create_schema(db_path, name="Patch")
-        conn.execute("UPDATE experiments SET percell_version = '3.1.99'")
+        conn.execute("UPDATE experiments SET percell_version = '3.2.99'")
         conn.commit()
         conn.close()
 

@@ -85,19 +85,22 @@ class TestTimepointQueries:
 
 
 class TestBioRepQueries:
-    def test_default_bio_rep_exists(self, db_conn):
-        """Schema creates default N1 bio rep."""
+    def test_no_default_bio_rep(self, db_conn):
+        """Schema no longer creates a default bio rep."""
         reps = queries.select_bio_reps(db_conn)
-        assert reps == ["N1"]
+        assert reps == []
 
     def test_insert_and_select(self, db_conn):
-        bid = queries.insert_bio_rep(db_conn, "N2")
+        cid = queries.insert_condition(db_conn, "control")
+        bid = queries.insert_bio_rep(db_conn, "N1", condition_id=cid)
         assert bid >= 1
-        reps = queries.select_bio_reps(db_conn)
-        assert reps == ["N1", "N2"]
+        reps = queries.select_bio_reps(db_conn, condition_id=cid)
+        assert reps == ["N1"]
 
     def test_select_by_name(self, db_conn):
-        row = queries.select_bio_rep_by_name(db_conn, "N1")
+        cid = queries.insert_condition(db_conn, "control")
+        queries.insert_bio_rep(db_conn, "N1", condition_id=cid)
+        row = queries.select_bio_rep_by_name(db_conn, "N1", condition_id=cid)
         assert row["name"] == "N1"
 
     def test_select_by_name_not_found(self, db_conn):
@@ -105,22 +108,36 @@ class TestBioRepQueries:
             queries.select_bio_rep_by_name(db_conn, "NOPE")
 
     def test_select_by_name_returns_id(self, db_conn):
-        row = queries.select_bio_rep_by_name(db_conn, "N1")
+        cid = queries.insert_condition(db_conn, "control")
+        queries.insert_bio_rep(db_conn, "N1", condition_id=cid)
+        row = queries.select_bio_rep_by_name(db_conn, "N1", condition_id=cid)
         assert row["id"] >= 1
 
     def test_duplicate_raises(self, db_conn):
+        cid = queries.insert_condition(db_conn, "control")
+        queries.insert_bio_rep(db_conn, "N1", condition_id=cid)
         with pytest.raises(DuplicateError):
-            queries.insert_bio_rep(db_conn, "N1")
+            queries.insert_bio_rep(db_conn, "N1", condition_id=cid)
+
+    def test_same_name_different_conditions(self, db_conn):
+        """N1 can exist in both control and treated."""
+        c1 = queries.insert_condition(db_conn, "control")
+        c2 = queries.insert_condition(db_conn, "treated")
+        queries.insert_bio_rep(db_conn, "N1", condition_id=c1)
+        queries.insert_bio_rep(db_conn, "N1", condition_id=c2)
+        assert queries.select_bio_reps(db_conn, condition_id=c1) == ["N1"]
+        assert queries.select_bio_reps(db_conn, condition_id=c2) == ["N1"]
 
     def test_fov_with_bio_rep_id(self, db_conn):
         """FOVs correctly store and query bio_rep_id."""
         cid = queries.insert_condition(db_conn, "control")
-        n2_id = queries.insert_bio_rep(db_conn, "N2")
+        n1_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cid)
+        n2_id = queries.insert_bio_rep(db_conn, "N2", condition_id=cid)
 
-        queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)  # N1
-        queries.insert_fov(db_conn, "r2", condition_id=cid, bio_rep_id=n2_id)
+        queries.insert_fov(db_conn, "r1", bio_rep_id=n1_id)
+        queries.insert_fov(db_conn, "r2", bio_rep_id=n2_id)
 
-        n1_fovs = queries.select_fovs(db_conn, bio_rep_id=1)
+        n1_fovs = queries.select_fovs(db_conn, bio_rep_id=n1_id)
         assert len(n1_fovs) == 1
         assert n1_fovs[0].name == "r1"
         assert n1_fovs[0].bio_rep == "N1"
@@ -133,10 +150,11 @@ class TestBioRepQueries:
     def test_same_fov_name_different_bio_reps(self, db_conn):
         """Same FOV name allowed in different bio reps."""
         cid = queries.insert_condition(db_conn, "control")
-        n2_id = queries.insert_bio_rep(db_conn, "N2")
+        n1_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cid)
+        n2_id = queries.insert_bio_rep(db_conn, "N2", condition_id=cid)
 
-        queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)
-        queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=n2_id)
+        queries.insert_fov(db_conn, "r1", bio_rep_id=n1_id)
+        queries.insert_fov(db_conn, "r1", bio_rep_id=n2_id)
         all_fovs = queries.select_fovs(db_conn, condition_id=cid)
         assert len(all_fovs) == 2
 
@@ -144,7 +162,8 @@ class TestBioRepQueries:
         """select_cells returns bio_rep_name column."""
         ch_id = queries.insert_channel(db_conn, "DAPI")
         cid = queries.insert_condition(db_conn, "control")
-        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cid)
+        fov_id = queries.insert_fov(db_conn, "r1", bio_rep_id=br_id)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
         cells = [
             CellRecord(
@@ -162,9 +181,10 @@ class TestBioRepQueries:
         """count_cells can filter by bio_rep_id."""
         ch_id = queries.insert_channel(db_conn, "DAPI")
         cid = queries.insert_condition(db_conn, "control")
-        n2_id = queries.insert_bio_rep(db_conn, "N2")
-        fov1 = queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)
-        fov2 = queries.insert_fov(db_conn, "r2", condition_id=cid, bio_rep_id=n2_id)
+        n1_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cid)
+        n2_id = queries.insert_bio_rep(db_conn, "N2", condition_id=cid)
+        fov1 = queries.insert_fov(db_conn, "r1", bio_rep_id=n1_id)
+        fov2 = queries.insert_fov(db_conn, "r2", bio_rep_id=n2_id)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
 
         cells_n1 = [
@@ -188,15 +208,21 @@ class TestBioRepQueries:
         queries.insert_cells(db_conn, cells_n1)
         queries.insert_cells(db_conn, cells_n2)
 
-        assert queries.count_cells(db_conn, bio_rep_id=1) == 3
+        assert queries.count_cells(db_conn, bio_rep_id=n1_id) == 3
         assert queries.count_cells(db_conn, bio_rep_id=n2_id) == 5
         assert queries.count_cells(db_conn) == 8
 
 
 class TestFovQueries:
+    def _make_bio_rep(self, db_conn, condition_name="control"):
+        """Helper: create condition + N1 bio rep, return (cond_id, br_id)."""
+        cid = queries.insert_condition(db_conn, condition_name)
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cid)
+        return cid, br_id
+
     def test_insert_and_select(self, db_conn):
-        cid = queries.insert_condition(db_conn, "control")
-        rid = queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1, width=2048, height=2048)
+        cid, br_id = self._make_bio_rep(db_conn)
+        rid = queries.insert_fov(db_conn, "r1", bio_rep_id=br_id, width=2048, height=2048)
         assert rid >= 1
         fovs = queries.select_fovs(db_conn, condition_id=cid)
         assert len(fovs) == 1
@@ -205,33 +231,35 @@ class TestFovQueries:
         assert fovs[0].width == 2048
 
     def test_select_by_name(self, db_conn):
-        cid = queries.insert_condition(db_conn, "control")
-        queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)
+        cid, br_id = self._make_bio_rep(db_conn)
+        queries.insert_fov(db_conn, "r1", bio_rep_id=br_id)
         r = queries.select_fov_by_name(db_conn, "r1", condition_id=cid)
         assert r.name == "r1"
 
     def test_select_by_name_not_found(self, db_conn):
-        cid = queries.insert_condition(db_conn, "control")
+        cid, br_id = self._make_bio_rep(db_conn)
         with pytest.raises(FovNotFoundError):
             queries.select_fov_by_name(db_conn, "nope", condition_id=cid)
 
-    def test_duplicate_fov_same_condition(self, db_conn):
-        cid = queries.insert_condition(db_conn, "control")
-        queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)
+    def test_duplicate_fov_same_bio_rep(self, db_conn):
+        cid, br_id = self._make_bio_rep(db_conn)
+        queries.insert_fov(db_conn, "r1", bio_rep_id=br_id)
         with pytest.raises(DuplicateError):
-            queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1)
+            queries.insert_fov(db_conn, "r1", bio_rep_id=br_id)
 
     def test_same_name_different_condition(self, db_conn):
         c1 = queries.insert_condition(db_conn, "control")
         c2 = queries.insert_condition(db_conn, "treated")
-        queries.insert_fov(db_conn, "r1", condition_id=c1, bio_rep_id=1)
-        queries.insert_fov(db_conn, "r1", condition_id=c2, bio_rep_id=1)
+        br1 = queries.insert_bio_rep(db_conn, "N1", condition_id=c1)
+        br2 = queries.insert_bio_rep(db_conn, "N1", condition_id=c2)
+        queries.insert_fov(db_conn, "r1", bio_rep_id=br1)
+        queries.insert_fov(db_conn, "r1", bio_rep_id=br2)
         assert len(queries.select_fovs(db_conn)) == 2
 
     def test_with_timepoint(self, db_conn):
-        cid = queries.insert_condition(db_conn, "control")
+        cid, br_id = self._make_bio_rep(db_conn)
         tid = queries.insert_timepoint(db_conn, "t0")
-        queries.insert_fov(db_conn, "r1", condition_id=cid, bio_rep_id=1, timepoint_id=tid)
+        queries.insert_fov(db_conn, "r1", bio_rep_id=br_id, timepoint_id=tid)
         r = queries.select_fov_by_name(db_conn, "r1", condition_id=cid, timepoint_id=tid)
         assert r.timepoint == "t0"
 
@@ -240,7 +268,8 @@ class TestCellQueries:
     def _setup(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI", role="nucleus")
         cond_id = queries.insert_condition(db_conn, "control")
-        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id, bio_rep_id=1)
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", bio_rep_id=br_id)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
         return cond_id, fov_id, seg_id
 
@@ -294,7 +323,8 @@ class TestMeasurementQueries:
     def _setup(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "GFP", role="signal")
         cond_id = queries.insert_condition(db_conn, "control")
-        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id, bio_rep_id=1)
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", bio_rep_id=br_id)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
         cells = [
             CellRecord(
@@ -341,7 +371,8 @@ class TestTagQueries:
     def _setup_cells(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI")
         cond_id = queries.insert_condition(db_conn, "control")
-        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id, bio_rep_id=1)
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", bio_rep_id=br_id)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
         cells = [
             CellRecord(
@@ -392,7 +423,8 @@ class TestEmptyListGuards:
     def _setup(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI")
         cond_id = queries.insert_condition(db_conn, "control")
-        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id, bio_rep_id=1)
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", bio_rep_id=br_id)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
         return ch_id, cond_id, fov_id, seg_id
 
@@ -423,7 +455,8 @@ class TestInsertCellsRollback:
     def test_rollback_on_duplicate(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI")
         cond_id = queries.insert_condition(db_conn, "control")
-        fov_id = queries.insert_fov(db_conn, "r1", condition_id=cond_id, bio_rep_id=1)
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", bio_rep_id=br_id)
         seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
 
         cells = [
@@ -481,17 +514,18 @@ class TestRenameQueries:
             queries.rename_channel(db_conn, "DAPI", "GFP")
 
     def test_rename_bio_rep(self, db_conn):
-        queries.rename_bio_rep(db_conn, "N1", "Rep1")
-        reps = queries.select_bio_reps(db_conn)
+        cid = queries.insert_condition(db_conn, "control")
+        queries.insert_bio_rep(db_conn, "N1", condition_id=cid)
+        queries.rename_bio_rep(db_conn, "N1", "Rep1", condition_id=cid)
+        reps = queries.select_bio_reps(db_conn, condition_id=cid)
         assert "Rep1" in reps
         assert "N1" not in reps
 
     def test_rename_fov(self, db_conn):
-        queries.insert_condition(db_conn, "control")
-        cid = queries.select_condition_id(db_conn, "control")
-        bid = queries.select_bio_rep_by_name(db_conn, "N1")["id"]
-        queries.insert_fov(db_conn, "FOV_1", condition_id=cid, bio_rep_id=bid)
-        queries.rename_fov(db_conn, "FOV_1", "FOV_A", cid, bid)
+        cid = queries.insert_condition(db_conn, "control")
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cid)
+        queries.insert_fov(db_conn, "FOV_1", bio_rep_id=br_id)
+        queries.rename_fov(db_conn, "FOV_1", "FOV_A", cid, br_id)
         fovs = queries.select_fovs(db_conn, condition_id=cid)
         names = [f.name for f in fovs]
         assert "FOV_A" in names

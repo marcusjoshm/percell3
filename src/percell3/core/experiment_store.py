@@ -49,8 +49,10 @@ def _move_zarr_children(
 ) -> None:
     """Move zarr groups when renaming an entity.
 
-    For bio_rep/condition-level renames, moves the top-level group.
-    For fov-level renames, moves within a parent prefix.
+    Zarr hierarchy: {condition}/{bio_rep}/[{timepoint}/]{fov}
+    - condition: top-level group rename
+    - bio_rep: lives under each condition, rename within condition
+    - fov: lives under parent_prefix
     Does nothing if the source doesn't exist (e.g., no data yet).
     """
     import zarr
@@ -59,18 +61,21 @@ def _move_zarr_children(
         return
     root = zarr.open_group(str(store_path), mode="r+")
 
-    if level == "bio_rep":
+    if level == "condition":
         # Top-level group rename: old_name → new_name
         if old_name in root:
             root.move(old_name, new_name)
-    elif level == "condition":
-        # condition lives under each bio_rep: {bio_rep}/{old_name} → {bio_rep}/{new_name}
-        for br_name in list(root.keys()):
-            br_group = root[br_name]
-            if hasattr(br_group, "keys") and old_name in br_group:
-                br_group.move(old_name, new_name)
+    elif level == "bio_rep":
+        # bio_rep lives under a condition: {condition}/{old_name} → {condition}/{new_name}
+        if parent_prefix:
+            try:
+                cond_group = root[parent_prefix]
+            except KeyError:
+                return
+            if hasattr(cond_group, "keys") and old_name in cond_group:
+                cond_group.move(old_name, new_name)
     elif level == "fov":
-        # FOV lives under parent_prefix: {prefix}/{old_name} → {prefix}/{new_name}
+        # FOV lives under parent_prefix: {condition}/{bio_rep}/{old_name} → .../{new_name}
         if parent_prefix:
             try:
                 parent = root[parent_prefix]
@@ -225,27 +230,54 @@ class ExperimentStore:
 
     # --- Biological Replicate Management ---
 
-    def add_bio_rep(self, name: str) -> int:
+    def add_bio_rep(self, name: str, condition: str) -> int:
+        """Add a biological replicate scoped to a condition."""
         _validate_name(name, "bio_rep name")
-        return queries.insert_bio_rep(self._conn, name)
+        cond_id = queries.select_condition_id(self._conn, condition)
+        return queries.insert_bio_rep(self._conn, name, condition_id=cond_id)
 
-    def get_bio_reps(self) -> list[str]:
-        return queries.select_bio_reps(self._conn)
+    def get_bio_reps(self, condition: str | None = None) -> list[str]:
+        """Return bio rep names, optionally filtered by condition."""
+        cond_id = queries.select_condition_id(self._conn, condition) if condition else None
+        return queries.select_bio_reps(self._conn, condition_id=cond_id)
 
-    def get_bio_rep(self, name: str) -> str:
-        row = queries.select_bio_rep_by_name(self._conn, name)
+    def get_bio_rep(self, name: str, condition: str | None = None) -> str:
+        cond_id = queries.select_condition_id(self._conn, condition) if condition else None
+        row = queries.select_bio_rep_by_name(self._conn, name, condition_id=cond_id)
         return row["name"]
 
-    def _resolve_bio_rep(self, bio_rep: str | None) -> tuple[int, str]:
-        """Resolve bio_rep name to (id, name). Auto-resolves when only 1 exists."""
+    def _resolve_bio_rep(
+        self, bio_rep: str | None, condition: str | None = None,
+    ) -> tuple[int, str]:
+        """Resolve bio_rep name to (id, name) within a condition scope.
+
+        If bio_rep is None and condition has exactly one bio_rep, auto-resolves.
+        """
+        if condition is not None:
+            cond_id = queries.select_condition_id(self._conn, condition)
+        else:
+            cond_id = None
+
         if bio_rep is not None:
-            row = queries.select_bio_rep_by_name(self._conn, bio_rep)
+            row = queries.select_bio_rep_by_name(
+                self._conn, bio_rep, condition_id=cond_id,
+            )
             return row["id"], row["name"]
-        rows = self._conn.execute(
-            "SELECT id, name FROM bio_reps ORDER BY id"
-        ).fetchall()
+
+        # Auto-resolve when only 1 bio rep exists for this condition
+        if cond_id is not None:
+            rows = self._conn.execute(
+                "SELECT id, name FROM bio_reps WHERE condition_id = ? ORDER BY id",
+                (cond_id,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT id, name FROM bio_reps ORDER BY id"
+            ).fetchall()
         if len(rows) == 1:
             return rows[0]["id"], rows[0]["name"]
+        if len(rows) == 0:
+            raise BioRepNotFoundError("N1")
         names = [r["name"] for r in rows]
         raise ValueError(
             f"Multiple bio reps exist ({', '.join(names)}); specify one explicitly"
@@ -272,12 +304,27 @@ class ExperimentStore:
         pixel_size_um: float | None = None,
         source_file: str | None = None,
     ) -> int:
+        """Add a FOV to a condition. Auto-creates default 'N1' bio rep if needed."""
         _validate_name(name, "fov name")
-        bio_rep_id, _ = self._resolve_bio_rep(bio_rep)
         cond_id = queries.select_condition_id(self._conn, condition)
+
+        # Lazy creation: ensure a default bio rep exists for this condition
+        br_name = bio_rep or "N1"
+        try:
+            br_row = queries.select_bio_rep_by_name(
+                self._conn, br_name, condition_id=cond_id,
+            )
+            bio_rep_id = br_row["id"]
+        except BioRepNotFoundError:
+            # Auto-create the bio rep for this condition
+            _validate_name(br_name, "bio_rep name")
+            bio_rep_id = queries.insert_bio_rep(
+                self._conn, br_name, condition_id=cond_id,
+            )
+
         tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
         return queries.insert_fov(
-            self._conn, name, condition_id=cond_id, bio_rep_id=bio_rep_id,
+            self._conn, name, bio_rep_id=bio_rep_id,
             timepoint_id=tp_id, width=width, height=height,
             pixel_size_um=pixel_size_um, source_file=source_file,
         )
@@ -295,7 +342,12 @@ class ExperimentStore:
         timepoint: str | None = None,
     ) -> list[FovInfo]:
         cond_id = queries.select_condition_id(self._conn, condition) if condition else None
-        br_id = queries.select_bio_rep_by_name(self._conn, bio_rep)["id"] if bio_rep else None
+        br_id = None
+        if bio_rep:
+            br_row = queries.select_bio_rep_by_name(
+                self._conn, bio_rep, condition_id=cond_id,
+            )
+            br_id = br_row["id"]
         tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
         return queries.select_fovs(
             self._conn, condition_id=cond_id, bio_rep_id=br_id, timepoint_id=tp_id,
@@ -308,7 +360,10 @@ class ExperimentStore:
         queries.rename_experiment(self._conn, new_name)
 
     def rename_condition(self, old_name: str, new_name: str) -> None:
-        """Rename a condition. Updates SQLite and moves zarr groups."""
+        """Rename a condition. Updates SQLite and moves zarr groups.
+
+        In the new hierarchy, condition is the top-level zarr group.
+        """
         _validate_name(new_name, "condition name")
         # Move zarr groups first; if this fails, SQLite stays unchanged
         for store_path in (self.images_zarr_path, self.labels_zarr_path, self.masks_zarr_path):
@@ -324,12 +379,24 @@ class ExperimentStore:
         # Rename threshold mask groups
         _rename_mask_groups(self.masks_zarr_path, old_name, new_name)
 
-    def rename_bio_rep(self, old_name: str, new_name: str) -> None:
-        """Rename a biological replicate. Updates SQLite and moves zarr groups."""
+    def rename_bio_rep(
+        self, old_name: str, new_name: str, condition: str | None = None,
+    ) -> None:
+        """Rename a biological replicate. Updates SQLite and moves zarr groups.
+
+        In the new hierarchy, bio_rep lives under condition:
+        {condition}/{old_name} → {condition}/{new_name}
+        """
         _validate_name(new_name, "bio_rep name")
-        for store_path in (self.images_zarr_path, self.labels_zarr_path, self.masks_zarr_path):
-            _move_zarr_children(store_path, old_name, new_name, level="bio_rep")
-        queries.rename_bio_rep(self._conn, old_name, new_name)
+        cond_id = queries.select_condition_id(self._conn, condition) if condition else None
+        # Need condition name for zarr path
+        if condition:
+            for store_path in (self.images_zarr_path, self.labels_zarr_path, self.masks_zarr_path):
+                _move_zarr_children(
+                    store_path, old_name, new_name,
+                    level="bio_rep", parent_prefix=condition,
+                )
+        queries.rename_bio_rep(self._conn, old_name, new_name, condition_id=cond_id)
 
     def rename_fov(
         self,
@@ -340,12 +407,12 @@ class ExperimentStore:
     ) -> None:
         """Rename a FOV within a condition/bio-rep. Updates SQLite and moves zarr groups."""
         _validate_name(new_name, "fov name")
-        br_id, br_name = self._resolve_bio_rep(bio_rep)
+        br_id, br_name = self._resolve_bio_rep(bio_rep, condition=condition)
         cond_id = queries.select_condition_id(self._conn, condition)
         for store_path in (self.images_zarr_path, self.labels_zarr_path, self.masks_zarr_path):
             _move_zarr_children(
                 store_path, old_name, new_name,
-                level="fov", parent_prefix=f"{br_name}/{condition}",
+                level="fov", parent_prefix=f"{condition}/{br_name}",
             )
         queries.rename_fov(self._conn, old_name, new_name, cond_id, br_id)
 
@@ -359,7 +426,7 @@ class ExperimentStore:
         timepoint: str | None = None,
     ) -> tuple[FovInfo, str]:
         """Resolve FOV name to FovInfo and zarr group path."""
-        br_id, br_name = self._resolve_bio_rep(bio_rep)
+        br_id, br_name = self._resolve_bio_rep(bio_rep, condition=condition)
         cond_id = queries.select_condition_id(self._conn, condition)
         tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
         fov_info = queries.select_fov_by_name(
@@ -474,7 +541,12 @@ class ExperimentStore:
         tags: list[str] | None = None,
     ) -> pd.DataFrame:
         cond_id = queries.select_condition_id(self._conn, condition) if condition else None
-        br_id = queries.select_bio_rep_by_name(self._conn, bio_rep)["id"] if bio_rep else None
+        br_id = None
+        if bio_rep:
+            br_row = queries.select_bio_rep_by_name(
+                self._conn, bio_rep, condition_id=cond_id,
+            )
+            br_id = br_row["id"]
 
         # Resolve fov to fov_id if provided
         fov_id = None
@@ -521,7 +593,12 @@ class ExperimentStore:
         is_valid: bool = True,
     ) -> int:
         cond_id = queries.select_condition_id(self._conn, condition) if condition else None
-        br_id = queries.select_bio_rep_by_name(self._conn, bio_rep)["id"] if bio_rep else None
+        br_id = None
+        if bio_rep:
+            br_row = queries.select_bio_rep_by_name(
+                self._conn, bio_rep, condition_id=cond_id,
+            )
+            br_id = br_row["id"]
         fov_id = None
         if fov:
             if condition is None:

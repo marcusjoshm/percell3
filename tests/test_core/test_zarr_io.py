@@ -36,7 +36,7 @@ class TestInitZarrStore:
         p = tmp_path / "test.zarr"
         zarr_io.init_zarr_store(p)
         root = zarr.open(str(p), mode="r")
-        assert root.attrs["percell_version"] == "3.1.0"
+        assert root.attrs["percell_version"] == "3.2.0"
 
 
 class TestImageIO:
@@ -101,7 +101,7 @@ class TestImageIO:
         )
 
         root = zarr.open(str(images_zarr), mode="r")
-        group = root["N1/control/r1"]
+        group = root["control/N1/r1"]
         attrs = dict(group.attrs)
 
         assert "multiscales" in attrs
@@ -117,7 +117,7 @@ class TestImageIO:
     def test_with_timepoint(self, images_zarr):
         data = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
         gp = zarr_io.image_group_path("N1", "control", "r1", timepoint="t0")
-        assert gp == "N1/control/t0/r1"
+        assert gp == "control/N1/t0/r1"
 
         zarr_io.write_image_channel(
             images_zarr, gp, channel_index=0, num_channels=1,
@@ -185,7 +185,7 @@ class TestLabelIO:
         zarr_io.write_labels(labels_zarr, gp, labels, source_image_path="../../images.zarr/control/r1")
 
         root = zarr.open(str(labels_zarr), mode="r")
-        group = root["N1/control/r1"]
+        group = root["control/N1/r1"]
         attrs = dict(group.attrs)
         assert "image-label" in attrs
         assert attrs["image-label"]["version"] == "0.4"
@@ -220,11 +220,11 @@ class TestMaskIO:
 
     def test_mask_path(self):
         gp = zarr_io.mask_group_path("N1", "control", "r1", "GFP")
-        assert gp == "N1/control/r1/threshold_GFP"
+        assert gp == "control/N1/r1/threshold_GFP"
 
     def test_mask_path_with_timepoint(self):
         gp = zarr_io.mask_group_path("N1", "control", "r1", "GFP", timepoint="t0")
-        assert gp == "N1/control/t0/r1/threshold_GFP"
+        assert gp == "control/N1/t0/r1/threshold_GFP"
 
 
 # === ndim validation tests ===
