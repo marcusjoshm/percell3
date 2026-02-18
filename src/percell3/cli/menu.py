@@ -511,16 +511,32 @@ def _import_images(state: MenuState) -> None:
 
 
 def _prompt_condition_for_assignment(store: ExperimentStore) -> str:
-    """Prompt for condition name, showing existing conditions as pick list."""
+    """Prompt for condition name, showing existing conditions as pick list.
+
+    Creates the condition in the store if it doesn't exist yet, so
+    downstream queries (bio reps, FOV numbering) can reference it.
+    """
+    from percell3.core.exceptions import DuplicateError
+
     existing = store.get_conditions()
     if existing:
         options = existing + ["(new condition)"]
         console.print("\n[bold]Conditions:[/bold]")
         choice = numbered_select_one(options, "Condition")
         if choice == "(new condition)":
-            return menu_prompt("New condition name")
+            name = menu_prompt("New condition name")
+            try:
+                store.add_condition(name)
+            except DuplicateError:
+                pass
+            return name
         return choice
-    return menu_prompt("Condition name")
+    name = menu_prompt("Condition name")
+    try:
+        store.add_condition(name)
+    except DuplicateError:
+        pass
+    return name
 
 
 def _prompt_bio_rep_for_assignment(store: ExperimentStore, condition: str) -> str:
