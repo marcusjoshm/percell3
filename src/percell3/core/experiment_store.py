@@ -228,7 +228,7 @@ class ExperimentStore:
         timepoint: str | None = None,
     ) -> list[FovInfo]:
         cond_id = queries.select_condition_id(self._conn, condition) if condition else None
-        br_id = queries.select_bio_rep_id(self._conn, bio_rep) if bio_rep else None
+        br_id = queries.select_bio_rep_by_name(self._conn, bio_rep)["id"] if bio_rep else None
         tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
         return queries.select_fovs(
             self._conn, condition_id=cond_id, bio_rep_id=br_id, timepoint_id=tp_id,
@@ -359,7 +359,7 @@ class ExperimentStore:
         tags: list[str] | None = None,
     ) -> pd.DataFrame:
         cond_id = queries.select_condition_id(self._conn, condition) if condition else None
-        br_id = queries.select_bio_rep_id(self._conn, bio_rep) if bio_rep else None
+        br_id = queries.select_bio_rep_by_name(self._conn, bio_rep)["id"] if bio_rep else None
 
         # Resolve fov to fov_id if provided
         fov_id = None
@@ -406,7 +406,7 @@ class ExperimentStore:
         is_valid: bool = True,
     ) -> int:
         cond_id = queries.select_condition_id(self._conn, condition) if condition else None
-        br_id = queries.select_bio_rep_id(self._conn, bio_rep) if bio_rep else None
+        br_id = queries.select_bio_rep_by_name(self._conn, bio_rep)["id"] if bio_rep else None
         fov_id = None
         if fov:
             if condition is None:

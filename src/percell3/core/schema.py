@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from percell3.core.exceptions import ExperimentNotFoundError
+from percell3.core.exceptions import ExperimentNotFoundError, SchemaVersionError
 
 _SCHEMA_SQL = """\
 PRAGMA journal_mode = WAL;
@@ -154,6 +154,8 @@ EXPECTED_INDEXES = frozenset({
     "idx_fovs_condition", "idx_fovs_bio_rep",
 })
 
+EXPECTED_VERSION = "3.1.0"
+
 
 def create_schema(
     db_path: Path,
@@ -203,4 +205,18 @@ def open_database(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
+
+    # Check schema version compatibility
+    row = conn.execute(
+        "SELECT percell_version FROM experiments LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        stored = row["percell_version"]
+        # Compare major.minor (ignore patch)
+        stored_parts = stored.split(".")[:2]
+        expected_parts = EXPECTED_VERSION.split(".")[:2]
+        if stored_parts != expected_parts:
+            conn.close()
+            raise SchemaVersionError(stored, EXPECTED_VERSION)
+
     return conn

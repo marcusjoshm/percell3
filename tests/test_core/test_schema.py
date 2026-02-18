@@ -4,8 +4,8 @@ import sqlite3
 
 import pytest
 
-from percell3.core.exceptions import ExperimentNotFoundError
-from percell3.core.schema import EXPECTED_INDEXES, EXPECTED_TABLES, create_schema, open_database
+from percell3.core.exceptions import ExperimentNotFoundError, SchemaVersionError
+from percell3.core.schema import EXPECTED_INDEXES, EXPECTED_TABLES, EXPECTED_VERSION, create_schema, open_database
 
 
 class TestCreateSchema:
@@ -57,3 +57,32 @@ class TestOpenDatabase:
     def test_open_nonexistent_raises(self, tmp_path):
         with pytest.raises(ExperimentNotFoundError):
             open_database(tmp_path / "nope.db")
+
+    def test_old_version_raises(self, tmp_path):
+        """Opening a database with an old schema version raises SchemaVersionError."""
+        db_path = tmp_path / "old.db"
+        conn = create_schema(db_path, name="Old")
+        conn.execute("UPDATE experiments SET percell_version = '2.0.0'")
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(SchemaVersionError, match="version mismatch"):
+            open_database(db_path)
+
+    def test_compatible_patch_version_ok(self, tmp_path):
+        """Different patch version with same major.minor should open fine."""
+        db_path = tmp_path / "patch.db"
+        conn = create_schema(db_path, name="Patch")
+        conn.execute("UPDATE experiments SET percell_version = '3.1.99'")
+        conn.commit()
+        conn.close()
+
+        conn = open_database(db_path)
+        conn.close()
+
+    def test_current_version_ok(self, tmp_path):
+        """Database with current version should open fine."""
+        db_path = tmp_path / "current.db"
+        create_schema(db_path, name="Current").close()
+        conn = open_database(db_path)
+        conn.close()

@@ -208,10 +208,6 @@ def select_bio_rep_by_name(conn: sqlite3.Connection, name: str) -> sqlite3.Row:
     return row
 
 
-def select_bio_rep_id(conn: sqlite3.Connection, name: str) -> int:
-    """Resolve a bio rep name to its ID. Raises BioRepNotFoundError if not found."""
-    return select_bio_rep_by_name(conn, name)["id"]
-
 
 # ---------------------------------------------------------------------------
 # FOVs

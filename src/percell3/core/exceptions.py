@@ -50,6 +50,20 @@ class FovNotFoundError(ExperimentError):
         self.name = name
 
 
+class SchemaVersionError(ExperimentError):
+    """Raised when opening a database with an incompatible schema version."""
+
+    def __init__(self, stored: str, expected: str) -> None:
+        msg = (
+            f"Schema version mismatch: database has version '{stored}', "
+            f"expected '{expected}'. Re-import your data with the current "
+            f"version of PerCell 3."
+        )
+        super().__init__(msg)
+        self.stored = stored
+        self.expected = expected
+
+
 class DuplicateError(ExperimentError):
     """Raised when adding a duplicate entity (channel, condition, etc.)."""
 

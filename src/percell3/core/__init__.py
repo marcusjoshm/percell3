@@ -8,6 +8,7 @@ from percell3.core.exceptions import (
     ExperimentError,
     ExperimentNotFoundError,
     FovNotFoundError,
+    SchemaVersionError,
 )
 from percell3.core.experiment_store import ExperimentStore
 from percell3.core.models import CellRecord, ChannelConfig, FovInfo, MeasurementRecord
@@ -25,4 +26,5 @@ __all__ = [
     "ConditionNotFoundError",
     "FovNotFoundError",
     "DuplicateError",
+    "SchemaVersionError",
 ]

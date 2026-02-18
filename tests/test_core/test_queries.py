@@ -104,13 +104,9 @@ class TestBioRepQueries:
         with pytest.raises(BioRepNotFoundError):
             queries.select_bio_rep_by_name(db_conn, "NOPE")
 
-    def test_select_id(self, db_conn):
-        bid = queries.select_bio_rep_id(db_conn, "N1")
-        assert bid >= 1
-
-    def test_select_id_not_found(self, db_conn):
-        with pytest.raises(BioRepNotFoundError):
-            queries.select_bio_rep_id(db_conn, "NOPE")
+    def test_select_by_name_returns_id(self, db_conn):
+        row = queries.select_bio_rep_by_name(db_conn, "N1")
+        assert row["id"] >= 1
 
     def test_duplicate_raises(self, db_conn):
         with pytest.raises(DuplicateError):
