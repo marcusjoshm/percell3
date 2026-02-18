@@ -403,9 +403,7 @@ def _import_images(state: MenuState) -> None:
         for cond_name, sites in sorted(cond_fovs.items()):
             console.print(f"  {cond_name}: {', '.join(sorted(sites))}")
 
-        if menu_prompt(
-            "Use detected conditions?", choices=["y", "n"], default="y"
-        ) == "y":
+        if numbered_select_one(["Yes", "No"], "Use detected conditions?") == "Yes":
             condition_map = dict(detection.condition_map)
             fov_names = dict(detection.fov_name_map)
         else:
@@ -424,17 +422,17 @@ def _import_images(state: MenuState) -> None:
     # Z-projection
     z_method = "mip"
     if scan_result.z_slices:
-        z_method = menu_prompt(
+        console.print("\n[bold]Z-projection method:[/bold]")
+        z_method = numbered_select_one(
+            ["mip", "sum", "mean", "keep"],
             "Z-projection method",
-            choices=["mip", "sum", "mean", "keep"],
-            default="mip",
         )
 
     # Biological replicate
     bio_rep = _prompt_bio_rep(store)
 
     # Confirm
-    if menu_prompt("Proceed with import?", choices=["y", "n"], default="y") != "y":
+    if numbered_select_one(["Yes", "No"], "Proceed with import?") != "Yes":
         console.print("[yellow]Import cancelled.[/yellow]")
         return
 
@@ -532,7 +530,7 @@ def _segment_cells(state: MenuState) -> None:
     else:
         console.print(f"  FOVs:     all ({len(all_fovs)})")
 
-    if menu_prompt("\nProceed?", choices=["y", "n"], default="y") != "y":
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
         console.print("[yellow]Segmentation cancelled.[/yellow]")
         return
 
@@ -642,7 +640,7 @@ def _auto_match_channels(
     if not existing:
         # First import — fall back to freeform rename prompt
         console.print(f"\nDiscovered channels: {', '.join(discovered)}")
-        if menu_prompt("Rename channels?", choices=["y", "n"], default="n") == "y":
+        if numbered_select_one(["No", "Yes"], "Rename channels?") == "Yes":
             maps = []
             for ch in discovered:
                 new_name = menu_prompt(f"  Name for channel '{ch}'", default=ch)
@@ -916,7 +914,7 @@ def _export_csv(state: MenuState) -> None:
     out_path = Path(output_str).expanduser()
 
     if out_path.exists():
-        if menu_prompt("File exists. Overwrite?", choices=["y", "n"], default="n") != "y":
+        if numbered_select_one(["No", "Yes"], "File exists. Overwrite?") != "Yes":
             console.print("[yellow]Export cancelled.[/yellow]")
             return
 
