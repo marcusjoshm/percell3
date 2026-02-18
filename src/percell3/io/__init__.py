@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from percell3.io.conditions import ConditionDetectionResult, detect_conditions
 from percell3.io.engine import ImportEngine
 from percell3.io.models import (
     ChannelMapping,
@@ -19,7 +18,6 @@ from percell3.io.scanner import FileScanner
 
 __all__ = [
     "ChannelMapping",
-    "ConditionDetectionResult",
     "DiscoveredFile",
     "FileScanner",
     "ImportEngine",
@@ -28,7 +26,6 @@ __all__ = [
     "ScanResult",
     "TokenConfig",
     "ZTransform",
-    "detect_conditions",
     "scan",
 ]
 

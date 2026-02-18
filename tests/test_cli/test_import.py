@@ -93,35 +93,6 @@ class TestImportCommand:
         assert "Invalid channel map" in result.output
 
 
-class TestAutoConditionsFlag:
-    def test_auto_conditions_detects_multiple(
-        self, runner: CliRunner, experiment_path: Path,
-        multi_condition_tiff_dir: Path,
-    ):
-        result = runner.invoke(
-            cli,
-            ["import", str(multi_condition_tiff_dir), "-e", str(experiment_path),
-             "--auto-conditions", "--yes"],
-        )
-        assert result.exit_code == 0
-        assert "Auto-detected 2 conditions" in result.output
-        assert "Import complete" in result.output
-        assert "FOVs imported: 2" in result.output
-
-    def test_auto_conditions_no_match(
-        self, runner: CliRunner, experiment_path: Path, tiff_dir: Path,
-    ):
-        """Single FOV — auto-conditions falls back to single condition."""
-        result = runner.invoke(
-            cli,
-            ["import", str(tiff_dir), "-e", str(experiment_path),
-             "--auto-conditions", "--yes"],
-        )
-        assert result.exit_code == 0
-        assert "No conditions detected" in result.output
-        assert "Import complete" in result.output
-
-
 class TestFilesFlag:
     def test_import_specific_files(
         self, runner: CliRunner, experiment_path: Path, tiff_dir: Path,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,6 +15,7 @@ from percell3.cli.utils import console, error_handler, make_progress, open_exper
 if TYPE_CHECKING:
     from percell3.core import ExperimentStore
     from percell3.io import ChannelMapping, ScanResult
+    from percell3.io.models import DiscoveredFile
 
 
 @click.command("import")
@@ -40,10 +43,6 @@ if TYPE_CHECKING:
     help="Z-stack projection method.",
 )
 @click.option(
-    "--auto-conditions", is_flag=True,
-    help="Auto-detect conditions from FOV names.",
-)
-@click.option(
     "--files", multiple=True, type=click.Path(exists=True),
     help="Specific TIFF files to import (instead of scanning directory).",
 )
@@ -59,39 +58,16 @@ def import_cmd(
     bio_rep: str,
     channel_map: tuple[str, ...],
     z_projection: str,
-    auto_conditions: bool,
     files: tuple[str, ...],
     yes: bool,
 ) -> None:
     """Import TIFF images into an experiment."""
     store = open_experiment(experiment)
     try:
-        condition_map: dict[str, str] = {}
-        fov_names: dict[str, str] = {}
         source_files: list[Path] | None = [Path(f) for f in files] if files else None
-
-        if auto_conditions:
-            from percell3.io import FileScanner, detect_conditions
-
-            scanner = FileScanner()
-            scan_result = scanner.scan(Path(source), files=source_files)
-            detection = detect_conditions(scan_result.fovs)
-            if detection is not None:
-                condition_map = dict(detection.condition_map)
-                fov_names = dict(detection.fov_name_map)
-                console.print(
-                    f"Auto-detected {len(detection.conditions)} conditions: "
-                    f"{', '.join(detection.conditions)}"
-                )
-            else:
-                console.print(
-                    "[yellow]No conditions detected, using single condition.[/yellow]"
-                )
-
         _run_import(
             store, source, condition, channel_map, z_projection, yes,
             bio_rep=bio_rep,
-            condition_map=condition_map, fov_names=fov_names,
             source_files=source_files,
         )
     finally:
@@ -108,6 +84,7 @@ def _run_import(
     bio_rep: str = "N1",
     condition_map: dict[str, str] | None = None,
     fov_names: dict[str, str] | None = None,
+    bio_rep_map: dict[str, str] | None = None,
     source_files: list[Path] | None = None,
     scan_result: ScanResult | None = None,
 ) -> None:
@@ -149,6 +126,7 @@ def _run_import(
         token_config=TokenConfig(),
         bio_rep=bio_rep,
         condition_map=condition_map or {},
+        bio_rep_map=bio_rep_map or {},
         source_files=source_files,
     )
 
@@ -204,6 +182,102 @@ def _show_preview(scan_result: ScanResult, source: str) -> None:
         for w in scan_result.warnings:
             console.print(f"  [yellow]Warning:[/yellow] {w}")
     console.print()
+
+
+@dataclass
+class FileGroup:
+    """A group of files sharing the same FOV token."""
+
+    token: str
+    files: list[DiscoveredFile]
+    channels: list[str]
+    z_slices: list[str]
+    shape: tuple[int, ...]
+
+
+def build_file_groups(scan_result: ScanResult) -> list[FileGroup]:
+    """Group discovered files by FOV token.
+
+    Returns:
+        List of FileGroup instances, sorted by token name.
+    """
+    groups: dict[str, list[DiscoveredFile]] = defaultdict(list)
+    for f in scan_result.files:
+        token = f.tokens.get("fov", "default")
+        groups[token].append(f)
+
+    result = []
+    for token in sorted(groups):
+        files = groups[token]
+        channels = sorted({f.tokens.get("channel", "0") for f in files})
+        z_slices = sorted({f.tokens["z_slice"] for f in files if "z_slice" in f.tokens})
+        shape = files[0].shape
+        result.append(FileGroup(
+            token=token,
+            files=files,
+            channels=channels,
+            z_slices=z_slices,
+            shape=shape,
+        ))
+    return result
+
+
+def show_file_group_table(
+    groups: list[FileGroup],
+    assignments: dict[str, tuple[str, str, str]] | None = None,
+) -> None:
+    """Display numbered table of file groups with optional assignment info.
+
+    Args:
+        groups: List of file groups to display.
+        assignments: Optional dict mapping token -> (condition, bio_rep, fov_name).
+    """
+    table = Table(show_header=True, title="File Groups")
+    table.add_column("#", style="bold", width=4)
+    table.add_column("File group")
+    table.add_column("Ch", justify="right")
+    table.add_column("Z", justify="right")
+    table.add_column("Files", justify="right")
+    table.add_column("Shape")
+    if assignments:
+        table.add_column("Condition", style="cyan")
+        table.add_column("Bio Rep", style="green")
+        table.add_column("FOV", style="yellow")
+
+    for i, g in enumerate(groups, 1):
+        shape_str = f"{g.shape[0]} x {g.shape[1]}" if len(g.shape) >= 2 else str(g.shape)
+        row = [
+            str(i),
+            g.token,
+            str(len(g.channels)),
+            str(len(g.z_slices)) if g.z_slices else "-",
+            str(len(g.files)),
+            shape_str,
+        ]
+        if assignments:
+            if g.token in assignments:
+                cond, bio, fov = assignments[g.token]
+                row.extend([cond, bio, fov])
+            else:
+                row.extend(["-", "-", "-"])
+        table.add_row(*row)
+
+    console.print(table)
+
+
+def next_fov_number(store: ExperimentStore, condition: str, bio_rep: str) -> int:
+    """Return next FOV number for the given (condition, bio_rep) scope.
+
+    Args:
+        store: The experiment store to query.
+        condition: Condition name.
+        bio_rep: Biological replicate name.
+
+    Returns:
+        The next sequential FOV number (1-based).
+    """
+    existing = store.get_fovs(condition=condition, bio_rep=bio_rep)
+    return len(existing) + 1
 
 
 def _parse_channel_maps(maps: tuple[str, ...]) -> list[ChannelMapping]:

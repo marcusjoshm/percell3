@@ -81,8 +81,8 @@ class ImportEngine:
             except DuplicateError:
                 pass
 
-        # Sanitize bio_rep once and use consistently
-        bio_rep = sanitize_name(plan.bio_rep)
+        # Sanitize default bio_rep (may be overridden per-group below)
+        default_bio_rep = sanitize_name(plan.bio_rep)
 
         # Register conditions (idempotent)
         # Bio reps are created lazily per condition when FOVs are added.
@@ -117,6 +117,11 @@ class ImportEngine:
         _existing_cache: dict[str, set[str]] = {}
 
         for idx, (fov_token, files) in enumerate(sorted(fov_files.items())):
+            # Skip unassigned groups when condition_map is non-empty
+            if plan.condition_map and fov_token not in plan.condition_map:
+                skipped += 1
+                continue
+
             fov_name = plan.fov_names.get(fov_token, sanitize_name(fov_token))
 
             # Determine condition for this FOV
@@ -125,18 +130,25 @@ class ImportEngine:
             else:
                 condition = sanitize_name(plan.condition)
 
+            # Determine bio_rep for this FOV (per-group or default)
+            if plan.bio_rep_map and fov_token in plan.bio_rep_map:
+                bio_rep = sanitize_name(plan.bio_rep_map[fov_token])
+            else:
+                bio_rep = default_bio_rep
+
             if progress_callback:
                 progress_callback(idx + 1, total_fovs, fov_name)
 
-            # Check existing FOVs (cached per condition)
-            if condition not in _existing_cache:
-                _existing_cache[condition] = {
+            # Check existing FOVs (cached per condition+bio_rep)
+            cache_key = f"{condition}:{bio_rep}"
+            if cache_key not in _existing_cache:
+                _existing_cache[cache_key] = {
                     f.name for f in store.get_fovs(
                         condition=condition, bio_rep=bio_rep,
                     )
                 }
 
-            if fov_name in _existing_cache[condition]:
+            if fov_name in _existing_cache[cache_key]:
                 warnings.append(f"FOV '{fov_name}' already exists in '{condition}', skipping")
                 skipped += 1
                 continue
@@ -158,7 +170,7 @@ class ImportEngine:
                 pixel_size_um=pixel_size,
                 source_file=str(first_file.path),
             )
-            _existing_cache[condition].add(fov_name)
+            _existing_cache[cache_key].add(fov_name)
 
             # Write each channel
             for ch_token, ch_files in sorted(channel_files.items()):

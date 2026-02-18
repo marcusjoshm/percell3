@@ -82,7 +82,8 @@ class TestScanEdgeCases:
         with pytest.raises(ValueError, match="No TIFF files"):
             scanner.scan(d)
 
-    def test_inconsistent_shapes_warns(self, tmp_path):
+    def test_mixed_shapes_no_warning(self, tmp_path):
+        """Different shapes across FOV groups should not produce a warning."""
         d = tmp_path / "mixed"
         d.mkdir()
         tifffile.imwrite(str(d / "a_ch00.tif"), np.zeros((64, 64), dtype=np.uint16))
@@ -90,7 +91,7 @@ class TestScanEdgeCases:
 
         scanner = FileScanner()
         result = scanner.scan(d)
-        assert any("Inconsistent shapes" in w for w in result.warnings)
+        assert not any("Inconsistent shapes" in w for w in result.warnings)
 
 
 class TestSymlinkGuard:

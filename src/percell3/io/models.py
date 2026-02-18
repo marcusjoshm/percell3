@@ -110,6 +110,7 @@ class ImportPlan:
     token_config: TokenConfig
     bio_rep: str = "N1"
     condition_map: dict[str, str] = field(default_factory=dict)
+    bio_rep_map: dict[str, str] = field(default_factory=dict)
     source_files: list[Path] | None = None  # Transient — not serialized to YAML
 
     def to_yaml(self, path: Path) -> None:

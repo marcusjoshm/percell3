@@ -364,19 +364,25 @@ def _create_experiment(state: MenuState) -> None:
 
 
 def _import_images(state: MenuState) -> None:
-    """Interactively import TIFF images."""
+    """Interactively import TIFF images using table-first assignment."""
     store = state.require_experiment()
 
-    # Get source path (and optionally an explicit file list)
+    # 1. Get source path (and optionally an explicit file list)
     source_str, source_files = _prompt_source_path()
     if source_str is None:
         raise _MenuCancel()
 
     source = Path(source_str)
 
-    # Scan for preview and interactive prompts
-    from percell3.io import FileScanner, detect_conditions
-    from percell3.cli.import_cmd import _show_preview, _run_import
+    # Scan source
+    from percell3.io import FileScanner
+    from percell3.cli.import_cmd import (
+        build_file_groups,
+        next_fov_number,
+        show_file_group_table,
+        _run_import,
+        _show_preview,
+    )
 
     scanner = FileScanner()
     try:
@@ -385,33 +391,16 @@ def _import_images(state: MenuState) -> None:
         console.print(f"[red]Error:[/red] {e}")
         return
 
+    # 2. Build and display file groups
+    groups = build_file_groups(scan_result)
+    if not groups:
+        console.print("[red]No file groups found.[/red]")
+        return
+
     _show_preview(scan_result, str(source))
+    show_file_group_table(groups)
 
-    # Condition auto-detection
-    condition = "default"
-    condition_map: dict[str, str] = {}
-    fov_names: dict[str, str] = {}
-
-    detection = detect_conditions(scan_result.fovs)
-    if detection is not None:
-        console.print(f"\n[bold]Detected conditions[/bold] (pattern: {detection.pattern_used}):")
-        # Group FOVs by condition for display
-        cond_fovs: dict[str, list[str]] = {}
-        for fov_token, cond in sorted(detection.condition_map.items()):
-            site = detection.fov_name_map[fov_token]
-            cond_fovs.setdefault(cond, []).append(site)
-        for cond_name, sites in sorted(cond_fovs.items()):
-            console.print(f"  {cond_name}: {', '.join(sorted(sites))}")
-
-        if numbered_select_one(["Yes", "No"], "Use detected conditions?") == "Yes":
-            condition_map = dict(detection.condition_map)
-            fov_names = dict(detection.fov_name_map)
-        else:
-            condition = menu_prompt("Condition name", default="default")
-    else:
-        condition = menu_prompt("Condition name", default="default")
-
-    # Channel mapping with auto-match
+    # 3. Channel mapping with auto-match
     channel_maps: tuple[str, ...] = ()
     if scan_result.channels:
         existing_channels = [ch.name for ch in store.get_channels()]
@@ -419,7 +408,7 @@ def _import_images(state: MenuState) -> None:
         if maps:
             channel_maps = tuple(maps)
 
-    # Z-projection
+    # 4. Z-projection
     z_method = "mip"
     if scan_result.z_slices:
         console.print("\n[bold]Z-projection method:[/bold]")
@@ -428,22 +417,186 @@ def _import_images(state: MenuState) -> None:
             "Z-projection method",
         )
 
-    # Biological replicate
-    bio_rep = _prompt_bio_rep(store)
+    # 5. Assignment loop
+    condition_map: dict[str, str] = {}
+    fov_names: dict[str, str] = {}
+    bio_rep_map: dict[str, str] = {}
+    assigned: set[int] = set()
 
-    # Confirm
+    if len(groups) == 1:
+        # Single-group fast path
+        g = groups[0]
+        condition = _prompt_condition_for_assignment(store)
+        bio_rep = _prompt_bio_rep_for_assignment(store, condition)
+        next_num = next_fov_number(store, condition, bio_rep)
+        condition_map[g.token] = condition
+        fov_names[g.token] = f"FOV_{next_num:03d}"
+        bio_rep_map[g.token] = bio_rep
+    else:
+        while len(assigned) < len(groups):
+            # Show unassigned groups
+            unassigned = [(i, g) for i, g in enumerate(groups) if i not in assigned]
+            console.print(f"\nUnassigned file groups ({len(unassigned)} remaining):")
+            _show_unassigned_groups(unassigned)
+
+            # Select groups
+            try:
+                selection_str = menu_prompt(
+                    "Select groups (numbers, 'all', or 'done')"
+                )
+            except _MenuCancel:
+                break
+
+            if selection_str.lower() == "done":
+                break
+
+            selected_indices = _parse_group_selection(selection_str, unassigned)
+            if not selected_indices:
+                continue
+
+            # Assign condition (with back-navigation safety)
+            try:
+                condition = _prompt_condition_for_assignment(store)
+            except _MenuCancel:
+                continue
+
+            # Assign bio rep (with back-navigation safety)
+            try:
+                bio_rep = _prompt_bio_rep_for_assignment(store, condition)
+            except _MenuCancel:
+                continue
+
+            # Auto-number FOVs within (condition, bio_rep) scope
+            existing_count = next_fov_number(store, condition, bio_rep)
+            already_assigned = sum(
+                1 for t, c in condition_map.items()
+                if c == condition and bio_rep_map.get(t) == bio_rep
+            )
+            base_num = existing_count + already_assigned
+
+            for offset, idx in enumerate(selected_indices):
+                g = groups[idx]
+                condition_map[g.token] = condition
+                fov_names[g.token] = f"FOV_{base_num + offset:03d}"
+                bio_rep_map[g.token] = bio_rep
+                assigned.add(idx)
+
+            # Show updated table with assignments
+            assignments = {
+                t: (condition_map[t], bio_rep_map[t], fov_names[t])
+                for t in condition_map
+            }
+            show_file_group_table(groups, assignments=assignments)
+
+    if not condition_map:
+        console.print("[yellow]No groups assigned. Import cancelled.[/yellow]")
+        return
+
+    # 6. Show assignment summary and confirm
+    _show_assignment_summary(condition_map, fov_names, bio_rep_map, groups)
     if numbered_select_one(["Yes", "No"], "Proceed with import?") != "Yes":
         console.print("[yellow]Import cancelled.[/yellow]")
         return
 
-    # Delegate to shared import pipeline (yes=True since we already confirmed).
-    # Pass scan_result to avoid a redundant second scan.
+    # 7. Execute import
+    default_condition = next(iter(condition_map.values()), "default")
+    default_bio_rep = next(iter(bio_rep_map.values()), "N1")
     _run_import(
-        store, str(source), condition, channel_maps, z_method, yes=True,
-        bio_rep=bio_rep,
+        store, str(source), default_condition, channel_maps, z_method,
+        yes=True, bio_rep=default_bio_rep,
         condition_map=condition_map, fov_names=fov_names,
+        bio_rep_map=bio_rep_map,
         source_files=source_files, scan_result=scan_result,
     )
+
+
+def _prompt_condition_for_assignment(store: ExperimentStore) -> str:
+    """Prompt for condition name, showing existing conditions as pick list."""
+    existing = store.get_conditions()
+    if existing:
+        options = existing + ["(new condition)"]
+        console.print("\n[bold]Conditions:[/bold]")
+        choice = numbered_select_one(options, "Condition")
+        if choice == "(new condition)":
+            return menu_prompt("New condition name")
+        return choice
+    return menu_prompt("Condition name")
+
+
+def _prompt_bio_rep_for_assignment(store: ExperimentStore, condition: str) -> str:
+    """Prompt for bio rep, showing existing bio reps for the chosen condition."""
+    existing = store.get_bio_reps(condition=condition)
+    if existing:
+        options = existing + ["(new bio rep)"]
+        console.print(f"\n[bold]Bio reps for '{condition}':[/bold]")
+        choice = numbered_select_one(options, "Biological replicate")
+        if choice == "(new bio rep)":
+            return menu_prompt("New bio rep name", default="N1")
+        return choice
+    return menu_prompt("Biological replicate", default="N1")
+
+
+def _show_unassigned_groups(unassigned: list[tuple[int, object]]) -> None:
+    """Print unassigned groups as a numbered list."""
+    for i, (_, g) in enumerate(unassigned, 1):
+        console.print(f"  \\[{i}] {g.token}")
+
+
+def _parse_group_selection(
+    selection: str,
+    unassigned: list[tuple[int, object]],
+) -> list[int]:
+    """Parse user selection into list of original group indices.
+
+    Returns empty list on invalid input (caller should re-prompt).
+    """
+    if selection.lower() == "all":
+        return [idx for idx, _ in unassigned]
+
+    parts = selection.split()
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        console.print("[red]Enter numbers separated by spaces, 'all', or 'done'.[/red]")
+        return []
+
+    if any(n < 1 or n > len(unassigned) for n in nums):
+        console.print(f"[red]Numbers must be 1-{len(unassigned)}.[/red]")
+        return []
+
+    # Map 1-based selection to original indices
+    return [unassigned[n - 1][0] for n in nums]
+
+
+def _show_assignment_summary(
+    condition_map: dict[str, str],
+    fov_names: dict[str, str],
+    bio_rep_map: dict[str, str],
+    groups: list[object],
+) -> None:
+    """Display final assignment summary before confirmation."""
+    from rich.table import Table as RichTable
+
+    console.print("\n[bold]Assignment Summary[/bold]\n")
+
+    table = RichTable(show_header=True)
+    table.add_column("File group")
+    table.add_column("Condition", style="cyan")
+    table.add_column("Bio Rep", style="green")
+    table.add_column("FOV Name", style="yellow")
+
+    for g in groups:
+        if g.token in condition_map:
+            table.add_row(
+                g.token,
+                condition_map[g.token],
+                bio_rep_map.get(g.token, "N1"),
+                fov_names.get(g.token, g.token),
+            )
+        else:
+            table.add_row(g.token, "[dim]skipped[/dim]", "", "")
+
+    console.print(table)
 
 
 def _segment_cells(state: MenuState) -> None:

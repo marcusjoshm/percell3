@@ -101,11 +101,6 @@ class FileScanner:
                 )
                 scan_pixel_size = pixel_sizes[0]
 
-        # Check shape consistency
-        shapes = {f.shape for f in discovered}
-        if len(shapes) > 1:
-            warnings.append(f"Inconsistent shapes across files: {sorted(shapes)}")
-
         return ScanResult(
             source_path=path,
             files=discovered,

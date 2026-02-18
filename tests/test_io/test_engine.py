@@ -348,6 +348,64 @@ class TestMultiConditionImport:
             assert r2.skipped == 2
 
 
+class TestBioRepMap:
+    def test_per_group_bio_rep(self, tmp_path):
+        """bio_rep_map assigns different bio reps per FOV token."""
+        d1 = np.random.randint(0, 65535, (32, 32), dtype=np.uint16)
+        d2 = np.random.randint(0, 65535, (32, 32), dtype=np.uint16)
+        tiff_dir = _make_tiff_dir(tmp_path, {
+            "fov_a_ch00.tif": d1,
+            "fov_b_ch00.tif": d2,
+        })
+
+        with ExperimentStore.create(tmp_path / "test.percell") as store:
+            plan = ImportPlan(
+                source_path=tiff_dir,
+                condition="default",
+                channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
+                fov_names={"fov_a": "FOV_001", "fov_b": "FOV_001"},
+                z_transform=ZTransform(method="mip"),
+                pixel_size_um=0.65,
+                token_config=TokenConfig(),
+                condition_map={"fov_a": "ctrl", "fov_b": "treated"},
+                bio_rep_map={"fov_a": "N1", "fov_b": "N2"},
+            )
+            engine = ImportEngine()
+            result = engine.execute(plan, store)
+
+            assert result.fovs_imported == 2
+            fovs_ctrl = store.get_fovs(condition="ctrl", bio_rep="N1")
+            fovs_treated = store.get_fovs(condition="treated", bio_rep="N2")
+            assert len(fovs_ctrl) == 1
+            assert len(fovs_treated) == 1
+
+    def test_skips_unassigned_groups(self, tmp_path):
+        """Groups not in condition_map are skipped when condition_map is non-empty."""
+        d1 = np.random.randint(0, 65535, (32, 32), dtype=np.uint16)
+        d2 = np.random.randint(0, 65535, (32, 32), dtype=np.uint16)
+        tiff_dir = _make_tiff_dir(tmp_path, {
+            "assigned_ch00.tif": d1,
+            "skipped_ch00.tif": d2,
+        })
+
+        with ExperimentStore.create(tmp_path / "test.percell") as store:
+            plan = ImportPlan(
+                source_path=tiff_dir,
+                condition="default",
+                channel_mappings=[ChannelMapping(token_value="00", name="DAPI")],
+                fov_names={"assigned": "FOV_001"},
+                z_transform=ZTransform(method="mip"),
+                pixel_size_um=0.65,
+                token_config=TokenConfig(),
+                condition_map={"assigned": "ctrl"},
+            )
+            engine = ImportEngine()
+            result = engine.execute(plan, store)
+
+            assert result.fovs_imported == 1
+            assert result.skipped == 1
+
+
 class TestEdgeCases:
     def test_invalid_source_path(self, tmp_path):
         with ExperimentStore.create(tmp_path / "test.percell") as store:
