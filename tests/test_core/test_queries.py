@@ -444,3 +444,55 @@ class TestInsertCellsRollback:
         # After rollback, no cells should be in the table
         count = db_conn.execute("SELECT COUNT(*) FROM cells").fetchone()[0]
         assert count == 0
+
+
+class TestRenameQueries:
+    def test_rename_experiment(self, db_conn):
+        queries.rename_experiment(db_conn, "New Name")
+        assert queries.get_experiment_name(db_conn) == "New Name"
+
+    def test_rename_condition(self, db_conn):
+        queries.insert_condition(db_conn, "control")
+        queries.rename_condition(db_conn, "control", "ctrl")
+        conds = queries.select_conditions(db_conn)
+        assert "ctrl" in conds
+        assert "control" not in conds
+
+    def test_rename_condition_not_found(self, db_conn):
+        with pytest.raises(ConditionNotFoundError):
+            queries.rename_condition(db_conn, "NOPE", "new")
+
+    def test_rename_condition_duplicate(self, db_conn):
+        queries.insert_condition(db_conn, "control")
+        queries.insert_condition(db_conn, "treated")
+        with pytest.raises(DuplicateError):
+            queries.rename_condition(db_conn, "control", "treated")
+
+    def test_rename_channel(self, db_conn):
+        queries.insert_channel(db_conn, "DAPI")
+        queries.rename_channel(db_conn, "DAPI", "Hoechst")
+        ch = queries.select_channel_by_name(db_conn, "Hoechst")
+        assert ch.name == "Hoechst"
+
+    def test_rename_channel_duplicate(self, db_conn):
+        queries.insert_channel(db_conn, "DAPI")
+        queries.insert_channel(db_conn, "GFP")
+        with pytest.raises(DuplicateError):
+            queries.rename_channel(db_conn, "DAPI", "GFP")
+
+    def test_rename_bio_rep(self, db_conn):
+        queries.rename_bio_rep(db_conn, "N1", "Rep1")
+        reps = queries.select_bio_reps(db_conn)
+        assert "Rep1" in reps
+        assert "N1" not in reps
+
+    def test_rename_fov(self, db_conn):
+        queries.insert_condition(db_conn, "control")
+        cid = queries.select_condition_id(db_conn, "control")
+        bid = queries.select_bio_rep_by_name(db_conn, "N1")["id"]
+        queries.insert_fov(db_conn, "FOV_1", condition_id=cid, bio_rep_id=bid)
+        queries.rename_fov(db_conn, "FOV_1", "FOV_A", cid, bid)
+        fovs = queries.select_fovs(db_conn, condition_id=cid)
+        names = [f.name for f in fovs]
+        assert "FOV_A" in names
+        assert "FOV_1" not in names

@@ -3,11 +3,33 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from click.testing import CliRunner
 
+from percell3.cli import _recent
 from percell3.cli.main import cli
-from percell3.cli.menu import MenuState, _show_header, _show_menu
+from percell3.cli.menu import (
+    MenuState,
+    _MenuCancel,
+    _MenuHome,
+    _print_numbered_list,
+    _show_header,
+    _show_menu,
+    menu_prompt,
+    numbered_select_many,
+    numbered_select_one,
+)
+from percell3.cli.utils import console
 from percell3.core import ExperimentStore
+
+
+@pytest.fixture(autouse=True)
+def _isolate_recent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Redirect recent experiments to a temp directory to isolate tests."""
+    config_dir = tmp_path / "config"
+    recent_file = config_dir / "recent.json"
+    monkeypatch.setattr(_recent, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(_recent, "_RECENT_FILE", recent_file)
 
 
 def _invoke_menu(runner: CliRunner, args=None, **kwargs):
@@ -36,7 +58,8 @@ class TestMenuLaunch:
         assert "not yet available" in result.output
 
     def test_help_shows_commands(self, runner: CliRunner):
-        result = _invoke_menu(runner, input="h\nq\n")
+        # Help is now '?' instead of 'h'
+        result = _invoke_menu(runner, input="?\nq\n")
         assert "percell3 create" in result.output
         assert "percell3 import" in result.output
 
@@ -101,3 +124,145 @@ class TestMenuSelectExperiment:
             input="e\n/nonexistent/path.percell\nq\n",
         )
         assert "does not exist" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Navigation tests (Phase 2A)
+# ---------------------------------------------------------------------------
+
+
+class TestMenuPrompt:
+    """Tests for the menu_prompt() helper."""
+
+    def test_returns_valid_choice(self):
+        with patch.object(console, "input", return_value="y"):
+            result = menu_prompt("Confirm?", choices=["y", "n"])
+        assert result == "y"
+
+    def test_rejects_invalid_choice(self):
+        with patch.object(console, "input", side_effect=["x", "y"]):
+            result = menu_prompt("Confirm?", choices=["y", "n"])
+        assert result == "y"
+
+    def test_b_raises_cancel(self):
+        with patch.object(console, "input", return_value="b"):
+            with pytest.raises(_MenuCancel):
+                menu_prompt("Pick")
+
+    def test_h_raises_home(self):
+        with patch.object(console, "input", return_value="h"):
+            with pytest.raises(_MenuHome):
+                menu_prompt("Pick")
+
+    def test_q_raises_cancel_in_subprompt(self):
+        """q in a sub-prompt acts as back (cancel), not quit."""
+        with patch.object(console, "input", return_value="q"):
+            with pytest.raises(_MenuCancel):
+                menu_prompt("Pick")
+
+    def test_default_on_empty_input(self):
+        with patch.object(console, "input", return_value=""):
+            result = menu_prompt("Name", default="foo")
+        assert result == "foo"
+
+    def test_eof_raises_cancel(self):
+        with patch.object(console, "input", side_effect=EOFError):
+            with pytest.raises(_MenuCancel):
+                menu_prompt("Pick")
+
+    def test_freeform_without_choices(self):
+        with patch.object(console, "input", return_value="/some/path"):
+            result = menu_prompt("Path")
+        assert result == "/some/path"
+
+
+class TestHomeNavigation:
+    """Test that 'h' from nested menus returns to home."""
+
+    def test_h_from_query_returns_to_home(self, runner: CliRunner, experiment_path: Path):
+        # Open experiment, enter query, press h, then q
+        result = _invoke_menu(
+            runner,
+            input=f"e\n{experiment_path}\n7\nh\nq\n",
+        )
+        assert result.exit_code == 0
+        # Should see the menu header twice (once before query, once after h returns home)
+        assert result.output.count("PerCell 3") >= 2
+
+
+# ---------------------------------------------------------------------------
+# Numbered selection tests (Phase 2B)
+# ---------------------------------------------------------------------------
+
+
+class TestNumberedSelectOne:
+    def test_single_item_auto_selects(self):
+        result = numbered_select_one(["only"])
+        assert result == "only"
+
+    def test_selects_by_number(self):
+        with patch.object(console, "input", return_value="2"):
+            result = numbered_select_one(["a", "b", "c"])
+        assert result == "b"
+
+    def test_b_raises_cancel(self):
+        with patch.object(console, "input", return_value="b"):
+            with pytest.raises(_MenuCancel):
+                numbered_select_one(["a", "b"])
+
+    def test_h_raises_home(self):
+        with patch.object(console, "input", return_value="h"):
+            with pytest.raises(_MenuHome):
+                numbered_select_one(["a", "b"])
+
+    def test_invalid_number_reprompts(self):
+        with patch.object(console, "input", side_effect=["0", "5", "1"]):
+            result = numbered_select_one(["a", "b", "c"])
+        assert result == "a"
+
+    def test_empty_list_raises(self):
+        with pytest.raises(ValueError, match="empty"):
+            numbered_select_one([])
+
+
+class TestNumberedSelectMany:
+    def test_all_keyword(self):
+        with patch.object(console, "input", return_value="all"):
+            result = numbered_select_many(["a", "b", "c"])
+        assert result == ["a", "b", "c"]
+
+    def test_space_separated(self):
+        with patch.object(console, "input", return_value="1 3"):
+            result = numbered_select_many(["a", "b", "c"])
+        assert result == ["a", "c"]
+
+    def test_duplicates_deduplicated(self):
+        with patch.object(console, "input", return_value="2 2 1"):
+            result = numbered_select_many(["a", "b", "c"])
+        assert result == ["a", "b"]
+
+    def test_out_of_range_reprompts(self):
+        with patch.object(console, "input", side_effect=["0 4", "1 2"]):
+            result = numbered_select_many(["a", "b", "c"])
+        assert result == ["a", "b"]
+
+    def test_non_numeric_reprompts(self):
+        with patch.object(console, "input", side_effect=["abc", "2"]):
+            result = numbered_select_many(["a", "b", "c"])
+        assert result == ["b"]
+
+    def test_b_raises_cancel(self):
+        with patch.object(console, "input", return_value="b"):
+            with pytest.raises(_MenuCancel):
+                numbered_select_many(["a", "b"])
+
+    def test_empty_list_raises(self):
+        with pytest.raises(ValueError, match="empty"):
+            numbered_select_many([])
+
+
+class TestPrintNumberedList:
+    def test_pagination(self, capsys):
+        items = [f"item_{i}" for i in range(25)]
+        _print_numbered_list(items, page_size=20)
+        # capsys won't capture rich console output, but at least ensure no crash

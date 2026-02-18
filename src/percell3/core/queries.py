@@ -685,3 +685,67 @@ def delete_cell_tags(
         [tag_id, *cell_ids],
     )
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Rename operations
+# ---------------------------------------------------------------------------
+
+
+def rename_experiment(conn: sqlite3.Connection, new_name: str) -> None:
+    """Rename the experiment (SQLite only, does not rename the directory)."""
+    conn.execute("UPDATE experiments SET name = ?", (new_name,))
+    conn.commit()
+
+
+def rename_condition(conn: sqlite3.Connection, old_name: str, new_name: str) -> None:
+    """Rename a condition. Raises ConditionNotFoundError / DuplicateError."""
+    cid = select_condition_id(conn, old_name)
+    try:
+        conn.execute("UPDATE conditions SET name = ? WHERE id = ?", (new_name, cid))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise DuplicateError("condition", new_name)
+
+
+def rename_channel(conn: sqlite3.Connection, old_name: str, new_name: str) -> None:
+    """Rename a channel. Raises ChannelNotFoundError / DuplicateError."""
+    ch = select_channel_by_name(conn, old_name)
+    try:
+        conn.execute("UPDATE channels SET name = ? WHERE id = ?", (new_name, ch.id))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise DuplicateError("channel", new_name)
+
+
+def rename_bio_rep(conn: sqlite3.Connection, old_name: str, new_name: str) -> None:
+    """Rename a biological replicate. Raises BioRepNotFoundError / DuplicateError."""
+    row = select_bio_rep_by_name(conn, old_name)
+    try:
+        conn.execute("UPDATE bio_reps SET name = ? WHERE id = ?", (new_name, row["id"]))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise DuplicateError("bio_rep", new_name)
+
+
+def rename_fov(
+    conn: sqlite3.Connection,
+    old_name: str,
+    new_name: str,
+    condition_id: int,
+    bio_rep_id: int,
+) -> None:
+    """Rename a FOV within a specific condition and bio-rep.
+
+    Raises FovNotFoundError / DuplicateError.
+    """
+    fov = select_fov_by_name(conn, old_name, condition_id=condition_id, bio_rep_id=bio_rep_id)
+    try:
+        conn.execute("UPDATE fovs SET name = ? WHERE id = ?", (new_name, fov.id))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise DuplicateError("fov", new_name)

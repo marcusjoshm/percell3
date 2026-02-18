@@ -40,6 +40,73 @@ from percell3.core.models import CellRecord, ChannelConfig, FovInfo, Measurement
 from percell3.core.schema import create_schema, open_database
 
 
+def _move_zarr_children(
+    store_path: Path,
+    old_name: str,
+    new_name: str,
+    level: str,
+    parent_prefix: str = "",
+) -> None:
+    """Move zarr groups when renaming an entity.
+
+    For bio_rep/condition-level renames, moves the top-level group.
+    For fov-level renames, moves within a parent prefix.
+    Does nothing if the source doesn't exist (e.g., no data yet).
+    """
+    import zarr
+
+    if not store_path.exists():
+        return
+    root = zarr.open_group(str(store_path), mode="r+")
+
+    if level == "bio_rep":
+        # Top-level group rename: old_name → new_name
+        if old_name in root:
+            root.move(old_name, new_name)
+    elif level == "condition":
+        # condition lives under each bio_rep: {bio_rep}/{old_name} → {bio_rep}/{new_name}
+        for br_name in list(root.keys()):
+            br_group = root[br_name]
+            if hasattr(br_group, "keys") and old_name in br_group:
+                br_group.move(old_name, new_name)
+    elif level == "fov":
+        # FOV lives under parent_prefix: {prefix}/{old_name} → {prefix}/{new_name}
+        if parent_prefix:
+            try:
+                parent = root[parent_prefix]
+            except KeyError:
+                return
+        else:
+            parent = root
+        if hasattr(parent, "keys") and old_name in parent:
+            parent.move(old_name, new_name)
+
+
+def _rename_mask_groups(
+    masks_path: Path,
+    old_channel: str,
+    new_channel: str,
+) -> None:
+    """Rename threshold_<old> groups to threshold_<new> in the masks store."""
+    import zarr
+
+    if not masks_path.exists():
+        return
+    root = zarr.open_group(str(masks_path), mode="r+")
+    old_suffix = f"threshold_{old_channel}"
+    new_suffix = f"threshold_{new_channel}"
+
+    def _walk_and_rename(group: zarr.Group) -> None:
+        for key in list(group.keys()):
+            child = group[key]
+            if key == old_suffix:
+                group.move(key, new_suffix)
+            elif hasattr(child, "keys"):
+                _walk_and_rename(child)
+
+    _walk_and_rename(root)
+
+
 class ExperimentStore:
     """Central interface for a PerCell 3 experiment.
 
@@ -233,6 +300,54 @@ class ExperimentStore:
         return queries.select_fovs(
             self._conn, condition_id=cond_id, bio_rep_id=br_id, timepoint_id=tp_id,
         )
+
+    # --- Rename operations ---
+
+    def rename_experiment(self, new_name: str) -> None:
+        """Rename the experiment (metadata only, does not rename directory)."""
+        queries.rename_experiment(self._conn, new_name)
+
+    def rename_condition(self, old_name: str, new_name: str) -> None:
+        """Rename a condition. Updates SQLite and moves zarr groups."""
+        _validate_name(new_name, "condition name")
+        # Move zarr groups first; if this fails, SQLite stays unchanged
+        for store_path in (self.images_zarr_path, self.labels_zarr_path, self.masks_zarr_path):
+            _move_zarr_children(store_path, old_name, new_name, level="condition")
+        queries.rename_condition(self._conn, old_name, new_name)
+
+    def rename_channel(self, old_name: str, new_name: str) -> None:
+        """Rename a channel. Updates SQLite and NGFF metadata."""
+        _validate_name(new_name, "channel name")
+        queries.rename_channel(self._conn, old_name, new_name)
+        # Update NGFF channel labels in images.zarr
+        zarr_io.rename_channel_in_ngff(self.images_zarr_path, old_name, new_name)
+        # Rename threshold mask groups
+        _rename_mask_groups(self.masks_zarr_path, old_name, new_name)
+
+    def rename_bio_rep(self, old_name: str, new_name: str) -> None:
+        """Rename a biological replicate. Updates SQLite and moves zarr groups."""
+        _validate_name(new_name, "bio_rep name")
+        for store_path in (self.images_zarr_path, self.labels_zarr_path, self.masks_zarr_path):
+            _move_zarr_children(store_path, old_name, new_name, level="bio_rep")
+        queries.rename_bio_rep(self._conn, old_name, new_name)
+
+    def rename_fov(
+        self,
+        old_name: str,
+        new_name: str,
+        condition: str,
+        bio_rep: str | None = None,
+    ) -> None:
+        """Rename a FOV within a condition/bio-rep. Updates SQLite and moves zarr groups."""
+        _validate_name(new_name, "fov name")
+        br_id, br_name = self._resolve_bio_rep(bio_rep)
+        cond_id = queries.select_condition_id(self._conn, condition)
+        for store_path in (self.images_zarr_path, self.labels_zarr_path, self.masks_zarr_path):
+            _move_zarr_children(
+                store_path, old_name, new_name,
+                level="fov", parent_prefix=f"{br_name}/{condition}",
+            )
+        queries.rename_fov(self._conn, old_name, new_name, cond_id, br_id)
 
     # --- Image I/O ---
 

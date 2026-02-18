@@ -356,3 +356,43 @@ def init_zarr_store(zarr_path: Path) -> None:
     """Create an empty zarr group at the given path."""
     root = zarr.open(str(zarr_path), mode="w")
     root.attrs["percell_version"] = "3.1.0"
+
+
+# ---------------------------------------------------------------------------
+# Rename helpers
+# ---------------------------------------------------------------------------
+
+
+def rename_channel_in_ngff(
+    images_zarr_path: Path,
+    old_name: str,
+    new_name: str,
+) -> None:
+    """Update NGFF omero channel labels when a channel is renamed.
+
+    Walks all groups and updates .zattrs where the old channel name appears.
+    """
+    if not images_zarr_path.exists():
+        return
+    root = zarr.open_group(str(images_zarr_path), mode="r+")
+
+    def _walk(group: zarr.Group) -> None:
+        attrs = dict(group.attrs)
+        omero = attrs.get("omero")
+        if omero and "channels" in omero:
+            changed = False
+            for ch in omero["channels"]:
+                if ch.get("label") == old_name:
+                    ch["label"] = new_name
+                    changed = True
+            if changed:
+                group.attrs["omero"] = omero
+        for key in list(group.keys()):
+            child = group[key]
+            if hasattr(child, "attrs"):
+                try:
+                    _walk(child)
+                except Exception:
+                    pass  # skip non-group children
+
+    _walk(root)

@@ -748,3 +748,81 @@ class TestBioRepNameValidation:
         experiment.add_bio_rep("bio-rep-3")
         experiment.add_bio_rep("sample_A")
         assert len(experiment.get_bio_reps()) == 4  # N1 + 3 new
+
+
+class TestRenameExperiment:
+    def test_rename_experiment(self, experiment):
+        experiment.rename_experiment("New Name")
+        assert experiment.name == "New Name"
+
+
+class TestRenameCondition:
+    def test_rename_condition(self, experiment):
+        experiment.add_condition("old_cond")
+        experiment.rename_condition("old_cond", "new_cond")
+        assert "new_cond" in experiment.get_conditions()
+        assert "old_cond" not in experiment.get_conditions()
+
+    def test_rename_condition_with_data(self, experiment):
+        """Rename a condition that has images stored in zarr."""
+        experiment.add_channel("DAPI")
+        experiment.add_condition("ctrl")
+        experiment.add_fov("FOV1", "ctrl", width=64, height=64)
+        data = np.zeros((64, 64), dtype=np.uint16)
+        experiment.write_image("FOV1", "ctrl", "DAPI", data)
+
+        experiment.rename_condition("ctrl", "control")
+        assert "control" in experiment.get_conditions()
+        # Verify data is still readable under the new name
+        img = experiment.read_image("FOV1", "control", "DAPI")
+        assert img.shape == (64, 64)
+
+
+class TestRenameChannel:
+    def test_rename_channel(self, experiment):
+        experiment.add_channel("DAPI")
+        experiment.rename_channel("DAPI", "Hoechst")
+        ch_names = [ch.name for ch in experiment.get_channels()]
+        assert "Hoechst" in ch_names
+        assert "DAPI" not in ch_names
+
+
+class TestRenameBioRep:
+    def test_rename_bio_rep(self, experiment):
+        experiment.rename_bio_rep("N1", "Rep1")
+        assert "Rep1" in experiment.get_bio_reps()
+        assert "N1" not in experiment.get_bio_reps()
+
+    def test_rename_bio_rep_with_data(self, experiment):
+        """Rename a bio-rep that has images stored in zarr."""
+        experiment.add_channel("DAPI")
+        experiment.add_condition("ctrl")
+        experiment.add_fov("FOV1", "ctrl", width=64, height=64)
+        data = np.zeros((64, 64), dtype=np.uint16)
+        experiment.write_image("FOV1", "ctrl", "DAPI", data)
+
+        experiment.rename_bio_rep("N1", "Rep1")
+        assert "Rep1" in experiment.get_bio_reps()
+        img = experiment.read_image("FOV1", "ctrl", "DAPI", bio_rep="Rep1")
+        assert img.shape == (64, 64)
+
+
+class TestRenameFov:
+    def test_rename_fov(self, experiment):
+        experiment.add_condition("ctrl")
+        experiment.add_fov("FOV1", "ctrl")
+        experiment.rename_fov("FOV1", "FOV_A", "ctrl")
+        fov_names = [f.name for f in experiment.get_fovs()]
+        assert "FOV_A" in fov_names
+        assert "FOV1" not in fov_names
+
+    def test_rename_fov_with_data(self, experiment):
+        experiment.add_channel("DAPI")
+        experiment.add_condition("ctrl")
+        experiment.add_fov("FOV1", "ctrl", width=64, height=64)
+        data = np.zeros((64, 64), dtype=np.uint16)
+        experiment.write_image("FOV1", "ctrl", "DAPI", data)
+
+        experiment.rename_fov("FOV1", "FOV_A", "ctrl")
+        img = experiment.read_image("FOV_A", "ctrl", "DAPI")
+        assert img.shape == (64, 64)

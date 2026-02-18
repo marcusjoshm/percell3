@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from rich.prompt import Prompt
-
 from percell3.cli.utils import console, make_progress, open_experiment
 
 if TYPE_CHECKING:
@@ -62,12 +60,156 @@ class MenuState:
 
 
 class _MenuCancel(Exception):
-    """Raised when user cancels an interactive operation."""
+    """Raised when user cancels an interactive operation (go back one level)."""
+
+
+class _MenuHome(Exception):
+    """Raised when user presses 'h' to return to the home menu."""
+
+
+# ---------------------------------------------------------------------------
+# Navigation-aware prompt helpers
+# ---------------------------------------------------------------------------
+
+
+def menu_prompt(
+    prompt: str,
+    *,
+    choices: list[str] | None = None,
+    default: str | None = None,
+) -> str:
+    """Prompt with universal navigation keys.
+
+    Always accepts 'h' (home) and 'b' (back).  Validates against *choices*
+    manually so that Rich doesn't reject the nav keys.
+
+    Raises:
+        _MenuHome: when user enters 'h'.
+        _MenuCancel: when user enters 'b' or on EOFError.
+    """
+    hint = " (h=home, b=back)"
+    full_prompt = prompt + hint
+
+    while True:
+        try:
+            raw = console.input(f"{full_prompt}: ").strip()
+        except EOFError:
+            raise _MenuCancel()
+
+        if not raw and default is not None:
+            return default
+        if not raw:
+            continue
+
+        lower = raw.lower()
+        if lower == "h":
+            raise _MenuHome()
+        if lower in ("b", "q"):
+            raise _MenuCancel()
+
+        if choices is not None and raw not in choices:
+            valid = ", ".join(choices)
+            console.print(f"[red]Invalid choice.[/red] Options: {valid}")
+            continue
+
+        return raw
+
+
+def numbered_select_one(
+    items: list[str],
+    prompt: str = "Select",
+) -> str:
+    """Display a numbered list and return the selected item.
+
+    Auto-selects when only one option exists.
+
+    Raises:
+        _MenuHome / _MenuCancel via menu_prompt.
+    """
+    if not items:
+        raise ValueError("numbered_select_one called with empty list")
+
+    if len(items) == 1:
+        console.print(f"  [dim](auto-selected: {items[0]})[/dim]")
+        return items[0]
+
+    _print_numbered_list(items)
+    valid = [str(i) for i in range(1, len(items) + 1)]
+    choice = menu_prompt(prompt, choices=valid)
+    return items[int(choice) - 1]
+
+
+def numbered_select_many(
+    items: list[str],
+    prompt: str = "Select (space-separated, or 'all')",
+) -> list[str]:
+    """Display a numbered list and return selected items.
+
+    Supports space-separated numbers and 'all'.
+
+    Raises:
+        _MenuHome / _MenuCancel via menu_prompt.
+    """
+    if not items:
+        raise ValueError("numbered_select_many called with empty list")
+
+    _print_numbered_list(items)
+
+    while True:
+        raw = menu_prompt(prompt)
+
+        if raw.lower() == "all":
+            return list(items)
+
+        parts = raw.split()
+        try:
+            indices = list({int(p) for p in parts})  # deduplicate
+        except ValueError:
+            console.print("[red]Enter numbers separated by spaces, or 'all'.[/red]")
+            continue
+
+        if any(i < 1 or i > len(items) for i in indices):
+            console.print(f"[red]Numbers must be 1-{len(items)}.[/red]")
+            continue
+
+        if not indices:
+            continue
+
+        indices.sort()
+        return [items[i - 1] for i in indices]
+
+
+def _print_numbered_list(items: list[str], *, page_size: int = 20) -> None:
+    """Print items as a numbered list, paginating if needed."""
+    show = items if len(items) <= page_size else items[:page_size]
+    for i, item in enumerate(show, 1):
+        console.print(f"  \\[{i}] {item}")
+    if len(items) > page_size:
+        remaining = len(items) - page_size
+        console.print(f"  [dim]... and {remaining} more (enter number to select)[/dim]")
+
+
+def _try_auto_load(state: MenuState) -> None:
+    """Try to auto-load the most recent experiment. Never raises."""
+    try:
+        from percell3.cli._recent import load_recent
+
+        recent = load_recent()
+        if recent:
+            path = Path(recent[0])
+            if path.exists():
+                state.set_experiment(path)
+                console.print(f"[dim]Auto-loaded: {path}[/dim]")
+    except Exception as e:
+        console.print(f"[dim]Could not auto-load last experiment: {e}[/dim]")
 
 
 def run_interactive_menu() -> None:
     """Run the interactive menu loop."""
     state = MenuState()
+
+    # Auto-load last-used experiment
+    _try_auto_load(state)
 
     menu_items: list[MenuItem] = [
         MenuItem("1", "Create experiment", _create_experiment, enabled=True),
@@ -77,13 +219,16 @@ def run_interactive_menu() -> None:
         MenuItem("5", "Measure channels", None, enabled=False),
         MenuItem("6", "Apply threshold", None, enabled=False),
         MenuItem("7", "Query experiment", _query_experiment, enabled=True),
-        MenuItem("8", "Export to CSV", _export_csv, enabled=True),
-        MenuItem("9", "Run workflow", _run_workflow, enabled=True),
+        MenuItem("8", "Edit experiment", _edit_experiment, enabled=True),
+        MenuItem("9", "Export to CSV", _export_csv, enabled=True),
+        MenuItem("w", "Run workflow", _run_workflow, enabled=True),
         MenuItem("0", "Plugin manager", None, enabled=False),
         MenuItem("e", "Select experiment", _select_experiment, enabled=True),
-        MenuItem("h", "Help", _show_help, enabled=True),
+        MenuItem("?", "Help", _show_help, enabled=True),
         MenuItem("q", "Quit", None, enabled=True),
     ]
+
+    valid_keys = [item.key for item in menu_items]
 
     try:
         while state.running:
@@ -91,11 +236,12 @@ def run_interactive_menu() -> None:
             _show_menu(menu_items)
 
             try:
-                choice = Prompt.ask("\nSelect an option", default="q")
+                choice = console.input("\nSelect an option: ").strip()
             except EOFError:
-                # Non-interactive (piped stdin) — exit cleanly.
                 break
 
+            if not choice:
+                choice = "q"
             if choice == "q":
                 break
 
@@ -122,6 +268,9 @@ def run_interactive_menu() -> None:
 
                 try:
                     handler(state)
+                except _MenuHome:
+                    # Return to top of the main menu loop.
+                    continue
                 except _MenuCancel:
                     console.print("[dim]Cancelled.[/dim]")
                 except ExperimentError as e:
@@ -156,10 +305,26 @@ def _show_menu(items: list[MenuItem]) -> None:
 
 
 def _select_experiment(state: MenuState) -> None:
-    """Prompt user to select an existing experiment."""
-    path_str = Prompt.ask("Path to .percell experiment (or 'b' to go back)")
-    if path_str.lower() == "b":
-        raise _MenuCancel()
+    """Prompt user to select an existing experiment, with recent history."""
+    from percell3.cli._recent import add_to_recent, load_recent
+
+    recent = load_recent()
+
+    if recent:
+        console.print("\n[bold]Recent experiments:[/bold]")
+        for i, p in enumerate(recent, 1):
+            console.print(f"  \\[{i}] {p}")
+        console.print(f"  \\[n] Enter new path")
+
+        valid = [str(i) for i in range(1, len(recent) + 1)] + ["n"]
+        choice = menu_prompt("Select", choices=valid)
+
+        if choice == "n":
+            path_str = menu_prompt("Path to .percell experiment")
+        else:
+            path_str = recent[int(choice) - 1]
+    else:
+        path_str = menu_prompt("Path to .percell experiment")
 
     path = Path(path_str).expanduser()
     if not path.exists():
@@ -167,6 +332,7 @@ def _select_experiment(state: MenuState) -> None:
         return
     try:
         state.set_experiment(path)
+        add_to_recent(path)
         console.print(f"[green]Opened experiment at {path}[/green]\n")
     except Exception as e:
         console.print(f"[red]Error opening experiment:[/red] {e}")
@@ -174,17 +340,16 @@ def _select_experiment(state: MenuState) -> None:
 
 def _create_experiment(state: MenuState) -> None:
     """Interactively create a new experiment."""
-    path_str = Prompt.ask("Path for new experiment (or 'b' to go back)")
-    if path_str.lower() == "b":
-        raise _MenuCancel()
+    path_str = menu_prompt("Path for new experiment")
 
     path = Path(path_str).expanduser()
-    name = Prompt.ask("Experiment name", default="")
-    description = Prompt.ask("Description", default="")
+    name = menu_prompt("Experiment name", default="")
+    description = menu_prompt("Description", default="")
 
     try:
         from percell3.core import ExperimentStore
         from percell3.core.exceptions import ExperimentError
+        from percell3.cli._recent import add_to_recent
 
         store = ExperimentStore.create(path, name=name, description=description)
         console.print(f"[green]Created experiment at {path}[/green]\n")
@@ -193,6 +358,7 @@ def _create_experiment(state: MenuState) -> None:
         if state.store:
             state.store.close()
         state.store = store
+        add_to_recent(path)
     except ExperimentError as e:
         console.print(f"[red]Error:[/red] {e}")
 
@@ -237,31 +403,28 @@ def _import_images(state: MenuState) -> None:
         for cond_name, sites in sorted(cond_fovs.items()):
             console.print(f"  {cond_name}: {', '.join(sorted(sites))}")
 
-        if Prompt.ask(
+        if menu_prompt(
             "Use detected conditions?", choices=["y", "n"], default="y"
         ) == "y":
             condition_map = dict(detection.condition_map)
             fov_names = dict(detection.fov_name_map)
         else:
-            condition = Prompt.ask("Condition name", default="default")
+            condition = menu_prompt("Condition name", default="default")
     else:
-        condition = Prompt.ask("Condition name", default="default")
+        condition = menu_prompt("Condition name", default="default")
 
-    # Channel mapping
+    # Channel mapping with auto-match
     channel_maps: tuple[str, ...] = ()
     if scan_result.channels:
-        console.print(f"\nDiscovered channels: {', '.join(scan_result.channels)}")
-        if Prompt.ask("Rename channels?", choices=["y", "n"], default="n") == "y":
-            maps = []
-            for ch in scan_result.channels:
-                new_name = Prompt.ask(f"  Name for channel '{ch}'", default=ch)
-                maps.append(f"{ch}:{new_name}")
+        existing_channels = [ch.name for ch in store.get_channels()]
+        maps = _auto_match_channels(scan_result.channels, existing_channels)
+        if maps:
             channel_maps = tuple(maps)
 
     # Z-projection
     z_method = "mip"
     if scan_result.z_slices:
-        z_method = Prompt.ask(
+        z_method = menu_prompt(
             "Z-projection method",
             choices=["mip", "sum", "mean", "keep"],
             default="mip",
@@ -271,7 +434,7 @@ def _import_images(state: MenuState) -> None:
     bio_rep = _prompt_bio_rep(store)
 
     # Confirm
-    if Prompt.ask("Proceed with import?", choices=["y", "n"], default="y") != "y":
+    if menu_prompt("Proceed with import?", choices=["y", "n"], default="y") != "y":
         console.print("[yellow]Import cancelled.[/yellow]")
         return
 
@@ -296,21 +459,15 @@ def _segment_cells(state: MenuState) -> None:
         return
 
     console.print("\n[bold]Available channels:[/bold]")
-    for ch in channels:
-        role_str = f"  ({ch.role})" if ch.role else ""
-        console.print(f"  {ch.name}{role_str}")
-
-    channel = Prompt.ask(
-        "Channel to segment",
-        choices=[ch.name for ch in channels],
-    )
+    ch_names = [ch.name for ch in channels]
+    channel = numbered_select_one(ch_names, "Channel to segment")
 
     # Model selection
     console.print("\n[bold]Model:[/bold] cpsam (Cellpose-SAM, default for Cellpose 4.x)")
-    model = Prompt.ask("Model", default="cpsam")
+    model = menu_prompt("Model", default="cpsam")
 
     # Diameter
-    diam_str = Prompt.ask("Cell diameter in pixels (blank = auto-detect)", default="")
+    diam_str = menu_prompt("Cell diameter in pixels (blank = auto-detect)", default="")
     diameter: float | None = None
     if diam_str:
         try:
@@ -326,10 +483,19 @@ def _segment_cells(state: MenuState) -> None:
     conditions = store.get_conditions()
     condition: str | None = None
     if len(conditions) > 1:
-        console.print(f"\n[bold]Conditions:[/bold] {', '.join(conditions)}")
-        cond_str = Prompt.ask("Condition filter (blank = all)", default="")
+        console.print("\n[bold]Conditions:[/bold]")
+        _print_numbered_list(conditions)
+        cond_str = menu_prompt("Condition filter (number, or blank = all)", default="")
         if cond_str:
-            condition = cond_str
+            try:
+                idx = int(cond_str)
+                if 1 <= idx <= len(conditions):
+                    condition = conditions[idx - 1]
+                else:
+                    console.print("[red]Invalid number.[/red]")
+                    return
+            except ValueError:
+                condition = cond_str
 
     # Biological replicate filter
     bio_rep = _prompt_bio_rep(store)
@@ -338,17 +504,21 @@ def _segment_cells(state: MenuState) -> None:
     fov_filter_list: list[str] | None = None
     all_fovs = store.get_fovs(condition=condition, bio_rep=bio_rep)
     if len(all_fovs) > 1:
-        console.print(f"\n[bold]FOVs ({len(all_fovs)}):[/bold] ", end="")
         names = [f.name for f in all_fovs]
-        if len(names) <= 10:
-            console.print(", ".join(names))
-        else:
-            console.print(", ".join(names[:10]) + f" ... ({len(names)} total)")
-        filter_str = Prompt.ask(
-            "FOV filter (comma-separated, blank = all)", default=""
+        console.print(f"\n[bold]FOVs ({len(names)}):[/bold]")
+        _print_numbered_list(names)
+        filter_str = menu_prompt(
+            "FOV filter (space-separated numbers, 'all', or blank = all)",
+            default="",
         )
-        if filter_str:
-            fov_filter_list = [f.strip() for f in filter_str.split(",") if f.strip()]
+        if filter_str and filter_str.lower() != "all":
+            parts = filter_str.split()
+            try:
+                indices = sorted({int(p) for p in parts})
+                fov_filter_list = [names[i - 1] for i in indices if 1 <= i <= len(names)]
+            except ValueError:
+                # Treat as comma-separated names for backward compat
+                fov_filter_list = [f.strip() for f in filter_str.split(",") if f.strip()]
 
     # Confirm
     console.print(f"\n[bold]Segmentation settings:[/bold]")
@@ -362,7 +532,7 @@ def _segment_cells(state: MenuState) -> None:
     else:
         console.print(f"  FOVs:     all ({len(all_fovs)})")
 
-    if Prompt.ask("\nProceed?", choices=["y", "n"], default="y") != "y":
+    if menu_prompt("\nProceed?", choices=["y", "n"], default="y") != "y":
         console.print("[yellow]Segmentation cancelled.[/yellow]")
         return
 
@@ -417,11 +587,8 @@ def _view_napari(state: MenuState) -> None:
         console.print("[red]No conditions found.[/red] Import images first.")
         return
 
-    if len(conditions) == 1:
-        condition = conditions[0]
-    else:
-        console.print(f"\n[bold]Conditions:[/bold] {', '.join(conditions)}")
-        condition = Prompt.ask("Condition", choices=conditions)
+    console.print("\n[bold]Conditions:[/bold]")
+    condition = numbered_select_one(conditions, "Condition")
 
     # Select FOV
     fovs = store.get_fovs(condition=condition, bio_rep=bio_rep)
@@ -430,14 +597,8 @@ def _view_napari(state: MenuState) -> None:
         return
 
     fov_names = [f.name for f in fovs]
-    if len(fov_names) == 1:
-        fov = fov_names[0]
-        console.print(f"\nFOV: [cyan]{fov}[/cyan]")
-    else:
-        console.print(f"\n[bold]FOVs ({len(fov_names)}):[/bold]")
-        for name in fov_names:
-            console.print(f"  {name}")
-        fov = Prompt.ask("FOV to view", choices=fov_names)
+    console.print(f"\n[bold]FOVs ({len(fov_names)}):[/bold]")
+    fov = numbered_select_one(fov_names, "FOV to view")
 
     console.print(f"\nOpening [cyan]{fov}[/cyan] ({condition}) in napari...")
     console.print("[dim]Close the napari window to save any label edits.[/dim]\n")
@@ -465,8 +626,85 @@ def _prompt_bio_rep(store: ExperimentStore) -> str:
     reps = store.get_bio_reps()
     if len(reps) <= 1:
         return reps[0] if reps else "N1"
-    console.print(f"\n[bold]Biological replicates:[/bold] {', '.join(reps)}")
-    return Prompt.ask("Biological replicate", choices=reps, default=reps[0])
+    console.print("\n[bold]Biological replicates:[/bold]")
+    return numbered_select_one(reps, "Biological replicate")
+
+
+def _auto_match_channels(
+    discovered: list[str],
+    existing: list[str],
+) -> list[str]:
+    """Auto-match discovered channel tokens to existing channels.
+
+    Returns a list of 'token:name' mapping strings (empty if no renames needed).
+    Case-insensitive matching. Unmatched tokens get a numbered pick list.
+    """
+    if not existing:
+        # First import — fall back to freeform rename prompt
+        console.print(f"\nDiscovered channels: {', '.join(discovered)}")
+        if menu_prompt("Rename channels?", choices=["y", "n"], default="n") == "y":
+            maps = []
+            for ch in discovered:
+                new_name = menu_prompt(f"  Name for channel '{ch}'", default=ch)
+                maps.append(f"{ch}:{new_name}")
+            return maps
+        return []
+
+    # Build case-insensitive lookup
+    lower_map = {name.lower(): name for name in existing}
+
+    maps: list[str] = []
+    assigned: set[str] = set()
+
+    console.print("\n[bold]Channel mapping:[/bold]")
+    for token in discovered:
+        match = lower_map.get(token.lower())
+        if match and match not in assigned:
+            console.print(f"  [auto] {token} → {match}")
+            if token != match:
+                maps.append(f"{token}:{match}")
+            assigned.add(match)
+        else:
+            # Unmatched — let user pick from existing or create new
+            available = [ch for ch in existing if ch not in assigned]
+            if available:
+                console.print(f"\n  Channel '{token}' — pick an existing channel or create new:")
+                options = available + ["(new channel)"]
+                _print_numbered_list(options)
+                valid = [str(i) for i in range(1, len(options) + 1)]
+                choice = menu_prompt(f"  Map '{token}' to", choices=valid)
+                idx = int(choice) - 1
+                if idx == len(available):
+                    # New channel
+                    new_name = menu_prompt(f"  Name for channel '{token}'", default=token)
+                    if new_name != token:
+                        maps.append(f"{token}:{new_name}")
+                    assigned.add(new_name)
+                else:
+                    name = available[idx]
+                    maps.append(f"{token}:{name}")
+                    assigned.add(name)
+            else:
+                # All existing channels already assigned — create new
+                new_name = menu_prompt(f"  Name for channel '{token}'", default=token)
+                if new_name != token:
+                    maps.append(f"{token}:{new_name}")
+                assigned.add(new_name)
+
+    # Validate: no two tokens mapped to the same name
+    target_names = []
+    for m in maps:
+        target_names.append(m.split(":", 1)[1])
+    # Also include tokens that weren't remapped
+    for token in discovered:
+        if not any(m.startswith(f"{token}:") for m in maps):
+            target_names.append(token)
+    if len(target_names) != len(set(target_names)):
+        console.print("[red]Error: Two channels mapped to the same name.[/red]")
+        console.print("Please re-run import with different channel assignments.")
+        raise _MenuCancel()
+
+    return maps
 
 
 def _prompt_source_path() -> tuple[str | None, list[Path] | None]:
@@ -483,10 +721,7 @@ def _prompt_source_path() -> tuple[str | None, list[Path] | None]:
     console.print("  \\[3] Browse for files")
     console.print("  \\[b] Back")
 
-    choice = Prompt.ask("Select", choices=["1", "2", "3", "b"], default="1")
-
-    if choice == "b":
-        return None, None
+    choice = menu_prompt("Select", choices=["1", "2", "3"], default="1")
 
     if choice == "2":
         try:
@@ -536,7 +771,7 @@ def _prompt_source_path() -> tuple[str | None, list[Path] | None]:
             )
             # Fall through to type path
 
-    path_str = Prompt.ask("Path to TIFF directory")
+    path_str = menu_prompt("Path to TIFF directory")
     return (path_str, None) if path_str else (None, None)
 
 
@@ -547,16 +782,12 @@ def _query_experiment(state: MenuState) -> None:
     store = state.require_experiment()
 
     console.print("\n[bold]Query[/bold]")
-    console.print("  [1] Channels")
-    console.print("  [2] FOVs")
-    console.print("  [3] Conditions")
-    console.print("  [4] Biological replicates")
-    console.print("  [b] Back")
+    console.print("  \\[1] Channels")
+    console.print("  \\[2] FOVs")
+    console.print("  \\[3] Conditions")
+    console.print("  \\[4] Biological replicates")
 
-    choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "b"], default="1")
-
-    if choice == "b":
-        raise _MenuCancel()
+    choice = menu_prompt("Select", choices=["1", "2", "3", "4"], default="1")
 
     if choice == "1":
         ch_list = store.get_channels()
@@ -604,24 +835,94 @@ def _query_experiment(state: MenuState) -> None:
         format_output(rows, ["name"], "table", "Biological Replicates")
 
 
+def _edit_experiment(state: MenuState) -> None:
+    """Sub-menu for renaming experiment entities."""
+    store = state.require_experiment()
+
+    console.print("\n[bold]Edit[/bold]")
+    console.print("  \\[1] Rename experiment")
+    console.print("  \\[2] Rename condition")
+    console.print("  \\[3] Rename FOV")
+    console.print("  \\[4] Rename channel")
+    console.print("  \\[5] Rename bio-rep")
+
+    choice = menu_prompt("Select", choices=["1", "2", "3", "4", "5"])
+
+    if choice == "1":
+        new_name = menu_prompt("New experiment name")
+        store.rename_experiment(new_name)
+        console.print(f"[green]Experiment renamed to '{new_name}'[/green]")
+
+    elif choice == "2":
+        conditions = store.get_conditions()
+        if not conditions:
+            console.print("[dim]No conditions found.[/dim]")
+            return
+        console.print("\n[bold]Conditions:[/bold]")
+        old = numbered_select_one(conditions, "Condition to rename")
+        new_name = menu_prompt(f"New name for '{old}'")
+        store.rename_condition(old, new_name)
+        console.print(f"[green]Condition '{old}' → '{new_name}'[/green]")
+
+    elif choice == "3":
+        # Need to select condition + bio-rep to disambiguate FOV
+        conditions = store.get_conditions()
+        if not conditions:
+            console.print("[dim]No conditions found.[/dim]")
+            return
+        console.print("\n[bold]Conditions:[/bold]")
+        condition = numbered_select_one(conditions, "Condition")
+        bio_rep = _prompt_bio_rep(store)
+        fovs = store.get_fovs(condition=condition, bio_rep=bio_rep)
+        if not fovs:
+            console.print("[dim]No FOVs found.[/dim]")
+            return
+        fov_names = [f.name for f in fovs]
+        console.print(f"\n[bold]FOVs ({len(fov_names)}):[/bold]")
+        old = numbered_select_one(fov_names, "FOV to rename")
+        new_name = menu_prompt(f"New name for '{old}'")
+        store.rename_fov(old, new_name, condition, bio_rep=bio_rep)
+        console.print(f"[green]FOV '{old}' → '{new_name}'[/green]")
+
+    elif choice == "4":
+        channels = [ch.name for ch in store.get_channels()]
+        if not channels:
+            console.print("[dim]No channels found.[/dim]")
+            return
+        console.print("\n[bold]Channels:[/bold]")
+        old = numbered_select_one(channels, "Channel to rename")
+        new_name = menu_prompt(f"New name for '{old}'")
+        store.rename_channel(old, new_name)
+        console.print(f"[green]Channel '{old}' → '{new_name}'[/green]")
+
+    elif choice == "5":
+        reps = store.get_bio_reps()
+        if not reps:
+            console.print("[dim]No biological replicates found.[/dim]")
+            return
+        console.print("\n[bold]Biological replicates:[/bold]")
+        old = numbered_select_one(reps, "Bio-rep to rename")
+        new_name = menu_prompt(f"New name for '{old}'")
+        store.rename_bio_rep(old, new_name)
+        console.print(f"[green]Bio-rep '{old}' → '{new_name}'[/green]")
+
+
 def _export_csv(state: MenuState) -> None:
     """Interactively export measurements to CSV."""
     store = state.require_experiment()
 
-    output_str = Prompt.ask("Output CSV path (or 'b' to go back)")
-    if output_str.lower() == "b":
-        raise _MenuCancel()
+    output_str = menu_prompt("Output CSV path")
 
     out_path = Path(output_str).expanduser()
 
     if out_path.exists():
-        if Prompt.ask("File exists. Overwrite?", choices=["y", "n"], default="n") != "y":
+        if menu_prompt("File exists. Overwrite?", choices=["y", "n"], default="n") != "y":
             console.print("[yellow]Export cancelled.[/yellow]")
             return
 
     # Optional channel/metric filters
-    ch_filter = Prompt.ask("Channels to export (comma-separated, blank = all)", default="")
-    met_filter = Prompt.ask("Metrics to export (comma-separated, blank = all)", default="")
+    ch_filter = menu_prompt("Channels to export (comma-separated, blank = all)", default="")
+    met_filter = menu_prompt("Metrics to export (comma-separated, blank = all)", default="")
 
     ch_list = [c.strip() for c in ch_filter.split(",") if c.strip()] or None
     met_list = [m.strip() for m in met_filter.split(",") if m.strip()] or None
@@ -634,14 +935,10 @@ def _export_csv(state: MenuState) -> None:
 def _run_workflow(state: MenuState) -> None:
     """Interactively run a workflow."""
     console.print("\n[bold]Available Workflows[/bold]")
-    console.print("  [1] complete — Import -> Segment -> Measure -> Export")
-    console.print("  [2] measure_only — Re-measure with different channels")
-    console.print("  [b] Back")
+    console.print("  \\[1] complete — Import -> Segment -> Measure -> Export")
+    console.print("  \\[2] measure_only — Re-measure with different channels")
 
-    choice = Prompt.ask("Select", choices=["1", "2", "b"], default="b")
-
-    if choice == "b":
-        raise _MenuCancel()
+    choice = menu_prompt("Select", choices=["1", "2"])
 
     if choice == "1":
         console.print(
