@@ -321,14 +321,14 @@ The widget also displays:
 
 #### Tasks
 
-- [ ] Add `threshold_group()` to `ThresholdEngine` — creates group image, computes masked Otsu, stores mask
-- [ ] Create `threshold_viewer.py` with `launch_threshold_viewer()` and `ThresholdDecision`
-- [ ] Implement napari dock widget with Accept/Skip/Skip Remaining buttons
-- [ ] Implement live Otsu recomputation on ROI change
-- [ ] Handle window close without decision (treat as skip)
-- [ ] Write tests for `threshold_group()` (group image creation, masked Otsu, mask storage)
-- [ ] Write tests for viewer logic with mocked napari (ThresholdDecision return values)
-- [ ] Run tests
+- [x] Add `threshold_group()` to `ThresholdEngine` — creates group image, computes masked Otsu, stores mask
+- [x] Create `threshold_viewer.py` with `launch_threshold_viewer()` and `ThresholdDecision`
+- [x] Implement napari dock widget with Accept/Skip/Skip Remaining buttons
+- [x] Implement live Otsu recomputation on ROI change
+- [x] Handle window close without decision (treat as skip)
+- [x] Write tests for `threshold_group()` (group image creation, masked Otsu, mask storage)
+- [x] Write tests for viewer logic with mocked napari (ThresholdDecision return values)
+- [x] Run tests
 
 ### Phase 4: ParticleAnalyzer
 
