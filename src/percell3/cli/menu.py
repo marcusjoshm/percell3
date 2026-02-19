@@ -524,19 +524,27 @@ def _prompt_condition_for_assignment(store: ExperimentStore) -> str:
         console.print("\n[bold]Conditions:[/bold]")
         choice = numbered_select_one(options, "Condition")
         if choice == "(new condition)":
-            name = menu_prompt("New condition name")
-            try:
-                store.add_condition(name)
-            except DuplicateError:
-                pass
-            return name
+            while True:
+                name = menu_prompt("New condition name")
+                try:
+                    store.add_condition(name)
+                except DuplicateError:
+                    pass
+                except ValueError as e:
+                    console.print(f"[red]{e}[/red]")
+                    continue
+                return name
         return choice
-    name = menu_prompt("Condition name")
-    try:
-        store.add_condition(name)
-    except DuplicateError:
-        pass
-    return name
+    while True:
+        name = menu_prompt("Condition name")
+        try:
+            store.add_condition(name)
+        except DuplicateError:
+            pass
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            continue
+        return name
 
 
 def _prompt_bio_rep_for_assignment(store: ExperimentStore, condition: str) -> str:

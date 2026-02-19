@@ -492,32 +492,32 @@ End-to-end tests that exercise the full pipeline.
 
 ### Functional
 
-- [ ] `CellGrouper.group_cells()` fits GMM with BIC, assigns cells to groups via tags
-- [ ] GMM gracefully handles <10 cells (single group) and 1 component (logs warning)
-- [ ] `ThresholdEngine.threshold_group()` creates masked group image and computes Otsu excluding zeroed pixels
-- [ ] Napari viewer shows live threshold preview, supports rectangle ROI, accept/skip/skip-remaining
-- [ ] ROI restricts Otsu computation only; threshold applied to full group image
-- [ ] `ParticleAnalyzer.analyze_fov()` finds connected components within cell boundaries
-- [ ] Particles filtered by min_area (default 5 pixels)
-- [ ] Individual particles stored in `particles` table with full morphometrics
-- [ ] Particle label image stored in zarr (int32)
-- [ ] Per-cell summary measurements stored: particle_count, total_particle_area, mean_particle_area, max_particle_area, particle_coverage_fraction
-- [ ] Re-thresholding deletes old particles, masks, and group tags before re-creating
-- [ ] CLI menu item 6 "Apply threshold" works end-to-end
+- [x] `CellGrouper.group_cells()` fits GMM with BIC, assigns cells to groups via tags
+- [x] GMM gracefully handles <10 cells (single group) and 1 component (logs warning)
+- [x] `ThresholdEngine.threshold_group()` creates masked group image and computes Otsu excluding zeroed pixels
+- [x] Napari viewer shows live threshold preview, supports rectangle ROI, accept/skip/skip-remaining
+- [x] ROI restricts Otsu computation only; threshold applied to full group image
+- [x] `ParticleAnalyzer.analyze_fov()` finds connected components within cell boundaries
+- [x] Particles filtered by min_area (default 5 pixels)
+- [x] Individual particles stored in `particles` table with full morphometrics
+- [x] Particle label image stored in zarr (int32)
+- [x] Per-cell summary measurements stored: particle_count, total_particle_area, mean_particle_area, max_particle_area, particle_coverage_fraction
+- [x] Re-thresholding deletes old particles, masks, and group tags before re-creating
+- [x] CLI menu item 6 "Apply threshold" works end-to-end
 
 ### Architecture
 
-- [ ] No imports of `queries`, `schema`, or `zarr_io` outside of `core/`
-- [ ] All store access through public ExperimentStore API
-- [ ] Each engine testable independently without the others
-- [ ] Frozen dataclasses for all value objects
+- [x] No imports of `queries`, `schema`, or `zarr_io` outside of `core/`
+- [x] All store access through public ExperimentStore API
+- [x] Each engine testable independently without the others
+- [x] Frozen dataclasses for all value objects
 
 ### Testing
 
-- [ ] Unit tests for CellGrouper, ThresholdEngine, ParticleAnalyzer
-- [ ] Integration test for full pipeline
-- [ ] Re-thresholding test
-- [ ] All existing tests still pass
+- [x] Unit tests for CellGrouper, ThresholdEngine, ParticleAnalyzer
+- [x] Integration test for full pipeline
+- [x] Re-thresholding test
+- [x] All existing tests still pass (712 passed)
 
 ---
 

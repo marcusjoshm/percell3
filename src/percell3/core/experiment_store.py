@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from pathlib import Path
-_VALID_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
+_VALID_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.+()-]{0,254}$")
 
 
 def _validate_name(value: str, field: str = "name") -> str:
@@ -21,7 +21,7 @@ def _validate_name(value: str, field: str = "name") -> str:
     if not _VALID_NAME_RE.match(value):
         raise ValueError(
             f"{field} contains invalid characters: {value!r}. "
-            "Only alphanumeric, dots, hyphens, and underscores are allowed."
+            "Allowed: alphanumeric, spaces, dots, hyphens, underscores, +, parentheses."
         )
     return value
 
