@@ -479,12 +479,12 @@ End-to-end tests that exercise the full pipeline.
 
 #### Tasks
 
-- [ ] Test: CellGrouper → ThresholdEngine → ParticleAnalyzer full pipeline (mocked napari)
-- [ ] Test: re-thresholding replaces old particles and cleans up tags
-- [ ] Test: multi-FOV batch processing
-- [ ] Test: group with all cells skipped produces particle_count=0
-- [ ] Test: particle label image round-trip through zarr
-- [ ] Run full test suite — all tests must pass
+- [x] Test: CellGrouper → ThresholdEngine → ParticleAnalyzer full pipeline (mocked napari)
+- [x] Test: re-thresholding replaces old particles and cleans up tags
+- [x] Test: multi-FOV batch processing
+- [x] Test: group with all cells skipped produces particle_count=0
+- [x] Test: particle label image round-trip through zarr
+- [x] Run full test suite — all tests must pass (712 passed)
 
 ---
 
