@@ -15,7 +15,9 @@ from percell3.core.exceptions import (
     DuplicateError,
     FovNotFoundError,
 )
-from percell3.core.models import ChannelConfig, CellRecord, MeasurementRecord, FovInfo
+from percell3.core.models import (
+    ChannelConfig, CellRecord, MeasurementRecord, FovInfo, ParticleRecord,
+)
 
 # ---------------------------------------------------------------------------
 # Experiment
@@ -854,3 +856,176 @@ def rename_fov(
     except sqlite3.IntegrityError:
         conn.rollback()
         raise DuplicateError("fov", new_name)
+
+
+# ---------------------------------------------------------------------------
+# Particles
+# ---------------------------------------------------------------------------
+
+
+def insert_particles(
+    conn: sqlite3.Connection,
+    particles: list[ParticleRecord],
+) -> None:
+    """Bulk insert particle records."""
+    if not particles:
+        return
+    sql = (
+        "INSERT INTO particles ("
+        "cell_id, threshold_run_id, label_value, "
+        "centroid_x, centroid_y, bbox_x, bbox_y, bbox_w, bbox_h, "
+        "area_pixels, area_um2, perimeter, circularity, "
+        "eccentricity, solidity, major_axis_length, minor_axis_length, "
+        "mean_intensity, max_intensity, integrated_intensity"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    rows = [
+        (
+            p.cell_id, p.threshold_run_id, p.label_value,
+            p.centroid_x, p.centroid_y,
+            p.bbox_x, p.bbox_y, p.bbox_w, p.bbox_h,
+            p.area_pixels, p.area_um2, p.perimeter, p.circularity,
+            p.eccentricity, p.solidity,
+            p.major_axis_length, p.minor_axis_length,
+            p.mean_intensity, p.max_intensity, p.integrated_intensity,
+        )
+        for p in particles
+    ]
+    conn.executemany(sql, rows)
+    conn.commit()
+
+
+def select_particles(
+    conn: sqlite3.Connection,
+    cell_ids: list[int] | None = None,
+    threshold_run_id: int | None = None,
+) -> list[dict]:
+    """Query particles with optional filters."""
+    query = "SELECT * FROM particles"
+    params: list = []
+    clauses: list[str] = []
+    if cell_ids is not None and len(cell_ids) > 0:
+        placeholders = ",".join("?" * len(cell_ids))
+        clauses.append(f"cell_id IN ({placeholders})")
+        params.extend(cell_ids)
+    if threshold_run_id is not None:
+        clauses.append("threshold_run_id = ?")
+        params.append(threshold_run_id)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY id"
+    rows = conn.execute(query, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_particles_for_fov(conn: sqlite3.Connection, fov_id: int) -> int:
+    """Delete all particles for cells in a FOV.
+
+    Returns:
+        Number of particles deleted.
+    """
+    count = conn.execute(
+        "SELECT COUNT(*) FROM particles WHERE cell_id IN "
+        "(SELECT id FROM cells WHERE fov_id = ?)",
+        (fov_id,),
+    ).fetchone()[0]
+    if count == 0:
+        return 0
+    conn.execute(
+        "DELETE FROM particles WHERE cell_id IN "
+        "(SELECT id FROM cells WHERE fov_id = ?)",
+        (fov_id,),
+    )
+    conn.commit()
+    return count
+
+
+def delete_particles_for_threshold_run(
+    conn: sqlite3.Connection,
+    threshold_run_id: int,
+) -> int:
+    """Delete all particles for a specific threshold run.
+
+    Returns:
+        Number of particles deleted.
+    """
+    count = conn.execute(
+        "SELECT COUNT(*) FROM particles WHERE threshold_run_id = ?",
+        (threshold_run_id,),
+    ).fetchone()[0]
+    if count == 0:
+        return 0
+    conn.execute(
+        "DELETE FROM particles WHERE threshold_run_id = ?",
+        (threshold_run_id,),
+    )
+    conn.commit()
+    return count
+
+
+def select_threshold_runs(conn: sqlite3.Connection) -> list[dict]:
+    """Return all threshold runs as dicts."""
+    rows = conn.execute(
+        "SELECT tr.id, ch.name AS channel, tr.method, tr.parameters, "
+        "tr.threshold_value, tr.created_at "
+        "FROM threshold_runs tr "
+        "JOIN channels ch ON tr.channel_id = ch.id "
+        "ORDER BY tr.id"
+    ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        if d["parameters"]:
+            d["parameters"] = json.loads(d["parameters"])
+        result.append(d)
+    return result
+
+
+def delete_tags_by_prefix(
+    conn: sqlite3.Connection,
+    prefix: str,
+    cell_ids: list[int] | None = None,
+) -> int:
+    """Delete cell_tags and tags matching a name prefix.
+
+    If cell_ids is provided, only remove cell_tags for those cells
+    (tags themselves are kept if other cells reference them).
+    If cell_ids is None, removes tags entirely.
+
+    Returns:
+        Number of cell_tag rows deleted.
+    """
+    # Find matching tag IDs
+    rows = conn.execute(
+        "SELECT id FROM tags WHERE name LIKE ?", (prefix + "%",)
+    ).fetchall()
+    if not rows:
+        return 0
+    tag_ids = [r["id"] for r in rows]
+    ph = ",".join("?" * len(tag_ids))
+
+    if cell_ids is not None and len(cell_ids) > 0:
+        cell_ph = ",".join("?" * len(cell_ids))
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM cell_tags "
+            f"WHERE tag_id IN ({ph}) AND cell_id IN ({cell_ph})",
+            [*tag_ids, *cell_ids],
+        ).fetchone()[0]
+        conn.execute(
+            f"DELETE FROM cell_tags "
+            f"WHERE tag_id IN ({ph}) AND cell_id IN ({cell_ph})",
+            [*tag_ids, *cell_ids],
+        )
+    else:
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM cell_tags WHERE tag_id IN ({ph})",
+            tag_ids,
+        ).fetchone()[0]
+        conn.execute(
+            f"DELETE FROM cell_tags WHERE tag_id IN ({ph})", tag_ids
+        )
+        # Also delete the tags themselves if removing globally
+        conn.execute(f"DELETE FROM tags WHERE id IN ({ph})", tag_ids)
+
+    conn.commit()
+    return count

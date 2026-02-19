@@ -36,7 +36,9 @@ from percell3.core.exceptions import (
     ExperimentError,
     ExperimentNotFoundError,
 )
-from percell3.core.models import CellRecord, ChannelConfig, FovInfo, MeasurementRecord
+from percell3.core.models import (
+    CellRecord, ChannelConfig, FovInfo, MeasurementRecord, ParticleRecord,
+)
 from percell3.core.schema import create_schema, open_database
 
 
@@ -803,6 +805,102 @@ class ExperimentStore:
         if tag_id is None:
             raise ExperimentError(f"Tag not found: {tag}")
         queries.delete_cell_tags(self._conn, cell_ids, tag_id)
+
+    def delete_tags_by_prefix(
+        self,
+        prefix: str,
+        cell_ids: list[int] | None = None,
+    ) -> int:
+        """Delete cell_tags (and optionally tags) matching a name prefix.
+
+        Args:
+            prefix: Tag name prefix (e.g., "group:GFP:mean_intensity:").
+            cell_ids: If provided, only remove cell_tags for these cells.
+                If None, removes tags entirely.
+
+        Returns:
+            Number of cell_tag rows deleted.
+        """
+        return queries.delete_tags_by_prefix(self._conn, prefix, cell_ids)
+
+    # --- Particles ---
+
+    def add_particles(self, particles: list[ParticleRecord]) -> None:
+        """Bulk insert particle records."""
+        queries.insert_particles(self._conn, particles)
+
+    def get_particles(
+        self,
+        cell_ids: list[int] | None = None,
+        threshold_run_id: int | None = None,
+    ) -> pd.DataFrame:
+        """Query particles with optional filters."""
+        rows = queries.select_particles(
+            self._conn,
+            cell_ids=cell_ids,
+            threshold_run_id=threshold_run_id,
+        )
+        return pd.DataFrame(rows)
+
+    def delete_particles_for_fov(self, fov_name: str, condition: str) -> int:
+        """Delete all particles for cells in a FOV.
+
+        Returns:
+            Number of particles deleted.
+        """
+        cond_id = queries.select_condition_id(self._conn, condition)
+        fov_info = queries.select_fov_by_name(
+            self._conn, fov_name, condition_id=cond_id,
+        )
+        return queries.delete_particles_for_fov(self._conn, fov_info.id)
+
+    def delete_particles_for_threshold_run(self, threshold_run_id: int) -> int:
+        """Delete all particles for a specific threshold run."""
+        return queries.delete_particles_for_threshold_run(
+            self._conn, threshold_run_id,
+        )
+
+    def get_threshold_runs(self) -> list[dict]:
+        """Return all threshold runs."""
+        return queries.select_threshold_runs(self._conn)
+
+    # --- Particle Label I/O ---
+
+    def write_particle_labels(
+        self,
+        fov: str,
+        condition: str,
+        channel: str,
+        labels: np.ndarray,
+        bio_rep: str | None = None,
+        timepoint: str | None = None,
+    ) -> None:
+        """Write a particle label image to masks.zarr."""
+        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
+        br_name = fov_info.bio_rep
+        gp = zarr_io.particle_label_group_path(
+            br_name, condition, fov, channel, timepoint,
+        )
+        zarr_io.write_particle_labels(
+            self.masks_zarr_path, gp, labels,
+            pixel_size_um=fov_info.pixel_size_um,
+        )
+
+    def read_particle_labels(
+        self,
+        fov: str,
+        condition: str,
+        channel: str,
+        bio_rep: str | None = None,
+        timepoint: str | None = None,
+    ) -> np.ndarray:
+        """Read a particle label image from masks.zarr."""
+        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
+        br_name = fov_info.bio_rep
+        gp = zarr_io.particle_label_group_path(
+            br_name, condition, fov, channel, timepoint,
+        )
+        return zarr_io.read_particle_labels(self.masks_zarr_path, gp)
 
     # --- Export ---
 

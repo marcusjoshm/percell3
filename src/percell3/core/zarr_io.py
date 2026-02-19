@@ -77,6 +77,19 @@ def mask_group_path(
     return f"{condition}/{bio_rep}/{fov}/threshold_{channel}"
 
 
+def particle_label_group_path(
+    bio_rep: str,
+    condition: str,
+    fov: str,
+    channel: str,
+    timepoint: str | None = None,
+) -> str:
+    """Build the zarr group path for particle labels."""
+    if timepoint:
+        return f"{condition}/{bio_rep}/{timepoint}/{fov}/particles_{channel}"
+    return f"{condition}/{bio_rep}/{fov}/particles_{channel}"
+
+
 # ---------------------------------------------------------------------------
 # NGFF 0.4 metadata builders
 # ---------------------------------------------------------------------------
@@ -343,6 +356,48 @@ def read_mask(
     group_path: str,
 ) -> np.ndarray:
     """Read a binary mask as numpy array (uint8 0/255)."""
+    root = zarr.open(str(zarr_path), mode="r")
+    return np.array(root[f"{group_path}/0"])
+
+
+# ---------------------------------------------------------------------------
+# Particle label I/O
+# ---------------------------------------------------------------------------
+
+
+def write_particle_labels(
+    zarr_path: Path,
+    group_path: str,
+    data: np.ndarray,
+    pixel_size_um: float | None = None,
+) -> None:
+    """Write a 2D particle label image (Y, X) as int32."""
+    if data.ndim != 2:
+        raise ValueError(f"Expected 2D array (Y, X), got {data.ndim}D with shape {data.shape}")
+    root = zarr.open(str(zarr_path), mode="a")
+    root.require_group(group_path)
+
+    arr_path = f"{group_path}/0"
+    label_data = np.asarray(data, dtype=np.int32)
+
+    if arr_path in root:
+        arr = root[arr_path]
+        arr[:] = label_data
+    else:
+        root.array(
+            arr_path,
+            data=label_data,
+            chunks=LABEL_CHUNKS,
+            compressor=LABEL_COMPRESSOR,
+            overwrite=True,
+        )
+
+
+def read_particle_labels(
+    zarr_path: Path,
+    group_path: str,
+) -> np.ndarray:
+    """Read a particle label image as numpy array."""
     root = zarr.open(str(zarr_path), mode="r")
     return np.array(root[f"{group_path}/0"])
 

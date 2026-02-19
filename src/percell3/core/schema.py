@@ -139,20 +139,48 @@ CREATE INDEX IF NOT EXISTS idx_cells_area ON cells(area_pixels);
 CREATE INDEX IF NOT EXISTS idx_measurements_cell ON measurements(cell_id);
 CREATE INDEX IF NOT EXISTS idx_measurements_channel ON measurements(channel_id);
 CREATE INDEX IF NOT EXISTS idx_measurements_metric ON measurements(metric);
+CREATE TABLE IF NOT EXISTS particles (
+    id INTEGER PRIMARY KEY,
+    cell_id INTEGER NOT NULL REFERENCES cells(id),
+    threshold_run_id INTEGER NOT NULL REFERENCES threshold_runs(id),
+    label_value INTEGER NOT NULL,
+    centroid_x REAL NOT NULL,
+    centroid_y REAL NOT NULL,
+    bbox_x INTEGER NOT NULL,
+    bbox_y INTEGER NOT NULL,
+    bbox_w INTEGER NOT NULL,
+    bbox_h INTEGER NOT NULL,
+    area_pixels REAL NOT NULL,
+    area_um2 REAL,
+    perimeter REAL,
+    circularity REAL,
+    eccentricity REAL,
+    solidity REAL,
+    major_axis_length REAL,
+    minor_axis_length REAL,
+    mean_intensity REAL,
+    max_intensity REAL,
+    integrated_intensity REAL,
+    UNIQUE(cell_id, threshold_run_id, label_value)
+);
+
 CREATE INDEX IF NOT EXISTS idx_bio_reps_condition ON bio_reps(condition_id);
 CREATE INDEX IF NOT EXISTS idx_fovs_bio_rep ON fovs(bio_rep_id);
+CREATE INDEX IF NOT EXISTS idx_particles_cell ON particles(cell_id);
+CREATE INDEX IF NOT EXISTS idx_particles_run ON particles(threshold_run_id);
 """
 
 EXPECTED_TABLES = frozenset({
     "experiments", "channels", "conditions", "timepoints", "bio_reps", "fovs",
     "segmentation_runs", "cells", "measurements", "threshold_runs",
-    "analysis_runs", "tags", "cell_tags",
+    "analysis_runs", "tags", "cell_tags", "particles",
 })
 
 EXPECTED_INDEXES = frozenset({
     "idx_cells_fov", "idx_cells_fov_valid", "idx_cells_segmentation", "idx_cells_area",
     "idx_measurements_cell", "idx_measurements_channel", "idx_measurements_metric",
     "idx_bio_reps_condition", "idx_fovs_bio_rep",
+    "idx_particles_cell", "idx_particles_run",
 })
 
 EXPECTED_VERSION = "3.2.0"
