@@ -455,17 +455,17 @@ _apply_threshold(state):
 
 #### Tasks
 
-- [ ] Enable menu item 6 in `menu.py`: change `None` to `_apply_threshold` and `enabled=True`
-- [ ] Implement `_apply_threshold()` handler following the segmentation menu pattern
-- [ ] Add grouping channel + metric selection prompts
-- [ ] Add threshold channel selection prompt (default = grouping channel)
-- [ ] Show grouping summary (number of groups, cells per group) before napari
-- [ ] Integrate napari threshold viewer in per-group loop
-- [ ] Show per-FOV particle analysis results
-- [ ] Show overall summary after all FOVs processed
-- [ ] Handle "skip remaining FOVs" option
+- [x] Enable menu item 6 in `menu.py`: change `None` to `_apply_threshold` and `enabled=True`
+- [x] Implement `_apply_threshold()` handler following the segmentation menu pattern
+- [x] Add grouping channel + metric selection prompts
+- [x] Add threshold channel selection prompt (default = grouping channel)
+- [x] Show grouping summary (number of groups, cells per group) before napari
+- [x] Integrate napari threshold viewer in per-group loop
+- [x] Show per-FOV particle analysis results
+- [x] Show overall summary after all FOVs processed
+- [x] Handle "skip remaining FOVs" option
 - [ ] Write CLI tests with mocked napari (test prompt flow, not viewer)
-- [ ] Run full test suite
+- [x] Run full test suite
 
 ### Phase 6: Integration Tests
 

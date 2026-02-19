@@ -217,7 +217,7 @@ def run_interactive_menu() -> None:
         MenuItem("3", "Segment cells", _segment_cells, enabled=True),
         MenuItem("4", "View in napari", _view_napari, enabled=True),
         MenuItem("5", "Measure channels", None, enabled=False),
-        MenuItem("6", "Apply threshold", None, enabled=False),
+        MenuItem("6", "Apply threshold", _apply_threshold, enabled=True),
         MenuItem("7", "Query experiment", _query_experiment, enabled=True),
         MenuItem("8", "Edit experiment", _edit_experiment, enabled=True),
         MenuItem("9", "Export to CSV", _export_csv, enabled=True),
@@ -845,6 +845,246 @@ def _view_napari(state: MenuState) -> None:
         console.print(f"\n[green]Labels saved[/green] (run_id={run_id})")
     else:
         console.print("\n[dim]No changes detected.[/dim]")
+    console.print()
+
+
+def _apply_threshold(state: MenuState) -> None:
+    """Interactively run cell grouping + threshold QC + particle analysis."""
+    store = state.require_experiment()
+
+    # 1. Check prerequisites
+    channels = store.get_channels()
+    if not channels:
+        console.print("[red]No channels found.[/red] Import images first.")
+        return
+
+    all_fovs = store.get_fovs()
+    if not all_fovs:
+        console.print("[red]No FOVs found.[/red] Import images first.")
+        return
+
+    cell_count = store.get_cell_count()
+    if cell_count == 0:
+        console.print("[red]No cells found.[/red] Run segmentation first.")
+        return
+
+    # 2. Grouping channel + metric selection
+    ch_names = [ch.name for ch in channels]
+    console.print("\n[bold]Step 1: Cell Grouping[/bold]")
+    console.print("\n[bold]Channel for grouping metric:[/bold]")
+    grouping_channel = numbered_select_one(ch_names, "Grouping channel")
+
+    metrics = ["mean_intensity", "median_intensity", "total_intensity", "area_pixels"]
+    console.print("\n[bold]Metric for grouping:[/bold]")
+    grouping_metric = numbered_select_one(metrics, "Grouping metric")
+
+    # 3. Threshold channel selection
+    console.print("\n[bold]Step 2: Threshold Channel[/bold]")
+    console.print(f"  [dim]Default: same as grouping ({grouping_channel})[/dim]")
+    threshold_ch_options = ch_names + [f"(same as grouping: {grouping_channel})"]
+    console.print("\n[bold]Channel to threshold:[/bold]")
+    threshold_channel = numbered_select_one(threshold_ch_options, "Threshold channel")
+    if threshold_channel.startswith("(same"):
+        threshold_channel = grouping_channel
+
+    # 4. FOV selection
+    console.print("\n[bold]Step 3: Select FOVs[/bold]")
+    seg_summary = store.get_fov_segmentation_summary()
+    # Filter to FOVs that have cells
+    fovs_with_cells = [f for f in all_fovs if seg_summary.get(f.id, (0, None))[0] > 0]
+    if not fovs_with_cells:
+        console.print("[red]No FOVs with segmented cells.[/red]")
+        return
+
+    _show_fov_status_table(fovs_with_cells, seg_summary)
+    if len(fovs_with_cells) == 1:
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].name})[/dim]")
+        selected_fovs = fovs_with_cells
+    else:
+        selected_fovs = _select_fovs_from_table(fovs_with_cells)
+
+    # 5. Confirmation
+    console.print(f"\n[bold]Thresholding settings:[/bold]")
+    console.print(f"  Grouping:    {grouping_channel} / {grouping_metric}")
+    console.print(f"  Threshold:   {threshold_channel} (Otsu)")
+    console.print(f"  FOVs:        {len(selected_fovs)} selected")
+
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
+        console.print("[yellow]Thresholding cancelled.[/yellow]")
+        return
+
+    # 6. Run per-FOV
+    from percell3.measure.cell_grouper import CellGrouper
+    from percell3.measure.particle_analyzer import ParticleAnalyzer
+    from percell3.measure.thresholding import ThresholdEngine
+
+    grouper = CellGrouper()
+    engine = ThresholdEngine()
+    analyzer = ParticleAnalyzer()
+
+    total_particles = 0
+    fovs_processed = 0
+    skip_remaining_fovs = False
+
+    for fov_info in selected_fovs:
+        if skip_remaining_fovs:
+            break
+
+        fov = fov_info.name
+        condition = fov_info.condition
+        bio_rep = fov_info.bio_rep
+
+        console.print(f"\n[bold]{'='*60}[/bold]")
+        console.print(f"[bold]FOV: {fov} ({condition}/{bio_rep})[/bold]")
+
+        # 6a. Group cells
+        try:
+            grouping_result = grouper.group_cells(
+                store, fov=fov, condition=condition,
+                channel=grouping_channel, metric=grouping_metric,
+                bio_rep=bio_rep,
+            )
+        except ValueError as e:
+            console.print(f"  [yellow]Skipping: {e}[/yellow]")
+            continue
+
+        console.print(f"  Groups found: {grouping_result.n_groups}")
+        for i, (tag, mean) in enumerate(
+            zip(grouping_result.tag_names, grouping_result.group_means)
+        ):
+            n_cells = int((grouping_result.group_labels == i).sum())
+            console.print(f"    {tag}: {n_cells} cells (mean={mean:.1f})")
+
+        # 6b. Read images and labels for this FOV
+        import numpy as np
+        labels = store.read_labels(fov, condition, bio_rep=bio_rep)
+        image = store.read_image_numpy(
+            fov, condition, threshold_channel, bio_rep=bio_rep,
+        )
+
+        accepted_groups: list[tuple[str, list[int], int]] = []  # (tag, cell_ids, run_id)
+        skip_remaining_groups = False
+
+        for i, tag_name in enumerate(grouping_result.tag_names):
+            if skip_remaining_groups:
+                break
+
+            group_cell_ids = [
+                cid for cid, label in zip(
+                    grouping_result.cell_ids, grouping_result.group_labels
+                )
+                if label == i
+            ]
+            if not group_cell_ids:
+                continue
+
+            # Get label values for this group
+            cells_df = store.get_cells(condition=condition, bio_rep=bio_rep, fov=fov)
+            group_cells = cells_df[cells_df["id"].isin(group_cell_ids)]
+            label_values = group_cells["label_value"].tolist()
+
+            from percell3.measure.threshold_viewer import (
+                compute_masked_otsu,
+                create_group_image,
+            )
+
+            group_image, cell_mask = create_group_image(image, labels, label_values)
+
+            # Compute initial Otsu
+            try:
+                initial_thresh = compute_masked_otsu(group_image, cell_mask)
+            except ValueError:
+                console.print(f"  [yellow]{tag_name}: no pixels to threshold, skipping[/yellow]")
+                continue
+
+            # Launch napari viewer
+            group_display = f"{tag_name} (mean={grouping_result.group_means[i]:.1f})"
+            console.print(f"\n  Opening napari for {group_display}...")
+            console.print(f"  [dim]Initial Otsu threshold: {initial_thresh:.1f}[/dim]")
+
+            try:
+                from percell3.measure.threshold_viewer import launch_threshold_viewer
+
+                decision = launch_threshold_viewer(
+                    group_image, cell_mask,
+                    group_name=group_display,
+                    fov_name=fov,
+                    initial_threshold=initial_thresh,
+                )
+            except (ImportError, RuntimeError) as exc:
+                console.print(f"  [red]napari error:[/red] {exc}")
+                console.print("  [dim]Falling back to auto-accept with Otsu threshold.[/dim]")
+                # Auto-accept fallback
+                from percell3.measure.threshold_viewer import ThresholdDecision
+                decision = ThresholdDecision(
+                    accepted=True, threshold_value=initial_thresh,
+                )
+
+            if decision.skip_remaining:
+                console.print(f"  [yellow]Skipping remaining groups for {fov}[/yellow]")
+                skip_remaining_groups = True
+                continue
+
+            if not decision.accepted:
+                console.print(f"  [dim]Skipped {tag_name}[/dim]")
+                continue
+
+            # Store threshold result
+            result = engine.threshold_group(
+                store, fov=fov, condition=condition, channel=threshold_channel,
+                cell_ids=group_cell_ids,
+                labels=labels, image=image,
+                threshold_value=decision.threshold_value,
+                roi=decision.roi,
+                group_tag=tag_name,
+                bio_rep=bio_rep,
+            )
+            console.print(
+                f"  [green]Accepted {tag_name}[/green]: "
+                f"threshold={result.threshold_value:.1f}, "
+                f"positive={result.positive_fraction:.1%}"
+            )
+            accepted_groups.append((tag_name, group_cell_ids, result.threshold_run_id))
+
+        # 6c. Particle analysis for accepted groups
+        if accepted_groups:
+            console.print(f"\n  [bold]Particle analysis...[/bold]")
+
+            for tag_name, group_cell_ids, thr_run_id in accepted_groups:
+                pa_result = analyzer.analyze_fov(
+                    store, fov=fov, condition=condition,
+                    channel=threshold_channel,
+                    threshold_run_id=thr_run_id,
+                    cell_ids=group_cell_ids,
+                    bio_rep=bio_rep,
+                )
+
+                # Store results
+                if pa_result.particles:
+                    store.add_particles(pa_result.particles)
+                if pa_result.summary_measurements:
+                    store.add_measurements(pa_result.summary_measurements)
+                store.write_particle_labels(
+                    fov, condition, threshold_channel,
+                    pa_result.particle_label_image,
+                    bio_rep=bio_rep,
+                )
+
+                console.print(
+                    f"    {tag_name}: {pa_result.total_particles} particles "
+                    f"in {pa_result.cells_analyzed} cells"
+                )
+                total_particles += pa_result.total_particles
+        else:
+            console.print(f"  [dim]No groups accepted — skipping particle analysis.[/dim]")
+
+        fovs_processed += 1
+
+    # 7. Summary
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print(f"[green]Thresholding complete[/green]")
+    console.print(f"  FOVs processed: {fovs_processed}")
+    console.print(f"  Total particles: {total_particles}")
     console.print()
 
 
