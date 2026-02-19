@@ -173,10 +173,10 @@ class TestSegmentationEngine:
         labels = store.read_labels("fov_1", "control")
         assert labels.max() == 0
 
-    def test_resegmentation_new_run_id(
+    def test_resegmentation_replaces_cells(
         self, experiment_with_fovs: ExperimentStore
     ) -> None:
-        """Re-segmentation should create a new run_id, old cells preserved."""
+        """Re-segmentation should create a new run_id and replace old cells."""
         store = experiment_with_fovs
         engine = SegmentationEngine(segmenter=MockSegmenter())
 
@@ -184,9 +184,9 @@ class TestSegmentationEngine:
         result2 = engine.run(store, channel="DAPI")
 
         assert result2.run_id > result1.run_id
-        # Both runs' cells should be in DB
+        # Re-segmentation replaces old cells, so only run2's cells remain
         total_cells = store.get_cell_count()
-        assert total_cells == result1.cell_count + result2.cell_count
+        assert total_cells == result2.cell_count
 
     def test_cell_count_matches_db(
         self, experiment_with_fovs: ExperimentStore

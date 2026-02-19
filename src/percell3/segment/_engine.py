@@ -145,6 +145,16 @@ class SegmentationEngine:
                     fov_info.pixel_size_um,
                 )
 
+                # Delete existing cells for this FOV (re-segmentation)
+                deleted = store.delete_cells_for_fov(
+                    fov_info.name, fov_info.condition,
+                )
+                if deleted > 0:
+                    logger.info(
+                        "Replaced %d existing cells for FOV %s",
+                        deleted, fov_info.name,
+                    )
+
                 # Insert cells into DB
                 if cells:
                     store.add_cells(cells)

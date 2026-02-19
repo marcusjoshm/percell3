@@ -617,6 +617,31 @@ class ExperimentStore:
             fov_id=fov_id, is_valid=is_valid,
         )
 
+    def delete_cells_for_fov(self, fov_name: str, condition: str) -> int:
+        """Delete all cells (and measurements/tags) for a FOV.
+
+        Args:
+            fov_name: FOV name.
+            condition: Condition name (required to resolve FOV).
+
+        Returns:
+            Number of cells deleted.
+        """
+        cond_id = queries.select_condition_id(self._conn, condition)
+        fov_info = queries.select_fov_by_name(
+            self._conn, fov_name, condition_id=cond_id,
+        )
+        return queries.delete_cells_for_fov(self._conn, fov_info.id)
+
+    def get_fov_segmentation_summary(self) -> dict[int, tuple[int, str | None]]:
+        """Return segmentation status for all FOVs.
+
+        Returns:
+            Dict mapping fov_id -> (cell_count, last_model_name).
+            FOVs with no cells return (0, None).
+        """
+        return queries.select_fov_segmentation_summary(self._conn)
+
     # --- Measurements ---
 
     def add_measurements(self, measurements: list[MeasurementRecord]) -> None:

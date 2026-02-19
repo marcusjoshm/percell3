@@ -530,3 +530,72 @@ class TestRenameQueries:
         names = [f.name for f in fovs]
         assert "FOV_A" in names
         assert "FOV_1" not in names
+
+
+class TestDeleteCellsForFov:
+    def _setup(self, db_conn):
+        ch_id = queries.insert_channel(db_conn, "DAPI")
+        cond_id = queries.insert_condition(db_conn, "control")
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "r1", bio_rep_id=br_id)
+        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cpsam")
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=i,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+            for i in range(1, 4)
+        ]
+        cell_ids = queries.insert_cells(db_conn, cells)
+        # Add measurements
+        for cid in cell_ids:
+            queries.insert_measurements(db_conn, [
+                MeasurementRecord(cell_id=cid, channel_id=ch_id,
+                                  metric="mean", value=42.0),
+            ])
+        return fov_id, cell_ids
+
+    def test_deletes_cells_and_measurements(self, db_conn):
+        fov_id, cell_ids = self._setup(db_conn)
+        assert queries.count_cells(db_conn) == 3
+
+        deleted = queries.delete_cells_for_fov(db_conn, fov_id)
+        assert deleted == 3
+        assert queries.count_cells(db_conn) == 0
+        # Measurements also gone
+        rows = queries.select_measurements(db_conn, cell_ids=cell_ids)
+        assert len(rows) == 0
+
+    def test_no_cells_returns_zero(self, db_conn):
+        cond_id = queries.insert_condition(db_conn, "ctrl")
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "empty", bio_rep_id=br_id)
+        assert queries.delete_cells_for_fov(db_conn, fov_id) == 0
+
+
+class TestFovSegmentationSummary:
+    def test_mixed_segmented_and_unsegmented(self, db_conn):
+        ch_id = queries.insert_channel(db_conn, "DAPI")
+        cond_id = queries.insert_condition(db_conn, "ctrl")
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cond_id)
+        fov1_id = queries.insert_fov(db_conn, "r1", bio_rep_id=br_id)
+        fov2_id = queries.insert_fov(db_conn, "r2", bio_rep_id=br_id)
+        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cpsam")
+
+        # Add cells to fov1 only
+        cells = [
+            CellRecord(
+                fov_id=fov1_id, segmentation_id=seg_id, label_value=i,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+            for i in range(1, 6)
+        ]
+        queries.insert_cells(db_conn, cells)
+
+        summary = queries.select_fov_segmentation_summary(db_conn)
+        assert summary[fov1_id] == (5, "cpsam")
+        assert summary[fov2_id] == (0, None)

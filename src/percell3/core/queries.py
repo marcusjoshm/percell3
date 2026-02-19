@@ -731,6 +731,63 @@ def delete_cell_tags(
 
 
 # ---------------------------------------------------------------------------
+# Cell deletion (re-segmentation)
+# ---------------------------------------------------------------------------
+
+
+def delete_cells_for_fov(conn: sqlite3.Connection, fov_id: int) -> int:
+    """Delete all cells (and their measurements/tags) for a FOV.
+
+    Cascade order: measurements -> cell_tags -> cells.
+
+    Returns:
+        Number of cells deleted.
+    """
+    count = conn.execute(
+        "SELECT COUNT(*) FROM cells WHERE fov_id = ?", (fov_id,)
+    ).fetchone()[0]
+    if count == 0:
+        return 0
+    conn.execute(
+        "DELETE FROM measurements WHERE cell_id IN "
+        "(SELECT id FROM cells WHERE fov_id = ?)",
+        (fov_id,),
+    )
+    conn.execute(
+        "DELETE FROM cell_tags WHERE cell_id IN "
+        "(SELECT id FROM cells WHERE fov_id = ?)",
+        (fov_id,),
+    )
+    conn.execute("DELETE FROM cells WHERE fov_id = ?", (fov_id,))
+    conn.commit()
+    return count
+
+
+def select_fov_segmentation_summary(
+    conn: sqlite3.Connection,
+) -> dict[int, tuple[int, str | None]]:
+    """Return {fov_id: (cell_count, last_model_name)} for all FOVs.
+
+    Uses the most recent segmentation run that produced cells for each FOV.
+    FOVs with no cells return (0, None).
+    """
+    rows = conn.execute(
+        "SELECT f.id AS fov_id, "
+        "       COUNT(c.id) AS cell_count, "
+        "       sr.model_name "
+        "FROM fovs f "
+        "LEFT JOIN cells c ON c.fov_id = f.id AND c.is_valid = 1 "
+        "LEFT JOIN segmentation_runs sr ON c.segmentation_id = sr.id "
+        "GROUP BY f.id "
+        "ORDER BY f.id"
+    ).fetchall()
+    result: dict[int, tuple[int, str | None]] = {}
+    for r in rows:
+        result[r["fov_id"]] = (r["cell_count"], r["model_name"])
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Rename operations
 # ---------------------------------------------------------------------------
 

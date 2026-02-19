@@ -850,3 +850,36 @@ class TestRenameFov:
         experiment.rename_fov("FOV1", "FOV_A", "ctrl")
         img = experiment.read_image("FOV_A", "ctrl", "DAPI")
         assert img.shape == (64, 64)
+
+
+class TestDeleteCellsForFov:
+    def test_deletes_cells_and_measurements(self, experiment_with_data):
+        store = experiment_with_data
+        # experiment_with_data has 10 cells on FOV "r1" / condition "control"
+        assert store.get_cell_count(condition="control", fov="r1") == 10
+
+        deleted = store.delete_cells_for_fov("r1", "control")
+        assert deleted == 10
+        assert store.get_cell_count(condition="control", fov="r1") == 0
+
+    def test_returns_zero_for_empty_fov(self, experiment):
+        experiment.add_condition("ctrl")
+        experiment.add_fov("r1", "ctrl", width=32, height=32)
+        assert experiment.delete_cells_for_fov("r1", "ctrl") == 0
+
+
+class TestGetFovSegmentationSummary:
+    def test_with_segmented_fovs(self, experiment_with_data):
+        store = experiment_with_data
+        summary = store.get_fov_segmentation_summary()
+        # experiment_with_data has 10 cells on FOV "r1" with model "cyto3"
+        fovs = store.get_fovs()
+        r1 = [f for f in fovs if f.name == "r1"][0]
+        assert summary[r1.id][0] == 10
+        assert summary[r1.id][1] == "cyto3"
+
+    def test_empty_experiment(self, experiment):
+        experiment.add_condition("ctrl")
+        fov_id = experiment.add_fov("r1", "ctrl", width=32, height=32)
+        summary = experiment.get_fov_segmentation_summary()
+        assert summary[fov_id] == (0, None)

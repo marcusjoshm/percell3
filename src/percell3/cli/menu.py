@@ -615,11 +615,85 @@ def _show_assignment_summary(
     console.print(table)
 
 
+# ---------------------------------------------------------------------------
+# Segmentation helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_model_list() -> list[str]:
+    """Return ordered list of Cellpose models with cpsam first."""
+    from percell3.segment.cellpose_adapter import KNOWN_CELLPOSE_MODELS
+
+    rest = sorted(KNOWN_CELLPOSE_MODELS - {"cpsam"})
+    return ["cpsam"] + rest
+
+
+def _show_fov_status_table(
+    fovs: list,
+    seg_summary: dict[int, tuple[int, str | None]],
+) -> None:
+    """Display a numbered table of FOVs with segmentation status."""
+    from rich.table import Table
+
+    table = Table(show_header=True, title="FOVs in experiment")
+    table.add_column("#", style="bold", width=4)
+    table.add_column("FOV")
+    table.add_column("Condition")
+    table.add_column("Bio Rep")
+    table.add_column("Shape")
+    table.add_column("Cells", justify="right")
+    table.add_column("Model")
+
+    for i, f in enumerate(fovs, 1):
+        cell_count, model_name = seg_summary.get(f.id, (0, None))
+        shape = f"{f.width} x {f.height}" if f.width and f.height else "-"
+        table.add_row(
+            str(i),
+            f.name,
+            f.condition,
+            f.bio_rep,
+            shape,
+            str(cell_count) if cell_count > 0 else "-",
+            model_name or "-",
+        )
+
+    console.print(table)
+
+
+def _select_fovs_from_table(fovs: list) -> list:
+    """Prompt user to select FOVs by number from the displayed table.
+
+    Supports space-separated numbers, 'all', and blank (= all).
+    """
+    while True:
+        raw = menu_prompt(
+            "Select FOVs (numbers, 'all', or blank=all)", default="all"
+        )
+        if raw.lower() == "all":
+            return list(fovs)
+
+        parts = raw.split()
+        try:
+            indices = sorted({int(p) for p in parts})
+        except ValueError:
+            console.print("[red]Enter numbers separated by spaces, or 'all'.[/red]")
+            continue
+
+        if any(i < 1 or i > len(fovs) for i in indices):
+            console.print(f"[red]Numbers must be 1-{len(fovs)}.[/red]")
+            continue
+
+        if not indices:
+            continue
+
+        return [fovs[i - 1] for i in indices]
+
+
 def _segment_cells(state: MenuState) -> None:
-    """Interactively run cell segmentation."""
+    """Interactively run cell segmentation with table-first FOV selection."""
     store = state.require_experiment()
 
-    # Show available channels
+    # 1. Channel selection
     channels = store.get_channels()
     if not channels:
         console.print("[red]No channels found.[/red] Import images first.")
@@ -629,11 +703,18 @@ def _segment_cells(state: MenuState) -> None:
     ch_names = [ch.name for ch in channels]
     channel = numbered_select_one(ch_names, "Channel to segment")
 
-    # Model selection
-    console.print("\n[bold]Model:[/bold] cpsam (Cellpose-SAM, default for Cellpose 4.x)")
-    model = menu_prompt("Model", default="cpsam")
+    # 2. Check FOVs exist (early exit)
+    all_fovs = store.get_fovs()
+    if not all_fovs:
+        console.print("[red]No FOVs found.[/red] Import images first.")
+        return
 
-    # Diameter
+    # 3. Model selection (numbered list)
+    models = _build_model_list()
+    console.print("\n[bold]Segmentation model:[/bold]")
+    model = numbered_select_one(models, "Model")
+
+    # 4. Diameter
     diam_str = menu_prompt("Cell diameter in pixels (blank = auto-detect)", default="")
     diameter: float | None = None
     if diam_str:
@@ -646,67 +727,48 @@ def _segment_cells(state: MenuState) -> None:
             console.print(f"[red]Invalid diameter: {diam_str}[/red]")
             return
 
-    # Optional condition filter
-    conditions = store.get_conditions()
-    condition: str | None = None
-    if len(conditions) > 1:
-        console.print("\n[bold]Conditions:[/bold]")
-        _print_numbered_list(conditions)
-        cond_str = menu_prompt("Condition filter (number, or blank = all)", default="")
-        if cond_str:
-            try:
-                idx = int(cond_str)
-                if 1 <= idx <= len(conditions):
-                    condition = conditions[idx - 1]
-                else:
-                    console.print("[red]Invalid number.[/red]")
-                    return
-            except ValueError:
-                condition = cond_str
+    # 5. FOV status table + selection
+    seg_summary = store.get_fov_segmentation_summary()
+    _show_fov_status_table(all_fovs, seg_summary)
 
-    # Biological replicate filter (scoped to selected condition)
-    bio_rep = _prompt_bio_rep(store, condition=condition)
+    if len(all_fovs) == 1:
+        console.print(f"  [dim](auto-selected: {all_fovs[0].name})[/dim]")
+        selected_fovs = all_fovs
+    else:
+        selected_fovs = _select_fovs_from_table(all_fovs)
 
-    # Optional FOV filter
-    fov_filter_list: list[str] | None = None
-    all_fovs = store.get_fovs(condition=condition, bio_rep=bio_rep)
-    if len(all_fovs) > 1:
-        names = [f.name for f in all_fovs]
-        console.print(f"\n[bold]FOVs ({len(names)}):[/bold]")
-        _print_numbered_list(names)
-        filter_str = menu_prompt(
-            "FOV filter (space-separated numbers, 'all', or blank = all)",
-            default="",
-        )
-        if filter_str and filter_str.lower() != "all":
-            parts = filter_str.split()
-            try:
-                indices = sorted({int(p) for p in parts})
-                fov_filter_list = [names[i - 1] for i in indices if 1 <= i <= len(names)]
-            except ValueError:
-                # Treat as comma-separated names for backward compat
-                fov_filter_list = [f.strip() for f in filter_str.split(",") if f.strip()]
+    # 6. Confirmation with re-segmentation warning
+    reseg_fovs = [
+        f for f in selected_fovs
+        if seg_summary.get(f.id, (0, None))[0] > 0
+    ]
 
-    # Confirm
     console.print(f"\n[bold]Segmentation settings:[/bold]")
     console.print(f"  Channel:  {channel}")
     console.print(f"  Model:    {model}")
     console.print(f"  Diameter: {diameter or 'auto-detect'}")
-    if condition:
-        console.print(f"  Condition: {condition}")
-    if fov_filter_list:
-        console.print(f"  FOVs:     {', '.join(fov_filter_list)}")
-    else:
-        console.print(f"  FOVs:     all ({len(all_fovs)})")
+    console.print(f"  FOVs:     {len(selected_fovs)} selected")
+
+    if reseg_fovs:
+        console.print(
+            f"  [yellow]Re-segment:[/yellow] {len(reseg_fovs)} FOV(s) "
+            "with existing cells will be replaced"
+        )
+        for f in reseg_fovs[:5]:
+            count = seg_summary[f.id][0]
+            console.print(f"    - {f.name}/{f.condition} ({count} cells)")
+        if len(reseg_fovs) > 5:
+            console.print(f"    ... and {len(reseg_fovs) - 5} more")
 
     if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
         console.print("[yellow]Segmentation cancelled.[/yellow]")
         return
 
-    # Run segmentation
+    # 7. Run segmentation
     from percell3.segment import SegmentationEngine
 
     engine = SegmentationEngine()
+    fov_names = [f.name for f in selected_fovs]
 
     with make_progress() as progress:
         task = progress.add_task("Segmenting...", total=None)
@@ -722,9 +784,7 @@ def _segment_cells(state: MenuState) -> None:
             channel=channel,
             model=model,
             diameter=diameter,
-            fovs=fov_filter_list,
-            condition=condition,
-            bio_rep=bio_rep,
+            fovs=fov_names,
             progress_callback=on_progress,
         )
 
