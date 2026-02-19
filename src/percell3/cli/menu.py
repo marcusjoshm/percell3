@@ -882,7 +882,7 @@ def _apply_threshold(state: MenuState) -> None:
     console.print("\n[bold]Channel for grouping metric:[/bold]")
     grouping_channel = numbered_select_one(ch_names, "Grouping channel")
 
-    metrics = ["mean_intensity", "median_intensity", "total_intensity", "area_pixels"]
+    metrics = ["mean_intensity", "median_intensity", "integrated_intensity", "area_pixels"]
     console.print("\n[bold]Metric for grouping:[/bold]")
     grouping_metric = numbered_select_one(metrics, "Grouping metric")
 
