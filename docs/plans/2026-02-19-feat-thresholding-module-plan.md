@@ -415,15 +415,15 @@ for _, cell in cells_df.iterrows():
 
 #### Tasks
 
-- [ ] Create `src/percell3/measure/particle_analyzer.py` with `ParticleAnalyzer` and `ParticleAnalysisResult`
-- [ ] Implement per-cell particle detection using scipy.ndimage.label
-- [ ] Implement morphometrics extraction via skimage.measure.regionprops
-- [ ] Implement min_particle_area filtering
-- [ ] Implement per-cell summary measurements (particle_count, total_particle_area, etc.)
-- [ ] Build per-FOV particle label image (assign unique IDs across all cells)
-- [ ] Handle cells with no threshold mask (skipped groups): particle_count=0
-- [ ] Write tests: single cell with particles, multiple cells, no particles, min area filter, summary metrics
-- [ ] Run tests
+- [x] Create `src/percell3/measure/particle_analyzer.py` with `ParticleAnalyzer` and `ParticleAnalysisResult`
+- [x] Implement per-cell particle detection using scipy.ndimage.label
+- [x] Implement morphometrics extraction via skimage.measure.regionprops
+- [x] Implement min_particle_area filtering
+- [x] Implement per-cell summary measurements (particle_count, total_particle_area, etc.)
+- [x] Build per-FOV particle label image (assign unique IDs across all cells)
+- [x] Handle cells with no threshold mask (skipped groups): particle_count=0
+- [x] Write tests: single cell with particles, multiple cells, no particles, min area filter, summary metrics
+- [x] Run tests
 
 ### Phase 5: CLI Integration
 
