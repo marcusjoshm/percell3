@@ -162,15 +162,15 @@ Add `particles` table, `ParticleRecord`, and ExperimentStore methods.
 
 #### Tasks
 
-- [ ] Add `particles` table to `schema.py` DDL and `EXPECTED_TABLES`
-- [ ] Add `ParticleRecord` to `models.py`
-- [ ] Add particle queries to `queries.py`: `insert_particles()` (bulk), `select_particles()` (with filters), `delete_particles_for_fov()`, `delete_particles_for_threshold_run()`
-- [ ] Add `select_threshold_runs()` to `queries.py` (modeled on `select_segmentation_runs()`)
-- [ ] Add `delete_tags_by_prefix()` to `queries.py`
-- [ ] Add zarr path helper `particle_label_group_path()` and I/O functions to `zarr_io.py`
-- [ ] Add ExperimentStore wrapper methods: `add_particles()`, `get_particles()`, `delete_particles_for_fov()`, `get_threshold_runs()`, `delete_tags_by_prefix()`, `write_particle_labels()`, `read_particle_labels()`
-- [ ] Write tests for all new queries and store methods
-- [ ] Run full test suite
+- [x] Add `particles` table to `schema.py` DDL and `EXPECTED_TABLES`
+- [x] Add `ParticleRecord` to `models.py`
+- [x] Add particle queries to `queries.py`: `insert_particles()` (bulk), `select_particles()` (with filters), `delete_particles_for_fov()`, `delete_particles_for_threshold_run()`
+- [x] Add `select_threshold_runs()` to `queries.py` (modeled on `select_segmentation_runs()`)
+- [x] Add `delete_tags_by_prefix()` to `queries.py`
+- [x] Add zarr path helper `particle_label_group_path()` and I/O functions to `zarr_io.py`
+- [x] Add ExperimentStore wrapper methods: `add_particles()`, `get_particles()`, `delete_particles_for_fov()`, `get_threshold_runs()`, `delete_tags_by_prefix()`, `write_particle_labels()`, `read_particle_labels()`
+- [x] Write tests for all new queries and store methods
+- [x] Run full test suite
 
 ### Phase 2: CellGrouper
 
@@ -222,12 +222,12 @@ class CellGrouper:
 
 #### Tasks
 
-- [ ] Create `src/percell3/measure/cell_grouper.py` with `CellGrouper` and `GroupingResult`
-- [ ] Implement GMM + BIC fitting with ascending group ordering
-- [ ] Handle edge cases: 0 cells (ValueError), <10 cells (single group), 1 GMM component
-- [ ] Handle `area` metric from cells table vs. other metrics from measurements table
-- [ ] Write tests: happy path, few cells fallback, 1 component, missing measurements error, area from cells table
-- [ ] Run tests
+- [x] Create `src/percell3/measure/cell_grouper.py` with `CellGrouper` and `GroupingResult`
+- [x] Implement GMM + BIC fitting with ascending group ordering
+- [x] Handle edge cases: 0 cells (ValueError), <10 cells (single group), 1 GMM component
+- [x] Handle `area` metric from cells table vs. other metrics from measurements table
+- [x] Write tests: happy path, few cells fallback, 1 component, missing measurements error, area from cells table
+- [x] Run tests
 
 ### Phase 3: ThresholdEngine Enhancement + Napari QC Viewer
 
