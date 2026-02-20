@@ -806,6 +806,47 @@ def _segment_cells(state: MenuState) -> None:
         console.print(f"\n[yellow]Warnings ({len(result.warnings)}):[/yellow]")
         for w in result.warnings:
             console.print(f"  [dim]- {w}[/dim]")
+
+    # Auto-measure all channels on the just-segmented FOVs
+    if result.cell_count > 0:
+        try:
+            all_channels = store.get_channels()
+            ch_names = [ch.name for ch in all_channels]
+            console.print(f"\n[bold]Auto-measuring {len(ch_names)} channels...[/bold]")
+
+            from percell3.measure.measurer import Measurer as _AutoMeasurer
+
+            auto_measurer = _AutoMeasurer()
+            total_auto = 0
+
+            with make_progress() as auto_progress:
+                auto_task = auto_progress.add_task(
+                    "Measuring...", total=len(selected_fovs),
+                )
+                for ai, fov_info in enumerate(selected_fovs):
+                    count = auto_measurer.measure_fov(
+                        store,
+                        fov=fov_info.name,
+                        condition=fov_info.condition,
+                        channels=ch_names,
+                        bio_rep=fov_info.bio_rep,
+                    )
+                    total_auto += count
+                    auto_progress.update(
+                        auto_task, completed=ai + 1,
+                        description=f"Measuring {fov_info.name}",
+                    )
+
+            n_metrics = len(_AutoMeasurer()._metrics.list_metrics())
+            console.print(
+                f"  Measured {n_metrics} metrics x {len(ch_names)} channels "
+                f"for {result.cell_count} cells"
+            )
+        except Exception as exc:
+            console.print(
+                f"  [yellow]Auto-measure warning:[/yellow] {exc}"
+            )
+
     console.print()
 
 
