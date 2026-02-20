@@ -141,6 +141,118 @@ class Measurer:
             cells_df, labels, image, ch_info.id, metric_names,
         )
 
+    def measure_fov_masked(
+        self,
+        store: ExperimentStore,
+        fov: str,
+        condition: str,
+        channels: list[str],
+        threshold_channel: str,
+        threshold_run_id: int,
+        scopes: list[str],
+        metrics: list[str] | None = None,
+        bio_rep: str | None = None,
+        timepoint: str | None = None,
+    ) -> int:
+        """Measure cells using a threshold mask to define inside/outside regions.
+
+        For each cell, the threshold mask is cropped to the cell's bounding box.
+        'mask_inside' measures pixels where both the cell mask and threshold mask
+        are True. 'mask_outside' measures pixels where the cell mask is True but
+        the threshold mask is False.
+
+        Args:
+            store: Target ExperimentStore.
+            fov: FOV name.
+            condition: Condition name.
+            channels: Channel names to measure.
+            threshold_channel: Channel whose threshold mask to use.
+            threshold_run_id: ID of the threshold run that produced the mask.
+            scopes: Subset of ['mask_inside', 'mask_outside'].
+            metrics: Metric names (default: all registered metrics).
+            bio_rep: Biological replicate name (auto-resolved if None).
+            timepoint: Timepoint (optional).
+
+        Returns:
+            Number of measurements written.
+        """
+        metric_names = metrics or self._metrics.list_metrics()
+        for m in metric_names:
+            if m not in self._metrics:
+                raise KeyError(f"Unknown metric {m!r}")
+
+        valid_scopes = {"mask_inside", "mask_outside"}
+        for s in scopes:
+            if s not in valid_scopes:
+                raise ValueError(f"Invalid scope {s!r}, must be one of {valid_scopes}")
+
+        cells_df = store.get_cells(
+            condition=condition, bio_rep=bio_rep, fov=fov, timepoint=timepoint,
+        )
+        if cells_df.empty:
+            logger.info("No cells found in %s/%s — skipping", condition, fov)
+            return 0
+
+        labels = store.read_labels(fov, condition, bio_rep=bio_rep, timepoint=timepoint)
+        thresh_mask = store.read_mask(
+            fov, condition, threshold_channel, bio_rep=bio_rep, timepoint=timepoint,
+        )
+        # Normalize mask to boolean (stored as uint8 0/255)
+        thresh_bool = thresh_mask > 0
+
+        all_records: list[MeasurementRecord] = []
+
+        for channel in channels:
+            ch_info = store.get_channel(channel)
+            image = store.read_image_numpy(
+                fov, condition, channel, bio_rep=bio_rep, timepoint=timepoint,
+            )
+
+            for _, cell in cells_df.iterrows():
+                cell_id = int(cell["id"])
+                label_val = int(cell["label_value"])
+                bx = int(cell["bbox_x"])
+                by = int(cell["bbox_y"])
+                bw = int(cell["bbox_w"])
+                bh = int(cell["bbox_h"])
+
+                label_crop = labels[by : by + bh, bx : bx + bw]
+                image_crop = image[by : by + bh, bx : bx + bw]
+                thresh_crop = thresh_bool[by : by + bh, bx : bx + bw]
+                cell_mask = label_crop == label_val
+
+                if not np.any(cell_mask):
+                    continue
+
+                for scope in scopes:
+                    if scope == "mask_inside":
+                        scoped_mask = cell_mask & thresh_crop
+                    else:  # mask_outside
+                        scoped_mask = cell_mask & ~thresh_crop
+
+                    has_pixels = np.any(scoped_mask)
+
+                    for metric_name in metric_names:
+                        if has_pixels:
+                            value = self._metrics.compute(
+                                metric_name, image_crop, scoped_mask,
+                            )
+                        else:
+                            value = 0.0
+                        all_records.append(MeasurementRecord(
+                            cell_id=cell_id,
+                            channel_id=ch_info.id,
+                            metric=metric_name,
+                            value=value,
+                            scope=scope,
+                            threshold_run_id=threshold_run_id,
+                        ))
+
+        if all_records:
+            store.add_measurements(all_records)
+
+        return len(all_records)
+
     def _measure_cells_on_channel(
         self,
         cells_df,
