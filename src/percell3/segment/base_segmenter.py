@@ -50,9 +50,9 @@ class SegmentationParams:
             )
         if self.diameter is not None and self.diameter <= 0:
             raise ValueError(f"diameter must be > 0 or None, got {self.diameter}")
-        if not (-6 <= self.cellprob_threshold <= 6):
+        if not (-8 <= self.cellprob_threshold <= 8):
             raise ValueError(
-                f"cellprob_threshold must be between -6 and 6, got {self.cellprob_threshold}"
+                f"cellprob_threshold must be between -8 and 8, got {self.cellprob_threshold}"
             )
 
     def to_dict(self) -> dict[str, Any]:

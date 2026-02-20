@@ -33,11 +33,17 @@ class CellposeAdapter(BaseSegmenter):
         self._model_cache: dict[tuple[str, bool], Any] = {}
         self._cellpose_major: int | None = None
 
+    @staticmethod
+    def _is_custom_path(model_name: str) -> bool:
+        """Check if model_name is a filesystem path rather than a known model."""
+        return "/" in model_name or "\\" in model_name
+
     def _get_model(self, model_name: str, gpu: bool) -> Any:
         """Get or create a cached Cellpose model instance.
 
         Args:
-            model_name: Cellpose model name (e.g., "cpsam", "cyto3", "nuclei").
+            model_name: Cellpose model name (e.g., "cpsam", "cyto3") or a
+                filesystem path to a custom-trained model.
             gpu: Whether to use GPU acceleration.
 
         Returns:
@@ -45,9 +51,10 @@ class CellposeAdapter(BaseSegmenter):
 
         Raises:
             ImportError: If cellpose is not installed.
-            ValueError: If model_name is not a known Cellpose model.
+            ValueError: If model_name is not a known model or valid path.
         """
-        if model_name not in KNOWN_CELLPOSE_MODELS:
+        is_custom = self._is_custom_path(model_name)
+        if not is_custom and model_name not in KNOWN_CELLPOSE_MODELS:
             raise ValueError(
                 f"Unknown model {model_name!r}. "
                 f"Known models: {sorted(KNOWN_CELLPOSE_MODELS)}"
@@ -67,7 +74,7 @@ class CellposeAdapter(BaseSegmenter):
             model_cls = getattr(models, "CellposeModel", None) or getattr(
                 models, "Cellpose"
             )
-            if self._cellpose_major >= 4:
+            if is_custom or self._cellpose_major >= 4:
                 self._model_cache[key] = model_cls(
                     pretrained_model=model_name, gpu=gpu,
                 )

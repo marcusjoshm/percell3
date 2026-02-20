@@ -748,9 +748,9 @@ def delete_cell_tags(
 
 
 def delete_cells_for_fov(conn: sqlite3.Connection, fov_id: int) -> int:
-    """Delete all cells (and their measurements/tags) for a FOV.
+    """Delete all cells (and their particles/measurements/tags) for a FOV.
 
-    Cascade order: measurements -> cell_tags -> cells.
+    Cascade order: particles -> measurements -> cell_tags -> cells.
 
     Returns:
         Number of cells deleted.
@@ -760,6 +760,11 @@ def delete_cells_for_fov(conn: sqlite3.Connection, fov_id: int) -> int:
     ).fetchone()[0]
     if count == 0:
         return 0
+    conn.execute(
+        "DELETE FROM particles WHERE cell_id IN "
+        "(SELECT id FROM cells WHERE fov_id = ?)",
+        (fov_id,),
+    )
     conn.execute(
         "DELETE FROM measurements WHERE cell_id IN "
         "(SELECT id FROM cells WHERE fov_id = ?)",

@@ -37,17 +37,26 @@ class TestModelNameValidation:
             # Should not raise — model is in cache and name is valid
             assert adapter._get_model(name, gpu=False) is mock_model
 
-    def test_path_model_name_rejected(self) -> None:
-        """Filesystem path as model name should raise ValueError."""
+    def test_custom_path_accepted(self) -> None:
+        """Filesystem paths are accepted as custom model paths."""
         adapter = CellposeAdapter()
-        with pytest.raises(ValueError, match="Unknown model"):
-            adapter._get_model("../evil", gpu=False)
+        assert CellposeAdapter._is_custom_path("../my_model")
+        assert CellposeAdapter._is_custom_path("/tmp/my_model.pth")
+        assert not CellposeAdapter._is_custom_path("cpsam")
 
-    def test_absolute_path_rejected(self) -> None:
-        """Absolute path should raise ValueError."""
+    @pytest.mark.skipif(
+        not _cellpose_available(), reason="cellpose not installed",
+    )
+    def test_custom_path_uses_pretrained_model(self) -> None:
+        """Custom path should use pretrained_model kwarg regardless of version."""
         adapter = CellposeAdapter()
-        with pytest.raises(ValueError, match="Unknown model"):
-            adapter._get_model("/tmp/malicious.pth", gpu=False)
+        mock_instance = MagicMock()
+        adapter._cellpose_major = 3  # Force 3.x behavior
+
+        with patch("cellpose.models.CellposeModel", return_value=mock_instance) as mock_cls:
+            adapter._get_model("/tmp/my_custom_model", gpu=False)
+
+        mock_cls.assert_called_once_with(pretrained_model="/tmp/my_custom_model", gpu=False)
 
     def test_empty_string_rejected(self) -> None:
         """Empty string should raise ValueError."""

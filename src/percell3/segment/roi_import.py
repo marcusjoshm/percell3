@@ -55,6 +55,9 @@ def store_labels_and_cells(
     """
     store.write_labels(fov, condition, labels, run_id, bio_rep=bio_rep, timepoint=timepoint)
 
+    # Delete old cells before inserting new ones (prevents duplicates on re-segmentation)
+    store.delete_cells_for_fov(fov, condition)
+
     processor = LabelProcessor()
     cells = processor.extract_cells(
         labels, fov_info.id, run_id, fov_info.pixel_size_um,
