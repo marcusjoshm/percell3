@@ -216,7 +216,7 @@ def run_interactive_menu() -> None:
         MenuItem("2", "Import images", _import_images, enabled=True),
         MenuItem("3", "Segment cells", _segment_cells, enabled=True),
         MenuItem("4", "View in napari", _view_napari, enabled=True),
-        MenuItem("5", "Measure channels", None, enabled=False),
+        MenuItem("5", "Measure channels", _measure_channels, enabled=True),
         MenuItem("6", "Apply threshold", _apply_threshold, enabled=True),
         MenuItem("7", "Query experiment", _query_experiment, enabled=True),
         MenuItem("8", "Edit experiment", _edit_experiment, enabled=True),
@@ -853,6 +853,216 @@ def _view_napari(state: MenuState) -> None:
         console.print(f"\n[green]Labels saved[/green] (run_id={run_id})")
     else:
         console.print("\n[dim]No changes detected.[/dim]")
+    console.print()
+
+
+def _measure_channels(state: MenuState) -> None:
+    """Interactively measure cells — whole-cell or mask-based modes."""
+    store = state.require_experiment()
+
+    # Prerequisites
+    channels = store.get_channels()
+    if not channels:
+        console.print("[red]No channels found.[/red] Import images first.")
+        return
+
+    all_fovs = store.get_fovs()
+    if not all_fovs:
+        console.print("[red]No FOVs found.[/red] Import images first.")
+        return
+
+    cell_count = store.get_cell_count()
+    if cell_count == 0:
+        console.print("[red]No cells found.[/red] Run segmentation first.")
+        return
+
+    # Mode selection
+    console.print("\n[bold]Measurement mode:[/bold]")
+    modes = [
+        "Whole cell (all channels, all metrics)",
+        "Inside threshold mask",
+        "Outside threshold mask",
+        "Both inside + outside mask",
+    ]
+    mode = numbered_select_one(modes, "Mode")
+
+    if mode.startswith("Whole"):
+        _measure_whole_cell(store, channels, all_fovs)
+    else:
+        # Determine scopes
+        if "Inside" in mode:
+            scopes = ["mask_inside"]
+        elif "Outside" in mode:
+            scopes = ["mask_outside"]
+        else:
+            scopes = ["mask_inside", "mask_outside"]
+        _measure_masked(store, channels, all_fovs, scopes)
+
+
+def _measure_whole_cell(store, channels, all_fovs) -> None:
+    """Run whole-cell measurement across all channels."""
+    # Channel selection
+    ch_names = [ch.name for ch in channels]
+    console.print("\n[bold]Channels to measure:[/bold]")
+    selected_channels = numbered_select_many(ch_names, "Channels (numbers, 'all')")
+
+    # FOV selection
+    seg_summary = store.get_fov_segmentation_summary()
+    fovs_with_cells = [f for f in all_fovs if seg_summary.get(f.id, (0, None))[0] > 0]
+    if not fovs_with_cells:
+        console.print("[red]No FOVs with segmented cells.[/red]")
+        return
+
+    _show_fov_status_table(fovs_with_cells, seg_summary)
+    if len(fovs_with_cells) == 1:
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].name})[/dim]")
+        selected_fovs = fovs_with_cells
+    else:
+        selected_fovs = _select_fovs_from_table(fovs_with_cells)
+
+    # Confirmation
+    console.print(f"\n[bold]Measurement settings:[/bold]")
+    console.print(f"  Mode:     Whole cell")
+    console.print(f"  Channels: {', '.join(selected_channels)}")
+    console.print(f"  FOVs:     {len(selected_fovs)} selected")
+
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
+        console.print("[yellow]Measurement cancelled.[/yellow]")
+        return
+
+    # Run BatchMeasurer
+    from percell3.measure.batch import BatchMeasurer
+
+    batch = BatchMeasurer()
+
+    # Filter to selected FOV conditions for per-FOV measurement
+    with make_progress() as progress:
+        task = progress.add_task("Measuring...", total=len(selected_fovs))
+
+        from percell3.measure.measurer import Measurer
+
+        measurer = Measurer()
+        total_measurements = 0
+
+        for i, fov_info in enumerate(selected_fovs):
+            count = measurer.measure_fov(
+                store,
+                fov=fov_info.name,
+                condition=fov_info.condition,
+                channels=selected_channels,
+                bio_rep=fov_info.bio_rep,
+            )
+            total_measurements += count
+            progress.update(
+                task, completed=i + 1,
+                description=f"Measuring {fov_info.name}",
+            )
+
+    console.print(f"\n[green]Measurement complete[/green]")
+    console.print(f"  FOVs:         {len(selected_fovs)}")
+    console.print(f"  Channels:     {len(selected_channels)}")
+    console.print(f"  Measurements: {total_measurements}")
+    console.print()
+
+
+def _measure_masked(store, channels, all_fovs, scopes: list[str]) -> None:
+    """Run mask-based measurement using threshold masks."""
+    # Check for threshold runs
+    threshold_runs = store.get_threshold_runs()
+    if not threshold_runs:
+        console.print(
+            "[red]No threshold runs found.[/red] "
+            "Run 'Apply threshold' (menu 6) first."
+        )
+        return
+
+    # Group threshold runs by channel, pick most recent per channel
+    runs_by_channel: dict[str, dict] = {}
+    for run in threshold_runs:
+        runs_by_channel[run["channel"]] = run  # last wins = most recent
+
+    # Select threshold channel
+    thresh_channels = list(runs_by_channel.keys())
+    console.print("\n[bold]Threshold channels available:[/bold]")
+    threshold_channel = numbered_select_one(thresh_channels, "Threshold channel")
+    selected_run = runs_by_channel[threshold_channel]
+    threshold_run_id = selected_run["id"]
+
+    # Select measurement channels
+    ch_names = [ch.name for ch in channels]
+    console.print("\n[bold]Channels to measure:[/bold]")
+    selected_channels = numbered_select_many(ch_names, "Channels (numbers, 'all')")
+
+    # FOV selection — only FOVs with cells
+    seg_summary = store.get_fov_segmentation_summary()
+    fovs_with_cells = [f for f in all_fovs if seg_summary.get(f.id, (0, None))[0] > 0]
+    if not fovs_with_cells:
+        console.print("[red]No FOVs with segmented cells.[/red]")
+        return
+
+    _show_fov_status_table(fovs_with_cells, seg_summary)
+    if len(fovs_with_cells) == 1:
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].name})[/dim]")
+        selected_fovs = fovs_with_cells
+    else:
+        selected_fovs = _select_fovs_from_table(fovs_with_cells)
+
+    scope_label = " + ".join(s.replace("mask_", "") for s in scopes)
+    console.print(f"\n[bold]Measurement settings:[/bold]")
+    console.print(f"  Mode:      Mask-based ({scope_label})")
+    console.print(f"  Threshold: {threshold_channel} (run #{threshold_run_id})")
+    console.print(f"  Channels:  {', '.join(selected_channels)}")
+    console.print(f"  FOVs:      {len(selected_fovs)} selected")
+
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
+        console.print("[yellow]Measurement cancelled.[/yellow]")
+        return
+
+    # Run masked measurement per FOV
+    from percell3.measure.measurer import Measurer
+
+    measurer = Measurer()
+    total_measurements = 0
+    fovs_processed = 0
+    warnings: list[str] = []
+
+    with make_progress() as progress:
+        task = progress.add_task("Measuring...", total=len(selected_fovs))
+
+        for i, fov_info in enumerate(selected_fovs):
+            try:
+                count = measurer.measure_fov_masked(
+                    store,
+                    fov=fov_info.name,
+                    condition=fov_info.condition,
+                    channels=selected_channels,
+                    threshold_channel=threshold_channel,
+                    threshold_run_id=threshold_run_id,
+                    scopes=scopes,
+                    bio_rep=fov_info.bio_rep,
+                )
+                total_measurements += count
+                fovs_processed += 1
+            except Exception as exc:
+                if isinstance(exc, (MemoryError, KeyboardInterrupt, SystemExit)):
+                    raise
+                warnings.append(f"{fov_info.name}: {exc}")
+
+            progress.update(
+                task, completed=i + 1,
+                description=f"Measuring {fov_info.name}",
+            )
+
+    console.print(f"\n[green]Masked measurement complete[/green]")
+    console.print(f"  FOVs:         {fovs_processed}")
+    console.print(f"  Channels:     {len(selected_channels)}")
+    console.print(f"  Scopes:       {scope_label}")
+    console.print(f"  Measurements: {total_measurements}")
+
+    if warnings:
+        console.print(f"\n[yellow]Warnings ({len(warnings)}):[/yellow]")
+        for w in warnings:
+            console.print(f"  [dim]- {w}[/dim]")
     console.print()
 
 
