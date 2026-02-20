@@ -103,6 +103,24 @@ def _launch(
     # --- Load threshold masks (if any) ---
     _load_mask_layers(viewer, store, fov, condition, bio_rep=bio_rep)
 
+    # --- Add dock widgets ---
+    channel_names = [ch.name for ch in selected_channels]
+
+    from percell3.segment.viewer.cellpose_widget import CellposeWidget
+    from percell3.segment.viewer.edit_widget import EditWidget
+
+    cellpose_w = CellposeWidget(
+        viewer, store, fov, condition, bio_rep, channel_names,
+    )
+    viewer.window.add_dock_widget(
+        cellpose_w.widget, name="Cellpose", area="right",
+    )
+
+    edit_w = EditWidget(viewer)
+    viewer.window.add_dock_widget(
+        edit_w.widget, name="Edit Labels", area="right",
+    )
+
     # --- Block until viewer closes ---
     napari.run()
 
