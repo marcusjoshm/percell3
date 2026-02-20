@@ -281,9 +281,39 @@ def run_interactive_menu() -> None:
         state.close()
 
 
+_BANNER_LINES = [
+    "          ███████╗ ████████╗███████╗ ███████╗████████╗██╗      ██╗              ",
+    "          ██╔═══██╗██╔═════╝██╔═══██╗██╔════╝██╔═════╝██║      ██║              ",
+    "          ███████╔╝███████╗ ███████╔╝██║     ███████╗ ██║      ██║              ",
+    "          ██╔════╝ ██╔════╝ ██╔═══██╗██║     ██╔════╝ ██║      ██║              ",
+    "          ██║      ████████╗██║   ██║███████╗████████╗████████╗████████╗        ",
+    "          ╚═╝      ╚═══════╝╚═╝   ╚═╝╚══════╝╚═══════╝╚═══════╝╚═══════╝        ",
+]
+
+
+def _colorize_banner_line(line: str) -> str:
+    """Color a banner line: green for PER (cols 1-35), magenta for CELL (cols 36-80)."""
+    parts = []
+    for j, char in enumerate(line):
+        if char == " ":
+            parts.append(char)
+        elif 1 <= j <= 35:
+            parts.append(f"[green]{char}[/green]")
+        elif 36 <= j <= 80:
+            parts.append(f"[magenta]{char}[/magenta]")
+        else:
+            parts.append(char)
+    return "".join(parts)
+
+
 def _show_header(state: MenuState) -> None:
-    """Display the menu header with experiment context."""
-    console.print("\n[bold]PerCell 3[/bold] — Single-Cell Microscopy Analysis\n")
+    """Display the ASCII art banner, welcome message, and experiment context."""
+    console.print()
+    for line in _BANNER_LINES:
+        console.print(_colorize_banner_line(line))
+    console.print()
+    console.print("[bold]              Welcome to PerCell 3 — Single-Cell Microscopy Analysis[/bold]")
+    console.print()
     if state.experiment_path:
         name = state.store.name if state.store else ""
         label = f"{name} ({state.experiment_path})" if name else str(state.experiment_path)
