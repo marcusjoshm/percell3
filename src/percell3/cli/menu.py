@@ -1222,6 +1222,7 @@ def _apply_threshold(state: MenuState) -> None:
         )
 
         accepted_groups: list[tuple[str, list[int], int]] = []  # (tag, cell_ids, run_id)
+        combined_mask = np.zeros(labels.shape, dtype=bool)
         skip_remaining_groups = False
 
         for i, tag_name in enumerate(grouping_result.tag_names):
@@ -1304,6 +1305,19 @@ def _apply_threshold(state: MenuState) -> None:
                 f"positive={result.positive_fraction:.1%}"
             )
             accepted_groups.append((tag_name, group_cell_ids, result.threshold_run_id))
+
+            # Accumulate this group's mask into the combined mask
+            group_written = store.read_mask(fov, condition, threshold_channel, bio_rep=bio_rep)
+            combined_mask |= (group_written > 0)
+
+        # Write combined mask from all accepted groups
+        if accepted_groups:
+            _, _, last_run_id = accepted_groups[-1]
+            store.write_mask(
+                fov, condition, threshold_channel,
+                combined_mask.astype(np.uint8),
+                last_run_id, bio_rep=bio_rep,
+            )
 
         # 6c. Particle analysis for accepted groups
         if accepted_groups:
