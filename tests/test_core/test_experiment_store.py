@@ -745,6 +745,82 @@ class TestBioReps:
         assert "bio_rep_name" in pivot.columns
         assert pivot["bio_rep_name"].iloc[0] == "N1"
 
+    def test_measurement_pivot_mixed_scopes(self, experiment):
+        """Pivot with mixed scopes: whole_cell gets clean names, mask scopes get suffix."""
+        experiment.add_channel("GFP")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("r1", condition="control")
+        seg_id = experiment.add_segmentation_run(channel="GFP", model_name="cyto3")
+
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+        ]
+        cell_ids = experiment.add_cells(cells)
+        gfp = experiment.get_channel("GFP")
+
+        experiment.add_measurements([
+            MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
+                              metric="mean_intensity", value=42.0,
+                              scope="whole_cell"),
+            MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
+                              metric="mean_intensity", value=30.0,
+                              scope="mask_inside"),
+            MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
+                              metric="mean_intensity", value=12.0,
+                              scope="mask_outside"),
+        ])
+
+        pivot = experiment.get_measurement_pivot()
+        # whole_cell gets clean name, mask scopes get suffix
+        assert "GFP_mean_intensity" in pivot.columns
+        assert "GFP_mean_intensity_mask_inside" in pivot.columns
+        assert "GFP_mean_intensity_mask_outside" in pivot.columns
+        assert pivot["GFP_mean_intensity"].iloc[0] == 42.0
+        assert pivot["GFP_mean_intensity_mask_inside"].iloc[0] == 30.0
+        assert pivot["GFP_mean_intensity_mask_outside"].iloc[0] == 12.0
+
+    def test_measurement_pivot_scope_filter(self, experiment):
+        """Pivot with scope filter returns only that scope."""
+        experiment.add_channel("GFP")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("r1", condition="control")
+        seg_id = experiment.add_segmentation_run(channel="GFP", model_name="cyto3")
+
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+        ]
+        cell_ids = experiment.add_cells(cells)
+        gfp = experiment.get_channel("GFP")
+
+        experiment.add_measurements([
+            MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
+                              metric="mean_intensity", value=42.0,
+                              scope="whole_cell"),
+            MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
+                              metric="mean_intensity", value=30.0,
+                              scope="mask_inside"),
+        ])
+
+        # Filter to whole_cell only
+        pivot = experiment.get_measurement_pivot(scope="whole_cell")
+        assert "GFP_mean_intensity" in pivot.columns
+        assert "GFP_mean_intensity_mask_inside" not in pivot.columns
+
+        # Filter to mask_inside only — single mask scope still gets suffix
+        pivot2 = experiment.get_measurement_pivot(scope="mask_inside")
+        assert "GFP_mean_intensity_mask_inside" in pivot2.columns
+        assert len(pivot2) == 1
+
 
 class TestBioRepNameValidation:
     """Security tests: name validation on bio rep names."""

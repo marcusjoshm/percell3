@@ -924,8 +924,10 @@ class ExperimentStore:
         path: Path,
         channels: list[str] | None = None,
         metrics: list[str] | None = None,
+        scope: str | None = None,
     ) -> None:
         pivot = self.get_measurement_pivot(
-            channels=channels, metrics=metrics, include_cell_info=True,
+            channels=channels, metrics=metrics, scope=scope,
+            include_cell_info=True,
         )
         pivot.to_csv(path, index=False)

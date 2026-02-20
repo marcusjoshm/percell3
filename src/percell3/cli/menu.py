@@ -1669,15 +1669,30 @@ def _export_csv(state: MenuState) -> None:
             console.print("[yellow]Export cancelled.[/yellow]")
             return
 
-    # Optional channel/metric filters
+    # Optional channel/metric/scope filters
     ch_filter = menu_prompt("Channels to export (comma-separated, blank = all)", default="")
     met_filter = menu_prompt("Metrics to export (comma-separated, blank = all)", default="")
+
+    console.print("\n[bold]Scope filter:[/bold]")
+    scope_options = [
+        "All scopes",
+        "Whole cell only",
+        "Inside mask only",
+        "Outside mask only",
+    ]
+    scope_choice = numbered_select_one(scope_options, "Scope")
+    scope_map = {
+        "Whole cell only": "whole_cell",
+        "Inside mask only": "mask_inside",
+        "Outside mask only": "mask_outside",
+    }
+    scope_val = scope_map.get(scope_choice)
 
     ch_list = [c.strip() for c in ch_filter.split(",") if c.strip()] or None
     met_list = [m.strip() for m in met_filter.split(",") if m.strip()] or None
 
     with console.status("[bold blue]Exporting measurements..."):
-        store.export_csv(out_path, channels=ch_list, metrics=met_list)
+        store.export_csv(out_path, channels=ch_list, metrics=met_list, scope=scope_val)
     console.print(f"[green]Exported measurements to {out_path}[/green]")
 
 
