@@ -21,6 +21,9 @@ PARTICLE_SUMMARY_METRICS = [
     "mean_particle_area",
     "max_particle_area",
     "particle_coverage_fraction",
+    "mean_particle_mean_intensity",
+    "mean_particle_integrated_intensity",
+    "total_particle_integrated_intensity",
 ]
 
 
@@ -238,6 +241,9 @@ class ParticleAnalyzer:
             MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_area", value=0.0),
             MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="max_particle_area", value=0.0),
             MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_coverage_fraction", value=0.0),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_mean_intensity", value=0.0),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_integrated_intensity", value=0.0),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_integrated_intensity", value=0.0),
         ]
 
     def _cell_summaries(
@@ -255,10 +261,16 @@ class ParticleAnalyzer:
         total_area = sum(areas)
         coverage = total_area / cell_area if cell_area > 0 else 0.0
 
+        intensities_mean = [p.mean_intensity for p in particles if p.mean_intensity is not None]
+        intensities_integ = [p.integrated_intensity for p in particles if p.integrated_intensity is not None]
+
         return [
             MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_count", value=float(len(particles))),
             MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_area", value=float(total_area)),
             MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_area", value=float(np.mean(areas))),
             MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="max_particle_area", value=float(max(areas))),
             MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_coverage_fraction", value=float(coverage)),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_mean_intensity", value=float(np.mean(intensities_mean)) if intensities_mean else 0.0),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_integrated_intensity", value=float(np.mean(intensities_integ)) if intensities_integ else 0.0),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_integrated_intensity", value=float(sum(intensities_integ)) if intensities_integ else 0.0),
         ]

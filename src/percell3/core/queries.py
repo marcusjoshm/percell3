@@ -602,7 +602,16 @@ def select_measurements(
         clauses.append(f"m.metric IN ({placeholders})")
         params.extend(metrics)
     if scope is not None:
-        clauses.append("m.scope = ?")
+        # Include particle summary metrics regardless of scope — they are
+        # scope-independent (computed from threshold mask, not from
+        # whole-cell vs masked measurement).
+        clauses.append(
+            "(m.scope = ? OR m.metric IN ("
+            "'particle_count','total_particle_area','mean_particle_area',"
+            "'max_particle_area','particle_coverage_fraction',"
+            "'mean_particle_mean_intensity','mean_particle_integrated_intensity',"
+            "'total_particle_integrated_intensity'))"
+        )
         params.append(scope)
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
@@ -610,6 +619,23 @@ def select_measurements(
 
     rows = conn.execute(query, params).fetchall()
     return [dict(r) for r in rows]
+
+
+def select_distinct_measured_channels(conn: sqlite3.Connection) -> list[str]:
+    """Return sorted channel names that have at least one measurement."""
+    rows = conn.execute(
+        "SELECT DISTINCT ch.name FROM measurements m "
+        "JOIN channels ch ON m.channel_id = ch.id ORDER BY ch.name"
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def select_distinct_measured_metrics(conn: sqlite3.Connection) -> list[str]:
+    """Return sorted metric names that have at least one measurement."""
+    rows = conn.execute(
+        "SELECT DISTINCT metric FROM measurements ORDER BY metric"
+    ).fetchall()
+    return [r[0] for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -933,6 +959,37 @@ def select_particles(
     return [dict(r) for r in rows]
 
 
+def select_particles_with_cell_info(
+    conn: sqlite3.Connection,
+    threshold_run_id: int | None = None,
+) -> list[dict]:
+    """Query particles enriched with cell context (FOV, condition, bio rep).
+
+    Args:
+        conn: Database connection.
+        threshold_run_id: Optional filter by threshold run.
+
+    Returns:
+        List of dicts with particle fields plus context columns.
+    """
+    query = (
+        "SELECT p.*, c.label_value AS cell_label_value, "
+        "f.name AS fov_name, cond.name AS condition_name, br.name AS bio_rep_name "
+        "FROM particles p "
+        "JOIN cells c ON p.cell_id = c.id "
+        "JOIN fovs f ON c.fov_id = f.id "
+        "JOIN bio_reps br ON f.bio_rep_id = br.id "
+        "JOIN conditions cond ON br.condition_id = cond.id"
+    )
+    params: list = []
+    if threshold_run_id is not None:
+        query += " WHERE p.threshold_run_id = ?"
+        params.append(threshold_run_id)
+    query += " ORDER BY p.cell_id, p.id"
+    rows = conn.execute(query, params).fetchall()
+    return [dict(r) for r in rows]
+
+
 def delete_particles_for_fov(conn: sqlite3.Connection, fov_id: int) -> int:
     """Delete all particles for cells in a FOV.
 
@@ -994,6 +1051,65 @@ def select_threshold_runs(conn: sqlite3.Connection) -> list[dict]:
             d["parameters"] = json.loads(d["parameters"])
         result.append(d)
     return result
+
+
+def select_experiment_summary(conn: sqlite3.Connection) -> list[dict]:
+    """Per-FOV summary: cells, measurements, thresholds, particles.
+
+    Returns one row per FOV with aggregated status information including
+    cell counts, which channels have been measured (whole_cell vs mask scopes),
+    which channels have particle analysis, and total particle counts.
+    """
+    query = """
+        SELECT
+            f.id AS fov_id,
+            f.name AS fov_name,
+            cond.name AS condition_name,
+            b.name AS bio_rep_name,
+            f.width, f.height,
+            COALESCE(cell_agg.cell_count, 0) AS cells,
+            COALESCE(cell_agg.model_name, '') AS seg_model,
+            COALESCE(meas_agg.wc_channels, '') AS measured_channels,
+            COALESCE(meas_agg.mi_channels, '') AS masked_channels,
+            COALESCE(meas_agg.particle_channels, '') AS particle_channels,
+            COALESCE(part_agg.particle_count, 0) AS particles
+        FROM fovs f
+        JOIN bio_reps b ON f.bio_rep_id = b.id
+        JOIN conditions cond ON b.condition_id = cond.id
+        LEFT JOIN (
+            SELECT c.fov_id,
+                   COUNT(*) AS cell_count,
+                   sr.model_name
+            FROM cells c
+            JOIN segmentation_runs sr ON c.segmentation_id = sr.id
+            WHERE c.is_valid = 1
+            GROUP BY c.fov_id
+        ) cell_agg ON cell_agg.fov_id = f.id
+        LEFT JOIN (
+            SELECT c.fov_id,
+                GROUP_CONCAT(DISTINCT CASE WHEN m.scope='whole_cell'
+                    AND m.metric NOT LIKE 'particle_%'
+                    AND m.metric NOT LIKE '%_particle_%'
+                    THEN ch.name END) AS wc_channels,
+                GROUP_CONCAT(DISTINCT CASE WHEN m.scope='mask_inside'
+                    THEN ch.name END) AS mi_channels,
+                GROUP_CONCAT(DISTINCT CASE WHEN m.metric='particle_count'
+                    THEN ch.name END) AS particle_channels
+            FROM measurements m
+            JOIN cells c ON m.cell_id = c.id
+            JOIN channels ch ON m.channel_id = ch.id
+            GROUP BY c.fov_id
+        ) meas_agg ON meas_agg.fov_id = f.id
+        LEFT JOIN (
+            SELECT c.fov_id, COUNT(p.id) AS particle_count
+            FROM particles p
+            JOIN cells c ON p.cell_id = c.id
+            GROUP BY c.fov_id
+        ) part_agg ON part_agg.fov_id = f.id
+        ORDER BY cond.name, b.name, f.name
+    """
+    rows = conn.execute(query).fetchall()
+    return [dict(r) for r in rows]
 
 
 def delete_tags_by_prefix(

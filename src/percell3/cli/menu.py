@@ -1526,8 +1526,9 @@ def _query_experiment(state: MenuState) -> None:
     console.print("  \\[2] FOVs")
     console.print("  \\[3] Conditions")
     console.print("  \\[4] Biological replicates")
+    console.print("  \\[5] Experiment summary")
 
-    choice = menu_prompt("Select", choices=["1", "2", "3", "4"], default="1")
+    choice = menu_prompt("Select", choices=["1", "2", "3", "4", "5"], default="1")
 
     if choice == "1":
         ch_list = store.get_channels()
@@ -1589,6 +1590,52 @@ def _query_experiment(state: MenuState) -> None:
         rows = [{"name": r} for r in rep_list]
         title = f"Biological Replicates ({cond_filter})" if cond_filter else "Biological Replicates"
         format_output(rows, ["name"], "table", title)
+
+    elif choice == "5":
+        summary = store.get_experiment_summary()
+        if not summary:
+            console.print("[dim]No FOVs found.[/dim]")
+            return
+
+        # Format particle column: "channel (count)" or "-"
+        rows = []
+        for s in summary:
+            p_ch = s["particle_channels"] or ""
+            p_count = s["particles"]
+            if p_ch and p_count:
+                particle_str = f"{p_ch} ({p_count})"
+            elif p_ch:
+                particle_str = p_ch
+            else:
+                particle_str = "-"
+
+            rows.append({
+                "condition": s["condition_name"],
+                "bio_rep": s["bio_rep_name"],
+                "fov": s["fov_name"],
+                "cells": str(s["cells"]),
+                "seg_model": s["seg_model"] or "-",
+                "measured": s["measured_channels"] or "-",
+                "masked": s["masked_channels"] or "-",
+                "particles": particle_str,
+            })
+
+        columns = [
+            "condition", "bio_rep", "fov", "cells", "seg_model",
+            "measured", "masked", "particles",
+        ]
+        format_output(rows, columns, "table", "Experiment Summary")
+
+        # Offer CSV export
+        console.print()
+        save = numbered_select_one(["No", "Yes"], "Save summary to CSV?")
+        if save == "Yes":
+            import pandas as pd
+
+            out_str = menu_prompt("Output CSV path")
+            out_path = Path(out_str).expanduser()
+            pd.DataFrame(summary).to_csv(out_path, index=False)
+            console.print(f"[green]Saved to {out_path}[/green]")
 
 
 def _edit_experiment(state: MenuState) -> None:
@@ -1678,36 +1725,121 @@ def _export_csv(state: MenuState) -> None:
 
     out_path = Path(output_str).expanduser()
 
+    # Auto-correct directory to directory/measurements.csv
+    if out_path.is_dir():
+        out_path = out_path / "measurements.csv"
+        console.print(f"[yellow]Path is a directory — exporting to {out_path}[/yellow]")
+
+    # Check parent directory exists
+    if not out_path.parent.exists():
+        console.print(f"[red]Parent directory does not exist: {out_path.parent}[/red]")
+        return
+
     if out_path.exists():
         if numbered_select_one(["No", "Yes"], "File exists. Overwrite?") != "Yes":
             console.print("[yellow]Export cancelled.[/yellow]")
             return
 
-    # Optional channel/metric/scope filters
-    ch_filter = menu_prompt("Channels to export (comma-separated, blank = all)", default="")
-    met_filter = menu_prompt("Metrics to export (comma-separated, blank = all)", default="")
+    # Export type selection
+    console.print("\n[bold]Export type:[/bold]")
+    export_type = numbered_select_one(
+        ["Cell measurements only", "Particle data only", "Both"],
+        "Export",
+    )
 
-    console.print("\n[bold]Scope filter:[/bold]")
-    scope_options = [
-        "All scopes",
-        "Whole cell only",
-        "Inside mask only",
-        "Outside mask only",
-    ]
-    scope_choice = numbered_select_one(scope_options, "Scope")
-    scope_map = {
-        "Whole cell only": "whole_cell",
-        "Inside mask only": "mask_inside",
-        "Outside mask only": "mask_outside",
-    }
-    scope_val = scope_map.get(scope_choice)
+    include_cells = export_type != "Particle data only"
+    include_particles = export_type != "Cell measurements only"
 
-    ch_list = [c.strip() for c in ch_filter.split(",") if c.strip()] or None
-    met_list = [m.strip() for m in met_filter.split(",") if m.strip()] or None
+    # Check for particle data if requested
+    if include_particles:
+        particle_df = store.get_particles()
+        if particle_df.empty:
+            console.print("[yellow]No particle data found.[/yellow]")
+            if not include_cells:
+                return
+            include_particles = False
 
-    with console.status("[bold blue]Exporting measurements..."):
-        store.export_csv(out_path, channels=ch_list, metrics=met_list, scope=scope_val)
-    console.print(f"[green]Exported measurements to {out_path}[/green]")
+    ch_list = None
+    met_list = None
+    scope_val = None
+    particle_metrics = None
+
+    # Channel selection — shared between cell and particle exports
+    if include_cells or include_particles:
+        if include_particles and include_cells:
+            # Show all experiment channels so particles can measure from any
+            all_channels = [ch.name for ch in store.get_channels()]
+        elif include_cells:
+            all_channels = store.list_measured_channels()
+        else:
+            all_channels = [ch.name for ch in store.get_channels()]
+
+        if all_channels:
+            console.print("\n[bold]Channel filter:[/bold]")
+            ch_list = numbered_select_many(
+                all_channels, "Channels (space-separated, or 'all')",
+            )
+            if set(ch_list) == set(all_channels):
+                ch_list = None  # all selected — no filter needed
+
+    if include_cells:
+        # Optional metric filter (cell-level)
+        available_metrics = store.list_measured_metrics()
+        if available_metrics:
+            console.print("\n[bold]Metric filter:[/bold]")
+            met_list = numbered_select_many(available_metrics, "Metrics (space-separated, or 'all')")
+            if set(met_list) == set(available_metrics):
+                met_list = None  # all selected — no filter needed
+
+        # Scope filter
+        console.print("\n[bold]Scope filter:[/bold]")
+        scope_options = [
+            "All scopes",
+            "Whole cell only",
+            "Inside mask only",
+            "Outside mask only",
+        ]
+        scope_choice = numbered_select_one(scope_options, "Scope")
+        scope_map = {
+            "Whole cell only": "whole_cell",
+            "Inside mask only": "mask_inside",
+            "Outside mask only": "mask_outside",
+        }
+        scope_val = scope_map.get(scope_choice)
+
+    if include_particles:
+        # Optional particle metric filter
+        particle_metric_options = [
+            "area_pixels", "area_um2", "perimeter", "circularity",
+            "mean_intensity", "max_intensity", "integrated_intensity",
+        ]
+        console.print("\n[bold]Particle metric filter:[/bold]")
+        selected_particle_metrics = numbered_select_many(
+            particle_metric_options, "Particle metrics (space-separated, or 'all')",
+        )
+        if set(selected_particle_metrics) != set(particle_metric_options):
+            particle_metrics = selected_particle_metrics
+
+    try:
+        if include_cells:
+            with console.status("[bold blue]Exporting measurements..."):
+                store.export_csv(out_path, channels=ch_list, metrics=met_list, scope=scope_val)
+            console.print(f"[green]Exported measurements to {out_path}[/green]")
+
+        if include_particles:
+            if include_cells:
+                particle_path = out_path.with_name(
+                    f"{out_path.stem}_particles{out_path.suffix}"
+                )
+            else:
+                particle_path = out_path
+            with console.status("[bold blue]Exporting particle data..."):
+                store.export_particles_csv(
+                    particle_path, channels=ch_list, metrics=particle_metrics,
+                )
+            console.print(f"[green]Exported particle data to {particle_path}[/green]")
+    except OSError as exc:
+        console.print(f"[red]Export failed:[/red] {exc}")
 
 
 def _run_workflow(state: MenuState) -> None:

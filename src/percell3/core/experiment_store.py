@@ -649,6 +649,14 @@ class ExperimentStore:
     def add_measurements(self, measurements: list[MeasurementRecord]) -> None:
         queries.insert_measurements(self._conn, measurements)
 
+    def list_measured_channels(self) -> list[str]:
+        """Return sorted channel names that have at least one measurement."""
+        return queries.select_distinct_measured_channels(self._conn)
+
+    def list_measured_metrics(self) -> list[str]:
+        """Return sorted metric names that have at least one measurement."""
+        return queries.select_distinct_measured_metrics(self._conn)
+
     def get_measurements(
         self,
         cell_ids: list[int] | None = None,
@@ -879,6 +887,10 @@ class ExperimentStore:
         """Return all threshold runs."""
         return queries.select_threshold_runs(self._conn)
 
+    def get_experiment_summary(self) -> list[dict]:
+        """Per-FOV summary of cells, measurements, thresholds, and particles."""
+        return queries.select_experiment_summary(self._conn)
+
     # --- Particle Label I/O ---
 
     def write_particle_labels(
@@ -931,3 +943,178 @@ class ExperimentStore:
             include_cell_info=True,
         )
         pivot.to_csv(path, index=False)
+
+    # Intensity field names that become per-channel when channels are specified
+    _PARTICLE_INTENSITY_FIELDS = {
+        "mean_intensity", "max_intensity", "integrated_intensity",
+    }
+
+    def export_particles_csv(
+        self,
+        path: Path,
+        channels: list[str] | None = None,
+        metrics: list[str] | None = None,
+        threshold_run_id: int | None = None,
+    ) -> None:
+        """Export per-particle data to CSV with cell context columns.
+
+        Args:
+            path: Output CSV file path.
+            channels: If provided, compute intensity metrics from each
+                channel image.  Original single-channel intensity columns
+                are replaced with ``{channel}_mean_intensity`` etc.
+            metrics: If provided, include only these particle fields
+                (plus context columns which are always included).
+                Intensity names (``mean_intensity`` etc.) are expanded
+                per channel when *channels* is set.
+            threshold_run_id: Optional filter by threshold run.
+        """
+        rows = queries.select_particles_with_cell_info(
+            self._conn, threshold_run_id=threshold_run_id,
+        )
+        df = pd.DataFrame(rows)
+        if df.empty:
+            df.to_csv(path, index=False)
+            return
+
+        # Compute multi-channel intensities (needs threshold_run_id still)
+        if channels:
+            df = self._add_particle_channel_intensities(df, channels)
+            df = df.drop(
+                columns=list(self._PARTICLE_INTENSITY_FIELDS),
+                errors="ignore",
+            )
+
+        # Drop internal IDs
+        df = df.drop(columns=["id", "threshold_run_id"], errors="ignore")
+
+        # Apply metric filter
+        context_cols = [
+            "cell_id", "condition_name", "bio_rep_name", "fov_name",
+            "cell_label_value", "label_value",
+        ]
+        if metrics:
+            keep = [c for c in context_cols if c in df.columns]
+            for m in metrics:
+                if m in self._PARTICLE_INTENSITY_FIELDS and channels:
+                    for ch in channels:
+                        col = f"{ch}_{m}"
+                        if col in df.columns:
+                            keep.append(col)
+                elif m in df.columns:
+                    keep.append(m)
+            df = df[keep]
+        else:
+            other = [c for c in df.columns if c not in context_cols]
+            df = df[[c for c in context_cols if c in df.columns] + other]
+
+        df.to_csv(path, index=False)
+
+    def _add_particle_channel_intensities(
+        self,
+        df: pd.DataFrame,
+        channels: list[str],
+    ) -> pd.DataFrame:
+        """Compute per-channel intensity columns for each particle.
+
+        Reconstructs each particle's mask from the stored threshold mask
+        and cell labels, then measures intensity from each channel image.
+        """
+        from scipy.ndimage import label as scipy_label
+
+        # Look up the threshold channel (needed to read the mask)
+        threshold_channel = None
+        if "threshold_run_id" in df.columns:
+            thr_id = df["threshold_run_id"].iloc[0]
+            if thr_id is not None:
+                for run in self.get_threshold_runs():
+                    if run["id"] == int(thr_id):
+                        threshold_channel = run["channel"]
+                        break
+
+        # Initialise result columns to 0
+        for ch in channels:
+            for suffix in ("mean_intensity", "max_intensity",
+                           "integrated_intensity"):
+                df[f"{ch}_{suffix}"] = 0.0
+
+        # Process one FOV at a time to avoid reading images repeatedly
+        fov_groups = df.groupby(
+            ["fov_name", "condition_name", "bio_rep_name"],
+        )
+
+        for (fov, cond, bio_rep), gdf in fov_groups:
+            try:
+                labels = self.read_labels(fov, cond, bio_rep=bio_rep)
+            except Exception:
+                continue
+
+            # Read threshold mask for particle disambiguation
+            threshold_mask = None
+            if threshold_channel:
+                try:
+                    raw = self.read_mask(
+                        fov, cond, threshold_channel, bio_rep=bio_rep,
+                    )
+                    threshold_mask = raw > 0
+                except Exception:
+                    pass
+
+            # Read each requested channel image
+            ch_images: dict[str, np.ndarray] = {}
+            for ch in channels:
+                try:
+                    ch_images[ch] = self.read_image_numpy(
+                        fov, cond, ch, bio_rep=bio_rep,
+                    )
+                except Exception:
+                    pass
+            if not ch_images:
+                continue
+
+            for idx in gdf.index:
+                row = df.loc[idx]
+                cell_label = int(row["cell_label_value"])
+                bx, by = int(row["bbox_x"]), int(row["bbox_y"])
+                bw, bh = int(row["bbox_w"]), int(row["bbox_h"])
+                if bw <= 0 or bh <= 0:
+                    continue
+
+                # Reconstruct particle mask inside its bbox
+                label_crop = labels[by:by + bh, bx:bx + bw]
+                cell_mask = label_crop == cell_label
+
+                if threshold_mask is not None:
+                    mask_crop = threshold_mask[by:by + bh, bx:bx + bw]
+                    particle_mask = cell_mask & mask_crop
+
+                    # Disambiguate overlapping particles via centroid
+                    cc_labels, n_cc = scipy_label(particle_mask)
+                    if n_cc > 1:
+                        cx = float(row["centroid_x"]) - bx
+                        cy = float(row["centroid_y"]) - by
+                        ci = min(max(int(round(cx)), 0), bw - 1)
+                        cj = min(max(int(round(cy)), 0), bh - 1)
+                        target = cc_labels[cj, ci]
+                        if target > 0:
+                            particle_mask = cc_labels == target
+                else:
+                    particle_mask = cell_mask
+
+                if not np.any(particle_mask):
+                    continue
+
+                for ch, ch_img in ch_images.items():
+                    pixels = ch_img[by:by + bh, bx:bx + bw][particle_mask]
+                    if len(pixels) > 0:
+                        df.at[idx, f"{ch}_mean_intensity"] = float(
+                            np.mean(pixels)
+                        )
+                        df.at[idx, f"{ch}_max_intensity"] = float(
+                            np.max(pixels)
+                        )
+                        df.at[idx, f"{ch}_integrated_intensity"] = float(
+                            np.sum(pixels)
+                        )
+
+        return df

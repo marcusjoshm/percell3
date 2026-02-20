@@ -204,7 +204,7 @@ class TestFullPipeline:
         assert isinstance(pa_result, ParticleAnalysisResult)
         assert pa_result.cells_analyzed == 30
         assert pa_result.total_particles > 0
-        assert len(pa_result.summary_measurements) == 30 * 5  # 5 metrics per cell
+        assert len(pa_result.summary_measurements) == 30 * 8  # 8 metrics per cell
 
     def test_skipped_group_produces_zero_particles(self, integration_store: ExperimentStore):
         """When a group is skipped (no threshold applied), cells should get 0 particles."""
@@ -407,7 +407,7 @@ class TestMultiFovBatch:
         for fov_name, result in results_per_fov.items():
             assert result.cells_analyzed == 12
             assert result.total_particles > 0
-            assert len(result.summary_measurements) == 12 * 5
+            assert len(result.summary_measurements) == 12 * 8
 
         # Results should be independent
         fov1_particles = {p.cell_id for p in results_per_fov["fov_1"].particles}
@@ -474,7 +474,7 @@ class TestEdgeCases:
 
         assert pa_result.total_particles == 0
         # All cells should still have summary measurements (with zeros)
-        assert len(pa_result.summary_measurements) == 30 * 5
+        assert len(pa_result.summary_measurements) == 30 * 8
         for m in pa_result.summary_measurements:
             if m.metric == "particle_count":
                 assert m.value == 0.0

@@ -157,6 +157,50 @@ def conditions(ctx: click.Context, fmt: str) -> None:
     format_output(rows, ["name"], fmt, "Conditions")
 
 
+@query.command()
+@click.option("--format", "fmt", type=click.Choice(["table", "csv", "json"]),
+              default="table", help="Output format.")
+@click.pass_context
+@error_handler
+def summary(ctx: click.Context, fmt: str) -> None:
+    """Show per-FOV experiment summary (cells, measurements, particles)."""
+    store = ctx.obj["store"]
+    rows = store.get_experiment_summary()
+
+    if not rows:
+        console.print("[dim]No FOVs found.[/dim]")
+        return
+
+    # Format for display
+    display_rows = []
+    for s in rows:
+        p_ch = s["particle_channels"] or ""
+        p_count = s["particles"]
+        if p_ch and p_count:
+            particle_str = f"{p_ch} ({p_count})"
+        elif p_ch:
+            particle_str = p_ch
+        else:
+            particle_str = "-"
+
+        display_rows.append({
+            "condition": s["condition_name"],
+            "bio_rep": s["bio_rep_name"],
+            "fov": s["fov_name"],
+            "cells": str(s["cells"]),
+            "seg_model": s["seg_model"] or "-",
+            "measured": s["measured_channels"] or "-",
+            "masked": s["masked_channels"] or "-",
+            "particles": particle_str,
+        })
+
+    columns = [
+        "condition", "bio_rep", "fov", "cells", "seg_model",
+        "measured", "masked", "particles",
+    ]
+    format_output(display_rows, columns, fmt, "Experiment Summary")
+
+
 @query.command("add-bio-rep")
 @click.argument("name")
 @click.pass_context

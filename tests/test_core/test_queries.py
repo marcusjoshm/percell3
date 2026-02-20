@@ -9,7 +9,7 @@ from percell3.core.exceptions import (
     DuplicateError,
     FovNotFoundError,
 )
-from percell3.core.models import CellRecord, MeasurementRecord
+from percell3.core.models import CellRecord, MeasurementRecord, ParticleRecord
 from percell3.core import queries
 
 
@@ -893,3 +893,108 @@ class TestDeleteTagsByPrefix:
     def test_no_matching_prefix(self, db_conn):
         deleted = queries.delete_tags_by_prefix(db_conn, "nonexistent:")
         assert deleted == 0
+
+
+class TestExperimentSummary:
+    def test_empty_experiment(self, db_conn):
+        """No FOVs returns empty list."""
+        rows = queries.select_experiment_summary(db_conn)
+        assert rows == []
+
+    def test_cells_no_measurements(self, db_conn):
+        """FOV with cells but no measurements."""
+        ch_id = queries.insert_channel(db_conn, "DAPI")
+        cond_id = queries.insert_condition(db_conn, "ctrl")
+        br_id = queries.insert_bio_rep(db_conn, "N1", cond_id)
+        fov_id = queries.insert_fov(db_conn, "FOV_001", br_id, width=64, height=64)
+        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=i,
+                centroid_x=10.0, centroid_y=10.0,
+                bbox_x=0, bbox_y=0, bbox_w=10, bbox_h=10,
+                area_pixels=100.0,
+            )
+            for i in range(1, 4)
+        ]
+        queries.insert_cells(db_conn, cells)
+
+        rows = queries.select_experiment_summary(db_conn)
+        assert len(rows) == 1
+        r = rows[0]
+        assert r["condition_name"] == "ctrl"
+        assert r["fov_name"] == "FOV_001"
+        assert r["cells"] == 3
+        assert r["seg_model"] == "cyto3"
+        assert r["measured_channels"] == ""
+        assert r["masked_channels"] == ""
+        assert r["particle_channels"] == ""
+        assert r["particles"] == 0
+
+    def test_full_summary(self, db_conn):
+        """FOV with cells, measurements, and particles."""
+        ch_id = queries.insert_channel(db_conn, "GFP")
+        cond_id = queries.insert_condition(db_conn, "treated")
+        br_id = queries.insert_bio_rep(db_conn, "N1", cond_id)
+        fov_id = queries.insert_fov(db_conn, "FOV_001", br_id, width=64, height=64)
+        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=i,
+                centroid_x=10.0, centroid_y=10.0,
+                bbox_x=0, bbox_y=0, bbox_w=10, bbox_h=10,
+                area_pixels=100.0,
+            )
+            for i in range(1, 3)
+        ]
+        cell_ids = queries.insert_cells(db_conn, cells)
+
+        # Whole-cell measurements
+        measurements = [
+            MeasurementRecord(
+                cell_id=cid, channel_id=ch_id,
+                metric="mean_intensity", value=50.0,
+            )
+            for cid in cell_ids
+        ]
+        # Mask-inside measurements
+        measurements += [
+            MeasurementRecord(
+                cell_id=cid, channel_id=ch_id,
+                metric="mean_intensity", value=30.0,
+                scope="mask_inside",
+            )
+            for cid in cell_ids
+        ]
+        # Particle summary measurement
+        measurements.append(
+            MeasurementRecord(
+                cell_id=cell_ids[0], channel_id=ch_id,
+                metric="particle_count", value=2.0,
+            )
+        )
+        queries.insert_measurements(db_conn, measurements)
+
+        # Particles
+        thr_id = queries.insert_threshold_run(db_conn, ch_id, "otsu")
+        particles = [
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=j,
+                centroid_x=5.0, centroid_y=5.0,
+                bbox_x=0, bbox_y=0, bbox_w=5, bbox_h=5,
+                area_pixels=20.0, mean_intensity=80.0,
+                max_intensity=120.0, integrated_intensity=1600.0,
+            )
+            for j in range(1, 4)
+        ]
+        queries.insert_particles(db_conn, particles)
+
+        rows = queries.select_experiment_summary(db_conn)
+        assert len(rows) == 1
+        r = rows[0]
+        assert r["cells"] == 2
+        assert "GFP" in r["measured_channels"]
+        assert "GFP" in r["masked_channels"]
+        assert "GFP" in r["particle_channels"]
+        assert r["particles"] == 3

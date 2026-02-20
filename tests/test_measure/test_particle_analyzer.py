@@ -156,8 +156,8 @@ class TestParticleAnalyzer:
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
         )
 
-        # 3 cells * 5 metrics = 15 summary measurements
-        assert len(result.summary_measurements) == 15
+        # 3 cells * 8 metrics = 24 summary measurements
+        assert len(result.summary_measurements) == 24
 
         # Check metric names
         metrics = {m.metric for m in result.summary_measurements}
