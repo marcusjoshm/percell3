@@ -654,12 +654,14 @@ class ExperimentStore:
         cell_ids: list[int] | None = None,
         channels: list[str] | None = None,
         metrics: list[str] | None = None,
+        scope: str | None = None,
     ) -> pd.DataFrame:
         channel_ids = None
         if channels:
             channel_ids = [self.get_channel(ch).id for ch in channels]
         rows = queries.select_measurements(
-            self._conn, cell_ids=cell_ids, channel_ids=channel_ids, metrics=metrics,
+            self._conn, cell_ids=cell_ids, channel_ids=channel_ids,
+            metrics=metrics, scope=scope,
         )
         return pd.DataFrame(rows)
 
@@ -667,14 +669,27 @@ class ExperimentStore:
         self,
         channels: list[str] | None = None,
         metrics: list[str] | None = None,
+        scope: str | None = None,
         include_cell_info: bool = True,
     ) -> pd.DataFrame:
-        df = self.get_measurements(channels=channels, metrics=metrics)
+        df = self.get_measurements(channels=channels, metrics=metrics, scope=scope)
         if df.empty:
             return df
 
-        # Create pivot column: channel_metric
-        df["col"] = df["channel"] + "_" + df["metric"]
+        # Build pivot column name: channel_metric for whole_cell,
+        # channel_metric_scope for mask scopes
+        has_mask_scopes = (df["scope"] != "whole_cell").any()
+        if has_mask_scopes:
+            df["col"] = df.apply(
+                lambda r: (
+                    f"{r['channel']}_{r['metric']}"
+                    if r["scope"] == "whole_cell"
+                    else f"{r['channel']}_{r['metric']}_{r['scope']}"
+                ),
+                axis=1,
+            )
+        else:
+            df["col"] = df["channel"] + "_" + df["metric"]
         pivot = df.pivot_table(
             index="cell_id", columns="col", values="value", aggfunc="first",
         )

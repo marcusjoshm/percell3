@@ -60,6 +60,8 @@ class MeasurementRecord:
     channel_id: int
     metric: str
     value: float
+    scope: str = "whole_cell"
+    threshold_run_id: int | None = None
 
 
 @dataclass(frozen=True)

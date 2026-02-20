@@ -562,9 +562,14 @@ def insert_measurements(
     measurements: list[MeasurementRecord],
 ) -> None:
     conn.executemany(
-        "INSERT OR REPLACE INTO measurements (cell_id, channel_id, metric, value) "
-        "VALUES (?, ?, ?, ?)",
-        [(m.cell_id, m.channel_id, m.metric, m.value) for m in measurements],
+        "INSERT OR REPLACE INTO measurements "
+        "(cell_id, channel_id, metric, value, scope, threshold_run_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (m.cell_id, m.channel_id, m.metric, m.value,
+             m.scope, m.threshold_run_id)
+            for m in measurements
+        ],
     )
     conn.commit()
 
@@ -574,9 +579,11 @@ def select_measurements(
     cell_ids: list[int] | None = None,
     channel_ids: list[int] | None = None,
     metrics: list[str] | None = None,
+    scope: str | None = None,
 ) -> list[dict]:
     query = (
-        "SELECT m.cell_id, ch.name AS channel, m.metric, m.value "
+        "SELECT m.cell_id, ch.name AS channel, m.metric, m.value, "
+        "m.scope, m.threshold_run_id "
         "FROM measurements m "
         "JOIN channels ch ON m.channel_id = ch.id"
     )
@@ -594,6 +601,9 @@ def select_measurements(
         placeholders = ",".join("?" * len(metrics))
         clauses.append(f"m.metric IN ({placeholders})")
         params.extend(metrics)
+    if scope is not None:
+        clauses.append("m.scope = ?")
+        params.append(scope)
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY m.cell_id, ch.name, m.metric"

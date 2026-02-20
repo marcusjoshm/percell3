@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
-    percell_version TEXT NOT NULL DEFAULT '3.2.0',
+    percell_version TEXT NOT NULL DEFAULT '3.3.0',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -98,7 +98,10 @@ CREATE TABLE IF NOT EXISTS measurements (
     channel_id INTEGER NOT NULL REFERENCES channels(id),
     metric TEXT NOT NULL,
     value REAL NOT NULL,
-    UNIQUE(cell_id, channel_id, metric)
+    scope TEXT NOT NULL DEFAULT 'whole_cell',
+    threshold_run_id INTEGER REFERENCES threshold_runs(id),
+    UNIQUE(cell_id, channel_id, metric, scope),
+    CHECK(scope IN ('whole_cell', 'mask_inside', 'mask_outside'))
 );
 
 CREATE TABLE IF NOT EXISTS threshold_runs (
@@ -183,7 +186,7 @@ EXPECTED_INDEXES = frozenset({
     "idx_particles_cell", "idx_particles_run",
 })
 
-EXPECTED_VERSION = "3.2.0"
+EXPECTED_VERSION = "3.3.0"
 
 
 def create_schema(
@@ -205,11 +208,46 @@ def create_schema(
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA_SQL)
     conn.execute(
-        "INSERT INTO experiments (name, description) VALUES (?, ?)",
-        (name, description),
+        "INSERT INTO experiments (name, description, percell_version) VALUES (?, ?, ?)",
+        (name, description, EXPECTED_VERSION),
     )
     conn.commit()
     return conn
+
+
+def _migrate_3_2_to_3_3(conn: sqlite3.Connection) -> None:
+    """Migrate measurements table from schema 3.2.0 to 3.3.0.
+
+    Adds scope and threshold_run_id columns, updates unique constraint.
+    SQLite doesn't support ALTER TABLE ... DROP CONSTRAINT, so we use
+    the temp table swap pattern.
+    """
+    conn.executescript("""
+        CREATE TABLE measurements_new (
+            id INTEGER PRIMARY KEY,
+            cell_id INTEGER NOT NULL REFERENCES cells(id),
+            channel_id INTEGER NOT NULL REFERENCES channels(id),
+            metric TEXT NOT NULL,
+            value REAL NOT NULL,
+            scope TEXT NOT NULL DEFAULT 'whole_cell',
+            threshold_run_id INTEGER REFERENCES threshold_runs(id),
+            UNIQUE(cell_id, channel_id, metric, scope),
+            CHECK(scope IN ('whole_cell', 'mask_inside', 'mask_outside'))
+        );
+
+        INSERT INTO measurements_new (id, cell_id, channel_id, metric, value, scope)
+            SELECT id, cell_id, channel_id, metric, value, 'whole_cell'
+            FROM measurements;
+
+        DROP TABLE measurements;
+        ALTER TABLE measurements_new RENAME TO measurements;
+
+        CREATE INDEX IF NOT EXISTS idx_measurements_cell ON measurements(cell_id);
+        CREATE INDEX IF NOT EXISTS idx_measurements_channel ON measurements(channel_id);
+        CREATE INDEX IF NOT EXISTS idx_measurements_metric ON measurements(metric);
+
+        UPDATE experiments SET percell_version = '3.3.0';
+    """)
 
 
 def open_database(db_path: Path) -> sqlite3.Connection:
@@ -232,17 +270,20 @@ def open_database(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
 
-    # Check schema version compatibility
+    # Check schema version and auto-migrate if possible
     row = conn.execute(
         "SELECT percell_version FROM experiments LIMIT 1"
     ).fetchone()
     if row is not None:
         stored = row["percell_version"]
-        # Compare major.minor (ignore patch)
         stored_parts = stored.split(".")[:2]
         expected_parts = EXPECTED_VERSION.split(".")[:2]
         if stored_parts != expected_parts:
-            conn.close()
-            raise SchemaVersionError(stored, EXPECTED_VERSION)
+            # Try auto-migration
+            if stored_parts == ["3", "2"]:
+                _migrate_3_2_to_3_3(conn)
+            else:
+                conn.close()
+                raise SchemaVersionError(stored, EXPECTED_VERSION)
 
     return conn

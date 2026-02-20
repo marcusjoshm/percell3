@@ -367,6 +367,101 @@ class TestMeasurementQueries:
         assert len(rows) == 3
 
 
+    def test_insert_with_scope(self, db_conn):
+        ch_id, cell_ids = self._setup(db_conn)
+        measurements = [
+            MeasurementRecord(
+                cell_id=cell_ids[0], channel_id=ch_id,
+                metric="mean_intensity", value=42.0, scope="whole_cell",
+            ),
+            MeasurementRecord(
+                cell_id=cell_ids[0], channel_id=ch_id,
+                metric="mean_intensity", value=30.0, scope="mask_inside",
+            ),
+            MeasurementRecord(
+                cell_id=cell_ids[0], channel_id=ch_id,
+                metric="mean_intensity", value=12.0, scope="mask_outside",
+            ),
+        ]
+        queries.insert_measurements(db_conn, measurements)
+        rows = queries.select_measurements(db_conn, cell_ids=[cell_ids[0]])
+        assert len(rows) == 3
+        scopes = {r["scope"] for r in rows}
+        assert scopes == {"whole_cell", "mask_inside", "mask_outside"}
+
+    def test_filter_by_scope(self, db_conn):
+        ch_id, cell_ids = self._setup(db_conn)
+        measurements = [
+            MeasurementRecord(
+                cell_id=cell_ids[0], channel_id=ch_id,
+                metric="mean_intensity", value=42.0, scope="whole_cell",
+            ),
+            MeasurementRecord(
+                cell_id=cell_ids[0], channel_id=ch_id,
+                metric="mean_intensity", value=30.0, scope="mask_inside",
+            ),
+        ]
+        queries.insert_measurements(db_conn, measurements)
+        rows = queries.select_measurements(db_conn, scope="mask_inside")
+        assert len(rows) == 1
+        assert rows[0]["scope"] == "mask_inside"
+        assert rows[0]["value"] == 30.0
+
+    def test_scope_default_is_whole_cell(self, db_conn):
+        ch_id, cell_ids = self._setup(db_conn)
+        m = MeasurementRecord(
+            cell_id=cell_ids[0], channel_id=ch_id,
+            metric="mean_intensity", value=42.0,
+        )
+        queries.insert_measurements(db_conn, [m])
+        rows = queries.select_measurements(db_conn)
+        assert rows[0]["scope"] == "whole_cell"
+        assert rows[0]["threshold_run_id"] is None
+
+    def test_overwrite_by_scope(self, db_conn):
+        """INSERT OR REPLACE respects scope in unique constraint."""
+        ch_id, cell_ids = self._setup(db_conn)
+        # Insert whole_cell
+        m1 = MeasurementRecord(
+            cell_id=cell_ids[0], channel_id=ch_id,
+            metric="mean_intensity", value=42.0, scope="whole_cell",
+        )
+        queries.insert_measurements(db_conn, [m1])
+        # Insert mask_inside — should NOT overwrite whole_cell
+        m2 = MeasurementRecord(
+            cell_id=cell_ids[0], channel_id=ch_id,
+            metric="mean_intensity", value=30.0, scope="mask_inside",
+        )
+        queries.insert_measurements(db_conn, [m2])
+        rows = queries.select_measurements(db_conn, cell_ids=[cell_ids[0]])
+        assert len(rows) == 2
+
+        # Overwrite whole_cell with new value
+        m3 = MeasurementRecord(
+            cell_id=cell_ids[0], channel_id=ch_id,
+            metric="mean_intensity", value=99.0, scope="whole_cell",
+        )
+        queries.insert_measurements(db_conn, [m3])
+        rows = queries.select_measurements(
+            db_conn, cell_ids=[cell_ids[0]], scope="whole_cell",
+        )
+        assert len(rows) == 1
+        assert rows[0]["value"] == 99.0
+
+    def test_threshold_run_id_stored(self, db_conn):
+        ch_id, cell_ids = self._setup(db_conn)
+        # Create a threshold run
+        tr_id = queries.insert_threshold_run(db_conn, ch_id, "otsu")
+        m = MeasurementRecord(
+            cell_id=cell_ids[0], channel_id=ch_id,
+            metric="mean_intensity", value=30.0,
+            scope="mask_inside", threshold_run_id=tr_id,
+        )
+        queries.insert_measurements(db_conn, [m])
+        rows = queries.select_measurements(db_conn, scope="mask_inside")
+        assert rows[0]["threshold_run_id"] == tr_id
+
+
 class TestTagQueries:
     def _setup_cells(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI")
