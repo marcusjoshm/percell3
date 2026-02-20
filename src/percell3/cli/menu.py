@@ -312,7 +312,7 @@ def _show_header(state: MenuState) -> None:
     for line in _BANNER_LINES:
         console.print(_colorize_banner_line(line))
     console.print()
-    console.print("[bold]              Welcome to PerCell 3 — Single-Cell Microscopy Analysis[/bold]")
+    console.print("[bold]                PerCell 3.0 — Single-Cell Microscopy Analysis[/bold]")
     console.print()
     if state.experiment_path:
         name = state.store.name if state.store else ""
