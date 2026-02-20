@@ -198,9 +198,9 @@ class ParticleAnalyzer:
                     circularity=circularity,
                     eccentricity=float(prop.eccentricity) if hasattr(prop, "eccentricity") else None,
                     solidity=float(prop.solidity) if hasattr(prop, "solidity") else None,
-                    major_axis_length=float(prop.major_axis_length) if hasattr(prop, "major_axis_length") else None,
-                    minor_axis_length=float(prop.minor_axis_length) if hasattr(prop, "minor_axis_length") else None,
-                    mean_intensity=float(prop.mean_intensity) if hasattr(prop, "mean_intensity") else None,
+                    major_axis_length=float(getattr(prop, "axis_major_length", None) or getattr(prop, "major_axis_length", None) or 0) or None,
+                    minor_axis_length=float(getattr(prop, "axis_minor_length", None) or getattr(prop, "minor_axis_length", None) or 0) or None,
+                    mean_intensity=float(getattr(prop, "intensity_mean", None) or getattr(prop, "mean_intensity", None) or 0) or None,
                     max_intensity=float(np.max(image_crop[cc_labels == prop.label])),
                     integrated_intensity=float(np.sum(image_crop[cc_labels == prop.label])),
                 )

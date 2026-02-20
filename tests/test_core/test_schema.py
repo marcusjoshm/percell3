@@ -424,3 +424,136 @@ class TestMigration32To33:
         assert "idx_measurements_channel" in idx_names
         assert "idx_measurements_metric" in idx_names
         conn.close()
+
+
+class TestEnsureMissingTables:
+    """Tests for _ensure_tables creating missing tables on open."""
+
+    def test_missing_particles_table_created(self, tmp_path):
+        """Opening a database missing the particles table creates it."""
+        db_path = tmp_path / "nop.db"
+        # Create a minimal 3.3.0 database WITHOUT particles table
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.executescript("""
+            PRAGMA journal_mode = WAL;
+            PRAGMA foreign_keys = ON;
+
+            CREATE TABLE experiments (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                percell_version TEXT NOT NULL DEFAULT '3.3.0',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                role TEXT,
+                excitation_nm REAL,
+                emission_nm REAL,
+                color TEXT,
+                is_segmentation INTEGER NOT NULL DEFAULT 0,
+                display_order INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE conditions (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE timepoints (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                time_seconds REAL,
+                display_order INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE bio_reps (
+                id INTEGER PRIMARY KEY,
+                condition_id INTEGER NOT NULL REFERENCES conditions(id),
+                name TEXT NOT NULL DEFAULT 'N1',
+                UNIQUE(condition_id, name)
+            );
+
+            CREATE TABLE fovs (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                bio_rep_id INTEGER NOT NULL REFERENCES bio_reps(id),
+                timepoint_id INTEGER REFERENCES timepoints(id),
+                width INTEGER,
+                height INTEGER,
+                pixel_size_um REAL,
+                source_file TEXT,
+                UNIQUE(name, bio_rep_id, timepoint_id)
+            );
+
+            CREATE TABLE segmentation_runs (
+                id INTEGER PRIMARY KEY,
+                channel_id INTEGER NOT NULL REFERENCES channels(id),
+                model_name TEXT NOT NULL,
+                parameters TEXT,
+                cell_count INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE cells (
+                id INTEGER PRIMARY KEY,
+                fov_id INTEGER NOT NULL REFERENCES fovs(id),
+                segmentation_id INTEGER NOT NULL REFERENCES segmentation_runs(id),
+                label_value INTEGER NOT NULL,
+                centroid_x REAL NOT NULL,
+                centroid_y REAL NOT NULL,
+                bbox_x INTEGER NOT NULL,
+                bbox_y INTEGER NOT NULL,
+                bbox_w INTEGER NOT NULL,
+                bbox_h INTEGER NOT NULL,
+                area_pixels REAL NOT NULL,
+                area_um2 REAL,
+                perimeter REAL,
+                circularity REAL,
+                is_valid INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(fov_id, segmentation_id, label_value)
+            );
+
+            CREATE TABLE measurements (
+                id INTEGER PRIMARY KEY,
+                cell_id INTEGER NOT NULL REFERENCES cells(id),
+                channel_id INTEGER NOT NULL REFERENCES channels(id),
+                metric TEXT NOT NULL,
+                value REAL NOT NULL,
+                scope TEXT NOT NULL DEFAULT 'whole_cell',
+                threshold_run_id INTEGER REFERENCES threshold_runs(id),
+                UNIQUE(cell_id, channel_id, metric, scope),
+                CHECK(scope IN ('whole_cell', 'mask_inside', 'mask_outside'))
+            );
+
+            CREATE TABLE threshold_runs (
+                id INTEGER PRIMARY KEY,
+                channel_id INTEGER NOT NULL REFERENCES channels(id),
+                method TEXT NOT NULL,
+                parameters TEXT,
+                threshold_value REAL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            INSERT INTO experiments (name, percell_version) VALUES ('Test', '3.3.0');
+        """)
+        conn.commit()
+        conn.close()
+
+        # Open — should create particles table automatically
+        conn = open_database(db_path)
+        tables = {
+            r["name"]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        }
+        assert "particles" in tables
+        assert tables >= EXPECTED_TABLES
+        conn.close()
