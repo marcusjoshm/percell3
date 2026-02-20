@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from pathlib import Path
-_VALID_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
+_VALID_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.+()-]{0,254}$")
 
 
 def _validate_name(value: str, field: str = "name") -> str:
@@ -21,7 +21,7 @@ def _validate_name(value: str, field: str = "name") -> str:
     if not _VALID_NAME_RE.match(value):
         raise ValueError(
             f"{field} contains invalid characters: {value!r}. "
-            "Only alphanumeric, dots, hyphens, and underscores are allowed."
+            "Allowed: alphanumeric, spaces, dots, hyphens, underscores, +, parentheses."
         )
     return value
 
@@ -36,7 +36,9 @@ from percell3.core.exceptions import (
     ExperimentError,
     ExperimentNotFoundError,
 )
-from percell3.core.models import CellRecord, ChannelConfig, FovInfo, MeasurementRecord
+from percell3.core.models import (
+    CellRecord, ChannelConfig, FovInfo, MeasurementRecord, ParticleRecord,
+)
 from percell3.core.schema import create_schema, open_database
 
 
@@ -652,12 +654,14 @@ class ExperimentStore:
         cell_ids: list[int] | None = None,
         channels: list[str] | None = None,
         metrics: list[str] | None = None,
+        scope: str | None = None,
     ) -> pd.DataFrame:
         channel_ids = None
         if channels:
             channel_ids = [self.get_channel(ch).id for ch in channels]
         rows = queries.select_measurements(
-            self._conn, cell_ids=cell_ids, channel_ids=channel_ids, metrics=metrics,
+            self._conn, cell_ids=cell_ids, channel_ids=channel_ids,
+            metrics=metrics, scope=scope,
         )
         return pd.DataFrame(rows)
 
@@ -665,14 +669,27 @@ class ExperimentStore:
         self,
         channels: list[str] | None = None,
         metrics: list[str] | None = None,
+        scope: str | None = None,
         include_cell_info: bool = True,
     ) -> pd.DataFrame:
-        df = self.get_measurements(channels=channels, metrics=metrics)
+        df = self.get_measurements(channels=channels, metrics=metrics, scope=scope)
         if df.empty:
             return df
 
-        # Create pivot column: channel_metric
-        df["col"] = df["channel"] + "_" + df["metric"]
+        # Build pivot column name: channel_metric for whole_cell,
+        # channel_metric_scope for mask scopes
+        has_mask_scopes = (df["scope"] != "whole_cell").any()
+        if has_mask_scopes:
+            df["col"] = df.apply(
+                lambda r: (
+                    f"{r['channel']}_{r['metric']}"
+                    if r["scope"] == "whole_cell"
+                    else f"{r['channel']}_{r['metric']}_{r['scope']}"
+                ),
+                axis=1,
+            )
+        else:
+            df["col"] = df["channel"] + "_" + df["metric"]
         pivot = df.pivot_table(
             index="cell_id", columns="col", values="value", aggfunc="first",
         )
@@ -804,6 +821,102 @@ class ExperimentStore:
             raise ExperimentError(f"Tag not found: {tag}")
         queries.delete_cell_tags(self._conn, cell_ids, tag_id)
 
+    def delete_tags_by_prefix(
+        self,
+        prefix: str,
+        cell_ids: list[int] | None = None,
+    ) -> int:
+        """Delete cell_tags (and optionally tags) matching a name prefix.
+
+        Args:
+            prefix: Tag name prefix (e.g., "group:GFP:mean_intensity:").
+            cell_ids: If provided, only remove cell_tags for these cells.
+                If None, removes tags entirely.
+
+        Returns:
+            Number of cell_tag rows deleted.
+        """
+        return queries.delete_tags_by_prefix(self._conn, prefix, cell_ids)
+
+    # --- Particles ---
+
+    def add_particles(self, particles: list[ParticleRecord]) -> None:
+        """Bulk insert particle records."""
+        queries.insert_particles(self._conn, particles)
+
+    def get_particles(
+        self,
+        cell_ids: list[int] | None = None,
+        threshold_run_id: int | None = None,
+    ) -> pd.DataFrame:
+        """Query particles with optional filters."""
+        rows = queries.select_particles(
+            self._conn,
+            cell_ids=cell_ids,
+            threshold_run_id=threshold_run_id,
+        )
+        return pd.DataFrame(rows)
+
+    def delete_particles_for_fov(self, fov_name: str, condition: str) -> int:
+        """Delete all particles for cells in a FOV.
+
+        Returns:
+            Number of particles deleted.
+        """
+        cond_id = queries.select_condition_id(self._conn, condition)
+        fov_info = queries.select_fov_by_name(
+            self._conn, fov_name, condition_id=cond_id,
+        )
+        return queries.delete_particles_for_fov(self._conn, fov_info.id)
+
+    def delete_particles_for_threshold_run(self, threshold_run_id: int) -> int:
+        """Delete all particles for a specific threshold run."""
+        return queries.delete_particles_for_threshold_run(
+            self._conn, threshold_run_id,
+        )
+
+    def get_threshold_runs(self) -> list[dict]:
+        """Return all threshold runs."""
+        return queries.select_threshold_runs(self._conn)
+
+    # --- Particle Label I/O ---
+
+    def write_particle_labels(
+        self,
+        fov: str,
+        condition: str,
+        channel: str,
+        labels: np.ndarray,
+        bio_rep: str | None = None,
+        timepoint: str | None = None,
+    ) -> None:
+        """Write a particle label image to masks.zarr."""
+        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
+        br_name = fov_info.bio_rep
+        gp = zarr_io.particle_label_group_path(
+            br_name, condition, fov, channel, timepoint,
+        )
+        zarr_io.write_particle_labels(
+            self.masks_zarr_path, gp, labels,
+            pixel_size_um=fov_info.pixel_size_um,
+        )
+
+    def read_particle_labels(
+        self,
+        fov: str,
+        condition: str,
+        channel: str,
+        bio_rep: str | None = None,
+        timepoint: str | None = None,
+    ) -> np.ndarray:
+        """Read a particle label image from masks.zarr."""
+        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
+        br_name = fov_info.bio_rep
+        gp = zarr_io.particle_label_group_path(
+            br_name, condition, fov, channel, timepoint,
+        )
+        return zarr_io.read_particle_labels(self.masks_zarr_path, gp)
+
     # --- Export ---
 
     def export_csv(
@@ -811,8 +924,10 @@ class ExperimentStore:
         path: Path,
         channels: list[str] | None = None,
         metrics: list[str] | None = None,
+        scope: str | None = None,
     ) -> None:
         pivot = self.get_measurement_pivot(
-            channels=channels, metrics=metrics, include_cell_info=True,
+            channels=channels, metrics=metrics, scope=scope,
+            include_cell_info=True,
         )
         pivot.to_csv(path, index=False)

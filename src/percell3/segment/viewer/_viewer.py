@@ -100,6 +100,9 @@ def _launch(
         viewer, store, fov, condition, selected_channels, bio_rep=bio_rep,
     )
 
+    # --- Load threshold masks (if any) ---
+    _load_mask_layers(viewer, store, fov, condition, bio_rep=bio_rep)
+
     # --- Block until viewer closes ---
     napari.run()
 
@@ -189,6 +192,40 @@ def _load_label_layer(
         viewer.add_labels(empty, name="segmentation", opacity=0.5)
 
     return original_hash, parent_run_id, seg_channel
+
+
+def _load_mask_layers(
+    viewer: napari.Viewer,
+    store: ExperimentStore,
+    fov: str,
+    condition: str,
+    bio_rep: str | None = None,
+) -> None:
+    """Load threshold mask layers for channels that have threshold runs."""
+    runs = store.get_threshold_runs()
+    if not runs:
+        return
+
+    # One mask per unique channel (use the latest run for each)
+    channel_runs: dict[str, dict] = {}
+    for run in runs:
+        channel_runs[run["channel"]] = run
+
+    for channel, run in channel_runs.items():
+        try:
+            mask = store.read_mask(fov, condition, channel, bio_rep=bio_rep)
+        except KeyError:
+            continue
+
+        viewer.add_image(
+            mask,
+            name=f"{channel} mask",
+            colormap="magenta",
+            blending="additive",
+            opacity=0.4,
+            visible=False,
+        )
+        logger.info("Loaded threshold mask for channel '%s'", channel)
 
 
 def save_edited_labels(

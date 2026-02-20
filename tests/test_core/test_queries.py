@@ -367,6 +367,101 @@ class TestMeasurementQueries:
         assert len(rows) == 3
 
 
+    def test_insert_with_scope(self, db_conn):
+        ch_id, cell_ids = self._setup(db_conn)
+        measurements = [
+            MeasurementRecord(
+                cell_id=cell_ids[0], channel_id=ch_id,
+                metric="mean_intensity", value=42.0, scope="whole_cell",
+            ),
+            MeasurementRecord(
+                cell_id=cell_ids[0], channel_id=ch_id,
+                metric="mean_intensity", value=30.0, scope="mask_inside",
+            ),
+            MeasurementRecord(
+                cell_id=cell_ids[0], channel_id=ch_id,
+                metric="mean_intensity", value=12.0, scope="mask_outside",
+            ),
+        ]
+        queries.insert_measurements(db_conn, measurements)
+        rows = queries.select_measurements(db_conn, cell_ids=[cell_ids[0]])
+        assert len(rows) == 3
+        scopes = {r["scope"] for r in rows}
+        assert scopes == {"whole_cell", "mask_inside", "mask_outside"}
+
+    def test_filter_by_scope(self, db_conn):
+        ch_id, cell_ids = self._setup(db_conn)
+        measurements = [
+            MeasurementRecord(
+                cell_id=cell_ids[0], channel_id=ch_id,
+                metric="mean_intensity", value=42.0, scope="whole_cell",
+            ),
+            MeasurementRecord(
+                cell_id=cell_ids[0], channel_id=ch_id,
+                metric="mean_intensity", value=30.0, scope="mask_inside",
+            ),
+        ]
+        queries.insert_measurements(db_conn, measurements)
+        rows = queries.select_measurements(db_conn, scope="mask_inside")
+        assert len(rows) == 1
+        assert rows[0]["scope"] == "mask_inside"
+        assert rows[0]["value"] == 30.0
+
+    def test_scope_default_is_whole_cell(self, db_conn):
+        ch_id, cell_ids = self._setup(db_conn)
+        m = MeasurementRecord(
+            cell_id=cell_ids[0], channel_id=ch_id,
+            metric="mean_intensity", value=42.0,
+        )
+        queries.insert_measurements(db_conn, [m])
+        rows = queries.select_measurements(db_conn)
+        assert rows[0]["scope"] == "whole_cell"
+        assert rows[0]["threshold_run_id"] is None
+
+    def test_overwrite_by_scope(self, db_conn):
+        """INSERT OR REPLACE respects scope in unique constraint."""
+        ch_id, cell_ids = self._setup(db_conn)
+        # Insert whole_cell
+        m1 = MeasurementRecord(
+            cell_id=cell_ids[0], channel_id=ch_id,
+            metric="mean_intensity", value=42.0, scope="whole_cell",
+        )
+        queries.insert_measurements(db_conn, [m1])
+        # Insert mask_inside — should NOT overwrite whole_cell
+        m2 = MeasurementRecord(
+            cell_id=cell_ids[0], channel_id=ch_id,
+            metric="mean_intensity", value=30.0, scope="mask_inside",
+        )
+        queries.insert_measurements(db_conn, [m2])
+        rows = queries.select_measurements(db_conn, cell_ids=[cell_ids[0]])
+        assert len(rows) == 2
+
+        # Overwrite whole_cell with new value
+        m3 = MeasurementRecord(
+            cell_id=cell_ids[0], channel_id=ch_id,
+            metric="mean_intensity", value=99.0, scope="whole_cell",
+        )
+        queries.insert_measurements(db_conn, [m3])
+        rows = queries.select_measurements(
+            db_conn, cell_ids=[cell_ids[0]], scope="whole_cell",
+        )
+        assert len(rows) == 1
+        assert rows[0]["value"] == 99.0
+
+    def test_threshold_run_id_stored(self, db_conn):
+        ch_id, cell_ids = self._setup(db_conn)
+        # Create a threshold run
+        tr_id = queries.insert_threshold_run(db_conn, ch_id, "otsu")
+        m = MeasurementRecord(
+            cell_id=cell_ids[0], channel_id=ch_id,
+            metric="mean_intensity", value=30.0,
+            scope="mask_inside", threshold_run_id=tr_id,
+        )
+        queries.insert_measurements(db_conn, [m])
+        rows = queries.select_measurements(db_conn, scope="mask_inside")
+        assert rows[0]["threshold_run_id"] == tr_id
+
+
 class TestTagQueries:
     def _setup_cells(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "DAPI")
@@ -599,3 +694,202 @@ class TestFovSegmentationSummary:
         summary = queries.select_fov_segmentation_summary(db_conn)
         assert summary[fov1_id] == (5, "cpsam")
         assert summary[fov2_id] == (0, None)
+
+
+class TestParticleQueries:
+    def _setup(self, db_conn):
+        """Create channel, condition, FOV, seg run, cells, threshold run."""
+        ch_id = queries.insert_channel(db_conn, "GFP")
+        cond_id = queries.insert_condition(db_conn, "control")
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "fov_1", bio_rep_id=br_id)
+        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cpsam")
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=i,
+                centroid_x=50, centroid_y=50,
+                bbox_x=20, bbox_y=20, bbox_w=60, bbox_h=60,
+                area_pixels=800,
+            )
+            for i in range(1, 3)
+        ]
+        cell_ids = queries.insert_cells(db_conn, cells)
+        thr_id = queries.insert_threshold_run(db_conn, ch_id, "otsu")
+        return fov_id, cell_ids, thr_id, ch_id
+
+    def test_insert_and_select_particles(self, db_conn):
+        from percell3.core.models import ParticleRecord
+
+        fov_id, cell_ids, thr_id, _ = self._setup(db_conn)
+        particles = [
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
+                centroid_x=30.0, centroid_y=40.0,
+                bbox_x=25, bbox_y=35, bbox_w=10, bbox_h=10,
+                area_pixels=50.0, perimeter=25.0, circularity=0.8,
+            ),
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=2,
+                centroid_x=60.0, centroid_y=60.0,
+                bbox_x=55, bbox_y=55, bbox_w=12, bbox_h=12,
+                area_pixels=80.0,
+            ),
+        ]
+        queries.insert_particles(db_conn, particles)
+
+        rows = queries.select_particles(db_conn, cell_ids=[cell_ids[0]])
+        assert len(rows) == 2
+        assert rows[0]["label_value"] == 1
+        assert rows[0]["area_pixels"] == 50.0
+        assert rows[1]["label_value"] == 2
+
+    def test_select_by_threshold_run(self, db_conn):
+        from percell3.core.models import ParticleRecord
+
+        fov_id, cell_ids, thr_id, ch_id = self._setup(db_conn)
+        thr_id2 = queries.insert_threshold_run(db_conn, ch_id, "manual")
+        particles = [
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
+                centroid_x=30.0, centroid_y=40.0,
+                bbox_x=25, bbox_y=35, bbox_w=10, bbox_h=10,
+                area_pixels=50.0,
+            ),
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=thr_id2, label_value=1,
+                centroid_x=31.0, centroid_y=41.0,
+                bbox_x=26, bbox_y=36, bbox_w=10, bbox_h=10,
+                area_pixels=55.0,
+            ),
+        ]
+        queries.insert_particles(db_conn, particles)
+
+        rows = queries.select_particles(db_conn, threshold_run_id=thr_id)
+        assert len(rows) == 1
+        assert rows[0]["threshold_run_id"] == thr_id
+
+    def test_delete_particles_for_fov(self, db_conn):
+        from percell3.core.models import ParticleRecord
+
+        fov_id, cell_ids, thr_id, _ = self._setup(db_conn)
+        particles = [
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
+                centroid_x=30.0, centroid_y=40.0,
+                bbox_x=25, bbox_y=35, bbox_w=10, bbox_h=10,
+                area_pixels=50.0,
+            ),
+            ParticleRecord(
+                cell_id=cell_ids[1], threshold_run_id=thr_id, label_value=1,
+                centroid_x=60.0, centroid_y=60.0,
+                bbox_x=55, bbox_y=55, bbox_w=10, bbox_h=10,
+                area_pixels=80.0,
+            ),
+        ]
+        queries.insert_particles(db_conn, particles)
+
+        deleted = queries.delete_particles_for_fov(db_conn, fov_id)
+        assert deleted == 2
+        assert queries.select_particles(db_conn) == []
+
+    def test_delete_particles_for_threshold_run(self, db_conn):
+        from percell3.core.models import ParticleRecord
+
+        fov_id, cell_ids, thr_id, _ = self._setup(db_conn)
+        particles = [
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
+                centroid_x=30.0, centroid_y=40.0,
+                bbox_x=25, bbox_y=35, bbox_w=10, bbox_h=10,
+                area_pixels=50.0,
+            ),
+        ]
+        queries.insert_particles(db_conn, particles)
+
+        deleted = queries.delete_particles_for_threshold_run(db_conn, thr_id)
+        assert deleted == 1
+        assert queries.select_particles(db_conn) == []
+
+    def test_empty_insert_is_noop(self, db_conn):
+        queries.insert_particles(db_conn, [])
+        assert queries.select_particles(db_conn) == []
+
+
+class TestThresholdRunQueries:
+    def test_select_threshold_runs(self, db_conn):
+        ch_id = queries.insert_channel(db_conn, "GFP")
+        thr_id = queries.insert_threshold_run(
+            db_conn, ch_id, "otsu", {"fov_name": "fov_1"}
+        )
+        runs = queries.select_threshold_runs(db_conn)
+        assert len(runs) == 1
+        assert runs[0]["id"] == thr_id
+        assert runs[0]["channel"] == "GFP"
+        assert runs[0]["method"] == "otsu"
+        assert runs[0]["parameters"]["fov_name"] == "fov_1"
+
+
+class TestDeleteTagsByPrefix:
+    def test_delete_matching_tags(self, db_conn):
+        ch_id = queries.insert_channel(db_conn, "GFP")
+        cond_id = queries.insert_condition(db_conn, "ctrl")
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "fov_1", bio_rep_id=br_id)
+        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cpsam")
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=50, centroid_y=50,
+                bbox_x=20, bbox_y=20, bbox_w=60, bbox_h=60,
+                area_pixels=800,
+            ),
+        ]
+        cell_ids = queries.insert_cells(db_conn, cells)
+
+        # Create group tags
+        tag1_id = queries.insert_tag(db_conn, "group:GFP:mean:g1")
+        tag2_id = queries.insert_tag(db_conn, "group:GFP:mean:g2")
+        tag3_id = queries.insert_tag(db_conn, "manual_flag")
+        queries.insert_cell_tags(db_conn, cell_ids, tag1_id)
+        queries.insert_cell_tags(db_conn, cell_ids, tag3_id)
+
+        deleted = queries.delete_tags_by_prefix(db_conn, "group:GFP:mean:")
+        assert deleted == 1  # Only cell_ids[0] had tag1
+
+        # manual_flag should remain
+        remaining = queries.select_tags(db_conn)
+        assert "manual_flag" in remaining
+        assert "group:GFP:mean:g1" not in remaining
+
+    def test_delete_with_cell_ids_scope(self, db_conn):
+        ch_id = queries.insert_channel(db_conn, "GFP")
+        cond_id = queries.insert_condition(db_conn, "ctrl")
+        br_id = queries.insert_bio_rep(db_conn, "N1", condition_id=cond_id)
+        fov_id = queries.insert_fov(db_conn, "fov_1", bio_rep_id=br_id)
+        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cpsam")
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=i,
+                centroid_x=50, centroid_y=50,
+                bbox_x=20, bbox_y=20, bbox_w=60, bbox_h=60,
+                area_pixels=800,
+            )
+            for i in range(1, 3)
+        ]
+        cell_ids = queries.insert_cells(db_conn, cells)
+
+        tag_id = queries.insert_tag(db_conn, "group:GFP:mean:g1")
+        queries.insert_cell_tags(db_conn, cell_ids, tag_id)
+
+        # Delete only for cell_ids[0] — tag stays for cell_ids[1]
+        deleted = queries.delete_tags_by_prefix(
+            db_conn, "group:GFP:mean:", cell_ids=[cell_ids[0]]
+        )
+        assert deleted == 1
+
+        # Tag still exists (used by other cell)
+        assert "group:GFP:mean:g1" in queries.select_tags(db_conn)
+
+    def test_no_matching_prefix(self, db_conn):
+        deleted = queries.delete_tags_by_prefix(db_conn, "nonexistent:")
+        assert deleted == 0

@@ -261,3 +261,50 @@ class TestNdimValidation:
         )
         result = zarr_io.read_image_channel_numpy(images_zarr, gp, 0)
         np.testing.assert_array_equal(result, data_2d)
+
+
+class TestParticleLabelIO:
+    def test_write_and_read(self, masks_zarr):
+        labels = np.zeros((128, 128), dtype=np.int32)
+        labels[20:40, 20:40] = 1
+        labels[60:80, 60:80] = 2
+        gp = zarr_io.particle_label_group_path("N1", "control", "r1", "GFP")
+
+        zarr_io.write_particle_labels(masks_zarr, gp, labels)
+        result = zarr_io.read_particle_labels(masks_zarr, gp)
+        np.testing.assert_array_equal(result, labels)
+
+    def test_dtype_int32(self, masks_zarr):
+        labels = np.ones((64, 64), dtype=np.uint16) * 5
+        gp = zarr_io.particle_label_group_path("N1", "control", "r1", "GFP")
+        zarr_io.write_particle_labels(masks_zarr, gp, labels)
+
+        root = zarr.open(str(masks_zarr), mode="r")
+        arr = root[f"{gp}/0"]
+        assert arr.dtype == np.int32
+
+    def test_overwrite(self, masks_zarr):
+        gp = zarr_io.particle_label_group_path("N1", "control", "r1", "GFP")
+
+        labels1 = np.ones((64, 64), dtype=np.int32)
+        zarr_io.write_particle_labels(masks_zarr, gp, labels1)
+
+        labels2 = np.ones((64, 64), dtype=np.int32) * 3
+        zarr_io.write_particle_labels(masks_zarr, gp, labels2)
+
+        result = zarr_io.read_particle_labels(masks_zarr, gp)
+        np.testing.assert_array_equal(result, labels2)
+
+    def test_path(self):
+        gp = zarr_io.particle_label_group_path("N1", "control", "r1", "GFP")
+        assert gp == "control/N1/r1/particles_GFP"
+
+    def test_path_with_timepoint(self):
+        gp = zarr_io.particle_label_group_path("N1", "control", "r1", "GFP", timepoint="t0")
+        assert gp == "control/N1/t0/r1/particles_GFP"
+
+    def test_rejects_3d(self, masks_zarr):
+        data_3d = np.zeros((1, 64, 64), dtype=np.int32)
+        gp = zarr_io.particle_label_group_path("N1", "control", "r1", "GFP")
+        with pytest.raises(ValueError, match="Expected 2D"):
+            zarr_io.write_particle_labels(masks_zarr, gp, data_3d)

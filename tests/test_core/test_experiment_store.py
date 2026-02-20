@@ -745,6 +745,82 @@ class TestBioReps:
         assert "bio_rep_name" in pivot.columns
         assert pivot["bio_rep_name"].iloc[0] == "N1"
 
+    def test_measurement_pivot_mixed_scopes(self, experiment):
+        """Pivot with mixed scopes: whole_cell gets clean names, mask scopes get suffix."""
+        experiment.add_channel("GFP")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("r1", condition="control")
+        seg_id = experiment.add_segmentation_run(channel="GFP", model_name="cyto3")
+
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+        ]
+        cell_ids = experiment.add_cells(cells)
+        gfp = experiment.get_channel("GFP")
+
+        experiment.add_measurements([
+            MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
+                              metric="mean_intensity", value=42.0,
+                              scope="whole_cell"),
+            MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
+                              metric="mean_intensity", value=30.0,
+                              scope="mask_inside"),
+            MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
+                              metric="mean_intensity", value=12.0,
+                              scope="mask_outside"),
+        ])
+
+        pivot = experiment.get_measurement_pivot()
+        # whole_cell gets clean name, mask scopes get suffix
+        assert "GFP_mean_intensity" in pivot.columns
+        assert "GFP_mean_intensity_mask_inside" in pivot.columns
+        assert "GFP_mean_intensity_mask_outside" in pivot.columns
+        assert pivot["GFP_mean_intensity"].iloc[0] == 42.0
+        assert pivot["GFP_mean_intensity_mask_inside"].iloc[0] == 30.0
+        assert pivot["GFP_mean_intensity_mask_outside"].iloc[0] == 12.0
+
+    def test_measurement_pivot_scope_filter(self, experiment):
+        """Pivot with scope filter returns only that scope."""
+        experiment.add_channel("GFP")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("r1", condition="control")
+        seg_id = experiment.add_segmentation_run(channel="GFP", model_name="cyto3")
+
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+        ]
+        cell_ids = experiment.add_cells(cells)
+        gfp = experiment.get_channel("GFP")
+
+        experiment.add_measurements([
+            MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
+                              metric="mean_intensity", value=42.0,
+                              scope="whole_cell"),
+            MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
+                              metric="mean_intensity", value=30.0,
+                              scope="mask_inside"),
+        ])
+
+        # Filter to whole_cell only
+        pivot = experiment.get_measurement_pivot(scope="whole_cell")
+        assert "GFP_mean_intensity" in pivot.columns
+        assert "GFP_mean_intensity_mask_inside" not in pivot.columns
+
+        # Filter to mask_inside only — single mask scope still gets suffix
+        pivot2 = experiment.get_measurement_pivot(scope="mask_inside")
+        assert "GFP_mean_intensity_mask_inside" in pivot2.columns
+        assert len(pivot2) == 1
+
 
 class TestBioRepNameValidation:
     """Security tests: name validation on bio rep names."""
@@ -883,3 +959,194 @@ class TestGetFovSegmentationSummary:
         fov_id = experiment.add_fov("r1", "ctrl", width=32, height=32)
         summary = experiment.get_fov_segmentation_summary()
         assert summary[fov_id] == (0, None)
+
+
+# === Particle CRUD ===
+
+
+class TestParticles:
+    """Tests for particle add/get/delete via ExperimentStore."""
+
+    @pytest.fixture
+    def store_with_threshold(self, experiment):
+        """Experiment with a channel, condition, FOV, seg run, cells, and threshold run."""
+        experiment.add_channel("DAPI", role="nucleus")
+        experiment.add_channel("GFP", role="signal")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("r1", condition="control", width=128, height=128)
+        seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=i,
+                centroid_x=50.0 + i, centroid_y=60.0 + i,
+                bbox_x=40 + i, bbox_y=50 + i, bbox_w=20, bbox_h=20,
+                area_pixels=300.0,
+            )
+            for i in range(1, 4)
+        ]
+        cell_ids = experiment.add_cells(cells)
+        thr_id = experiment.add_threshold_run(channel="GFP", method="otsu")
+        return experiment, cell_ids, thr_id
+
+    def test_add_and_get_particles(self, store_with_threshold):
+        store, cell_ids, thr_id = store_with_threshold
+        from percell3.core.models import ParticleRecord
+
+        particles = [
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
+                centroid_x=55.0, centroid_y=65.0,
+                bbox_x=50, bbox_y=60, bbox_w=10, bbox_h=10,
+                area_pixels=80.0, circularity=0.9,
+            ),
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=2,
+                centroid_x=57.0, centroid_y=67.0,
+                bbox_x=52, bbox_y=62, bbox_w=8, bbox_h=8,
+                area_pixels=50.0,
+            ),
+        ]
+        store.add_particles(particles)
+
+        df = store.get_particles(cell_ids=[cell_ids[0]])
+        assert len(df) == 2
+        assert "circularity" in df.columns
+
+    def test_get_particles_by_threshold_run(self, store_with_threshold):
+        store, cell_ids, thr_id = store_with_threshold
+        from percell3.core.models import ParticleRecord
+
+        particles = [
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
+                centroid_x=55.0, centroid_y=65.0,
+                bbox_x=50, bbox_y=60, bbox_w=10, bbox_h=10,
+                area_pixels=80.0,
+            ),
+        ]
+        store.add_particles(particles)
+
+        df = store.get_particles(threshold_run_id=thr_id)
+        assert len(df) == 1
+
+    def test_get_particles_empty(self, store_with_threshold):
+        store, cell_ids, thr_id = store_with_threshold
+        df = store.get_particles(cell_ids=[cell_ids[0]])
+        assert len(df) == 0
+
+    def test_delete_particles_for_fov(self, store_with_threshold):
+        store, cell_ids, thr_id = store_with_threshold
+        from percell3.core.models import ParticleRecord
+
+        particles = [
+            ParticleRecord(
+                cell_id=cid, threshold_run_id=thr_id, label_value=1,
+                centroid_x=55.0, centroid_y=65.0,
+                bbox_x=50, bbox_y=60, bbox_w=10, bbox_h=10,
+                area_pixels=80.0,
+            )
+            for cid in cell_ids
+        ]
+        store.add_particles(particles)
+        deleted = store.delete_particles_for_fov("r1", "control")
+        assert deleted == 3
+
+        df = store.get_particles(threshold_run_id=thr_id)
+        assert len(df) == 0
+
+    def test_delete_particles_for_threshold_run(self, store_with_threshold):
+        store, cell_ids, thr_id = store_with_threshold
+        from percell3.core.models import ParticleRecord
+
+        particles = [
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
+                centroid_x=55.0, centroid_y=65.0,
+                bbox_x=50, bbox_y=60, bbox_w=10, bbox_h=10,
+                area_pixels=80.0,
+            ),
+        ]
+        store.add_particles(particles)
+        deleted = store.delete_particles_for_threshold_run(thr_id)
+        assert deleted == 1
+
+
+class TestThresholdRuns:
+    def test_get_threshold_runs(self, experiment):
+        experiment.add_channel("GFP")
+        thr_id = experiment.add_threshold_run(
+            channel="GFP", method="otsu", parameters={"group": "g1"},
+        )
+        runs = experiment.get_threshold_runs()
+        assert len(runs) == 1
+        assert runs[0]["channel"] == "GFP"
+        assert runs[0]["method"] == "otsu"
+        assert runs[0]["parameters"] == {"group": "g1"}
+
+
+class TestDeleteTagsByPrefix:
+    def test_delete_matching_prefix(self, experiment_with_data):
+        store = experiment_with_data
+        store.add_tag("group:GFP:mean:g1")
+        store.add_tag("group:GFP:mean:g2")
+        store.add_tag("positive")
+
+        df = store.get_cells(condition="control")
+        all_ids = df["id"].tolist()
+
+        store.tag_cells(all_ids[:5], "group:GFP:mean:g1")
+        store.tag_cells(all_ids[5:], "group:GFP:mean:g2")
+        store.tag_cells(all_ids[:3], "positive")
+
+        deleted = store.delete_tags_by_prefix("group:GFP:mean:")
+        assert deleted == 10  # 5 + 5
+
+        # "positive" tags should remain
+        tagged = store.get_cells(condition="control", tags=["positive"])
+        assert len(tagged) == 3
+
+    def test_delete_with_cell_ids_scope(self, experiment_with_data):
+        store = experiment_with_data
+        store.add_tag("group:GFP:mean:g1")
+
+        df = store.get_cells(condition="control")
+        all_ids = df["id"].tolist()
+        store.tag_cells(all_ids, "group:GFP:mean:g1")
+
+        # Only remove from first 3 cells
+        deleted = store.delete_tags_by_prefix("group:GFP:mean:", cell_ids=all_ids[:3])
+        assert deleted == 3
+
+        # Remaining 7 should still have the tag
+        tagged = store.get_cells(condition="control", tags=["group:GFP:mean:g1"])
+        assert len(tagged) == 7
+
+
+class TestParticleLabelIO:
+    def test_write_and_read_particle_labels(self, experiment):
+        experiment.add_channel("DAPI")
+        experiment.add_channel("GFP")
+        experiment.add_condition("control")
+        experiment.add_fov("r1", condition="control", width=128, height=128)
+
+        labels = np.zeros((128, 128), dtype=np.int32)
+        labels[20:40, 20:40] = 1
+        labels[60:80, 60:80] = 2
+
+        experiment.write_particle_labels("r1", "control", "GFP", labels)
+        result = experiment.read_particle_labels("r1", "control", "GFP")
+        np.testing.assert_array_equal(result, labels)
+
+    def test_particle_labels_zarr_path(self, experiment):
+        """Particle labels are stored at condition/bio_rep/fov/particles_channel."""
+        experiment.add_channel("GFP")
+        experiment.add_condition("control")
+        experiment.add_fov("r1", condition="control", width=64, height=64)
+
+        labels = np.zeros((64, 64), dtype=np.int32)
+        labels[10:20, 10:20] = 1
+        experiment.write_particle_labels("r1", "control", "GFP", labels)
+
+        import zarr as z
+        store = z.open(str(experiment.masks_zarr_path), mode="r")
+        assert "control/N1/r1/particles_GFP" in store

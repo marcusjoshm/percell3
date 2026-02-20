@@ -216,8 +216,8 @@ def run_interactive_menu() -> None:
         MenuItem("2", "Import images", _import_images, enabled=True),
         MenuItem("3", "Segment cells", _segment_cells, enabled=True),
         MenuItem("4", "View in napari", _view_napari, enabled=True),
-        MenuItem("5", "Measure channels", None, enabled=False),
-        MenuItem("6", "Apply threshold", None, enabled=False),
+        MenuItem("5", "Measure channels", _measure_channels, enabled=True),
+        MenuItem("6", "Apply threshold", _apply_threshold, enabled=True),
         MenuItem("7", "Query experiment", _query_experiment, enabled=True),
         MenuItem("8", "Edit experiment", _edit_experiment, enabled=True),
         MenuItem("9", "Export to CSV", _export_csv, enabled=True),
@@ -524,19 +524,27 @@ def _prompt_condition_for_assignment(store: ExperimentStore) -> str:
         console.print("\n[bold]Conditions:[/bold]")
         choice = numbered_select_one(options, "Condition")
         if choice == "(new condition)":
-            name = menu_prompt("New condition name")
-            try:
-                store.add_condition(name)
-            except DuplicateError:
-                pass
-            return name
+            while True:
+                name = menu_prompt("New condition name")
+                try:
+                    store.add_condition(name)
+                except DuplicateError:
+                    pass
+                except ValueError as e:
+                    console.print(f"[red]{e}[/red]")
+                    continue
+                return name
         return choice
-    name = menu_prompt("Condition name")
-    try:
-        store.add_condition(name)
-    except DuplicateError:
-        pass
-    return name
+    while True:
+        name = menu_prompt("Condition name")
+        try:
+            store.add_condition(name)
+        except DuplicateError:
+            pass
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            continue
+        return name
 
 
 def _prompt_bio_rep_for_assignment(store: ExperimentStore, condition: str) -> str:
@@ -798,6 +806,47 @@ def _segment_cells(state: MenuState) -> None:
         console.print(f"\n[yellow]Warnings ({len(result.warnings)}):[/yellow]")
         for w in result.warnings:
             console.print(f"  [dim]- {w}[/dim]")
+
+    # Auto-measure all channels on the just-segmented FOVs
+    if result.cell_count > 0:
+        try:
+            all_channels = store.get_channels()
+            ch_names = [ch.name for ch in all_channels]
+            console.print(f"\n[bold]Auto-measuring {len(ch_names)} channels...[/bold]")
+
+            from percell3.measure.measurer import Measurer as _AutoMeasurer
+
+            auto_measurer = _AutoMeasurer()
+            total_auto = 0
+
+            with make_progress() as auto_progress:
+                auto_task = auto_progress.add_task(
+                    "Measuring...", total=len(selected_fovs),
+                )
+                for ai, fov_info in enumerate(selected_fovs):
+                    count = auto_measurer.measure_fov(
+                        store,
+                        fov=fov_info.name,
+                        condition=fov_info.condition,
+                        channels=ch_names,
+                        bio_rep=fov_info.bio_rep,
+                    )
+                    total_auto += count
+                    auto_progress.update(
+                        auto_task, completed=ai + 1,
+                        description=f"Measuring {fov_info.name}",
+                    )
+
+            n_metrics = len(_AutoMeasurer()._metrics.list_metrics())
+            console.print(
+                f"  Measured {n_metrics} metrics x {len(ch_names)} channels "
+                f"for {result.cell_count} cells"
+            )
+        except Exception as exc:
+            console.print(
+                f"  [yellow]Auto-measure warning:[/yellow] {exc}"
+            )
+
     console.print()
 
 
@@ -845,6 +894,470 @@ def _view_napari(state: MenuState) -> None:
         console.print(f"\n[green]Labels saved[/green] (run_id={run_id})")
     else:
         console.print("\n[dim]No changes detected.[/dim]")
+    console.print()
+
+
+def _measure_channels(state: MenuState) -> None:
+    """Interactively measure cells — whole-cell or mask-based modes."""
+    store = state.require_experiment()
+
+    # Prerequisites
+    channels = store.get_channels()
+    if not channels:
+        console.print("[red]No channels found.[/red] Import images first.")
+        return
+
+    all_fovs = store.get_fovs()
+    if not all_fovs:
+        console.print("[red]No FOVs found.[/red] Import images first.")
+        return
+
+    cell_count = store.get_cell_count()
+    if cell_count == 0:
+        console.print("[red]No cells found.[/red] Run segmentation first.")
+        return
+
+    # Mode selection
+    console.print("\n[bold]Measurement mode:[/bold]")
+    modes = [
+        "Whole cell (all channels, all metrics)",
+        "Inside threshold mask",
+        "Outside threshold mask",
+        "Both inside + outside mask",
+    ]
+    mode = numbered_select_one(modes, "Mode")
+
+    if mode.startswith("Whole"):
+        _measure_whole_cell(store, channels, all_fovs)
+    else:
+        # Determine scopes
+        if "Inside" in mode:
+            scopes = ["mask_inside"]
+        elif "Outside" in mode:
+            scopes = ["mask_outside"]
+        else:
+            scopes = ["mask_inside", "mask_outside"]
+        _measure_masked(store, channels, all_fovs, scopes)
+
+
+def _measure_whole_cell(store, channels, all_fovs) -> None:
+    """Run whole-cell measurement across all channels."""
+    # Channel selection
+    ch_names = [ch.name for ch in channels]
+    console.print("\n[bold]Channels to measure:[/bold]")
+    selected_channels = numbered_select_many(ch_names, "Channels (numbers, 'all')")
+
+    # FOV selection
+    seg_summary = store.get_fov_segmentation_summary()
+    fovs_with_cells = [f for f in all_fovs if seg_summary.get(f.id, (0, None))[0] > 0]
+    if not fovs_with_cells:
+        console.print("[red]No FOVs with segmented cells.[/red]")
+        return
+
+    _show_fov_status_table(fovs_with_cells, seg_summary)
+    if len(fovs_with_cells) == 1:
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].name})[/dim]")
+        selected_fovs = fovs_with_cells
+    else:
+        selected_fovs = _select_fovs_from_table(fovs_with_cells)
+
+    # Confirmation
+    console.print(f"\n[bold]Measurement settings:[/bold]")
+    console.print(f"  Mode:     Whole cell")
+    console.print(f"  Channels: {', '.join(selected_channels)}")
+    console.print(f"  FOVs:     {len(selected_fovs)} selected")
+
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
+        console.print("[yellow]Measurement cancelled.[/yellow]")
+        return
+
+    # Run BatchMeasurer
+    from percell3.measure.batch import BatchMeasurer
+
+    batch = BatchMeasurer()
+
+    # Filter to selected FOV conditions for per-FOV measurement
+    with make_progress() as progress:
+        task = progress.add_task("Measuring...", total=len(selected_fovs))
+
+        from percell3.measure.measurer import Measurer
+
+        measurer = Measurer()
+        total_measurements = 0
+
+        for i, fov_info in enumerate(selected_fovs):
+            count = measurer.measure_fov(
+                store,
+                fov=fov_info.name,
+                condition=fov_info.condition,
+                channels=selected_channels,
+                bio_rep=fov_info.bio_rep,
+            )
+            total_measurements += count
+            progress.update(
+                task, completed=i + 1,
+                description=f"Measuring {fov_info.name}",
+            )
+
+    console.print(f"\n[green]Measurement complete[/green]")
+    console.print(f"  FOVs:         {len(selected_fovs)}")
+    console.print(f"  Channels:     {len(selected_channels)}")
+    console.print(f"  Measurements: {total_measurements}")
+    console.print()
+
+
+def _measure_masked(store, channels, all_fovs, scopes: list[str]) -> None:
+    """Run mask-based measurement using threshold masks."""
+    # Check for threshold runs
+    threshold_runs = store.get_threshold_runs()
+    if not threshold_runs:
+        console.print(
+            "[red]No threshold runs found.[/red] "
+            "Run 'Apply threshold' (menu 6) first."
+        )
+        return
+
+    # Group threshold runs by channel, pick most recent per channel
+    runs_by_channel: dict[str, dict] = {}
+    for run in threshold_runs:
+        runs_by_channel[run["channel"]] = run  # last wins = most recent
+
+    # Select threshold channel
+    thresh_channels = list(runs_by_channel.keys())
+    console.print("\n[bold]Threshold channels available:[/bold]")
+    threshold_channel = numbered_select_one(thresh_channels, "Threshold channel")
+    selected_run = runs_by_channel[threshold_channel]
+    threshold_run_id = selected_run["id"]
+
+    # Select measurement channels
+    ch_names = [ch.name for ch in channels]
+    console.print("\n[bold]Channels to measure:[/bold]")
+    selected_channels = numbered_select_many(ch_names, "Channels (numbers, 'all')")
+
+    # FOV selection — only FOVs with cells
+    seg_summary = store.get_fov_segmentation_summary()
+    fovs_with_cells = [f for f in all_fovs if seg_summary.get(f.id, (0, None))[0] > 0]
+    if not fovs_with_cells:
+        console.print("[red]No FOVs with segmented cells.[/red]")
+        return
+
+    _show_fov_status_table(fovs_with_cells, seg_summary)
+    if len(fovs_with_cells) == 1:
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].name})[/dim]")
+        selected_fovs = fovs_with_cells
+    else:
+        selected_fovs = _select_fovs_from_table(fovs_with_cells)
+
+    scope_label = " + ".join(s.replace("mask_", "") for s in scopes)
+    console.print(f"\n[bold]Measurement settings:[/bold]")
+    console.print(f"  Mode:      Mask-based ({scope_label})")
+    console.print(f"  Threshold: {threshold_channel} (run #{threshold_run_id})")
+    console.print(f"  Channels:  {', '.join(selected_channels)}")
+    console.print(f"  FOVs:      {len(selected_fovs)} selected")
+
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
+        console.print("[yellow]Measurement cancelled.[/yellow]")
+        return
+
+    # Run masked measurement per FOV
+    from percell3.measure.measurer import Measurer
+
+    measurer = Measurer()
+    total_measurements = 0
+    fovs_processed = 0
+    warnings: list[str] = []
+
+    with make_progress() as progress:
+        task = progress.add_task("Measuring...", total=len(selected_fovs))
+
+        for i, fov_info in enumerate(selected_fovs):
+            try:
+                count = measurer.measure_fov_masked(
+                    store,
+                    fov=fov_info.name,
+                    condition=fov_info.condition,
+                    channels=selected_channels,
+                    threshold_channel=threshold_channel,
+                    threshold_run_id=threshold_run_id,
+                    scopes=scopes,
+                    bio_rep=fov_info.bio_rep,
+                )
+                total_measurements += count
+                fovs_processed += 1
+            except Exception as exc:
+                if isinstance(exc, (MemoryError, KeyboardInterrupt, SystemExit)):
+                    raise
+                warnings.append(f"{fov_info.name}: {exc}")
+
+            progress.update(
+                task, completed=i + 1,
+                description=f"Measuring {fov_info.name}",
+            )
+
+    console.print(f"\n[green]Masked measurement complete[/green]")
+    console.print(f"  FOVs:         {fovs_processed}")
+    console.print(f"  Channels:     {len(selected_channels)}")
+    console.print(f"  Scopes:       {scope_label}")
+    console.print(f"  Measurements: {total_measurements}")
+
+    if warnings:
+        console.print(f"\n[yellow]Warnings ({len(warnings)}):[/yellow]")
+        for w in warnings:
+            console.print(f"  [dim]- {w}[/dim]")
+    console.print()
+
+
+def _apply_threshold(state: MenuState) -> None:
+    """Interactively run cell grouping + threshold QC + particle analysis."""
+    store = state.require_experiment()
+
+    # 1. Check prerequisites
+    channels = store.get_channels()
+    if not channels:
+        console.print("[red]No channels found.[/red] Import images first.")
+        return
+
+    all_fovs = store.get_fovs()
+    if not all_fovs:
+        console.print("[red]No FOVs found.[/red] Import images first.")
+        return
+
+    cell_count = store.get_cell_count()
+    if cell_count == 0:
+        console.print("[red]No cells found.[/red] Run segmentation first.")
+        return
+
+    # 2. Grouping channel + metric selection
+    ch_names = [ch.name for ch in channels]
+    console.print("\n[bold]Step 1: Cell Grouping[/bold]")
+    console.print("\n[bold]Channel for grouping metric:[/bold]")
+    grouping_channel = numbered_select_one(ch_names, "Grouping channel")
+
+    metrics = ["mean_intensity", "median_intensity", "integrated_intensity", "area_pixels"]
+    console.print("\n[bold]Metric for grouping:[/bold]")
+    grouping_metric = numbered_select_one(metrics, "Grouping metric")
+
+    # 3. Threshold channel selection
+    console.print("\n[bold]Step 2: Threshold Channel[/bold]")
+    console.print(f"  [dim]Default: same as grouping ({grouping_channel})[/dim]")
+    threshold_ch_options = ch_names + [f"(same as grouping: {grouping_channel})"]
+    console.print("\n[bold]Channel to threshold:[/bold]")
+    threshold_channel = numbered_select_one(threshold_ch_options, "Threshold channel")
+    if threshold_channel.startswith("(same"):
+        threshold_channel = grouping_channel
+
+    # 4. FOV selection
+    console.print("\n[bold]Step 3: Select FOVs[/bold]")
+    seg_summary = store.get_fov_segmentation_summary()
+    # Filter to FOVs that have cells
+    fovs_with_cells = [f for f in all_fovs if seg_summary.get(f.id, (0, None))[0] > 0]
+    if not fovs_with_cells:
+        console.print("[red]No FOVs with segmented cells.[/red]")
+        return
+
+    _show_fov_status_table(fovs_with_cells, seg_summary)
+    if len(fovs_with_cells) == 1:
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].name})[/dim]")
+        selected_fovs = fovs_with_cells
+    else:
+        selected_fovs = _select_fovs_from_table(fovs_with_cells)
+
+    # 5. Confirmation
+    console.print(f"\n[bold]Thresholding settings:[/bold]")
+    console.print(f"  Grouping:    {grouping_channel} / {grouping_metric}")
+    console.print(f"  Threshold:   {threshold_channel} (Otsu)")
+    console.print(f"  FOVs:        {len(selected_fovs)} selected")
+
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
+        console.print("[yellow]Thresholding cancelled.[/yellow]")
+        return
+
+    # 6. Run per-FOV
+    from percell3.measure.cell_grouper import CellGrouper
+    from percell3.measure.particle_analyzer import ParticleAnalyzer
+    from percell3.measure.thresholding import ThresholdEngine
+
+    grouper = CellGrouper()
+    engine = ThresholdEngine()
+    analyzer = ParticleAnalyzer()
+
+    total_particles = 0
+    fovs_processed = 0
+    skip_remaining_fovs = False
+
+    for fov_info in selected_fovs:
+        if skip_remaining_fovs:
+            break
+
+        fov = fov_info.name
+        condition = fov_info.condition
+        bio_rep = fov_info.bio_rep
+
+        console.print(f"\n[bold]{'='*60}[/bold]")
+        console.print(f"[bold]FOV: {fov} ({condition}/{bio_rep})[/bold]")
+
+        # 6a. Group cells
+        try:
+            grouping_result = grouper.group_cells(
+                store, fov=fov, condition=condition,
+                channel=grouping_channel, metric=grouping_metric,
+                bio_rep=bio_rep,
+            )
+        except ValueError as e:
+            console.print(f"  [yellow]Skipping: {e}[/yellow]")
+            continue
+
+        console.print(f"  Groups found: {grouping_result.n_groups}")
+        for i, (tag, mean) in enumerate(
+            zip(grouping_result.tag_names, grouping_result.group_means)
+        ):
+            n_cells = int((grouping_result.group_labels == i).sum())
+            console.print(f"    {tag}: {n_cells} cells (mean={mean:.1f})")
+
+        # 6b. Read images and labels for this FOV
+        import numpy as np
+        labels = store.read_labels(fov, condition, bio_rep=bio_rep)
+        image = store.read_image_numpy(
+            fov, condition, threshold_channel, bio_rep=bio_rep,
+        )
+
+        accepted_groups: list[tuple[str, list[int], int]] = []  # (tag, cell_ids, run_id)
+        combined_mask = np.zeros(labels.shape, dtype=bool)
+        skip_remaining_groups = False
+
+        for i, tag_name in enumerate(grouping_result.tag_names):
+            if skip_remaining_groups:
+                break
+
+            group_cell_ids = [
+                cid for cid, label in zip(
+                    grouping_result.cell_ids, grouping_result.group_labels
+                )
+                if label == i
+            ]
+            if not group_cell_ids:
+                continue
+
+            # Get label values for this group
+            cells_df = store.get_cells(condition=condition, bio_rep=bio_rep, fov=fov)
+            group_cells = cells_df[cells_df["id"].isin(group_cell_ids)]
+            label_values = group_cells["label_value"].tolist()
+
+            from percell3.measure.threshold_viewer import (
+                compute_masked_otsu,
+                create_group_image,
+            )
+
+            group_image, cell_mask = create_group_image(image, labels, label_values)
+
+            # Compute initial Otsu
+            try:
+                initial_thresh = compute_masked_otsu(group_image, cell_mask)
+            except ValueError:
+                console.print(f"  [yellow]{tag_name}: no pixels to threshold, skipping[/yellow]")
+                continue
+
+            # Launch napari viewer
+            group_display = f"{tag_name} (mean={grouping_result.group_means[i]:.1f})"
+            console.print(f"\n  Opening napari for {group_display}...")
+            console.print(f"  [dim]Initial Otsu threshold: {initial_thresh:.1f}[/dim]")
+
+            try:
+                from percell3.measure.threshold_viewer import launch_threshold_viewer
+
+                decision = launch_threshold_viewer(
+                    group_image, cell_mask,
+                    group_name=group_display,
+                    fov_name=fov,
+                    initial_threshold=initial_thresh,
+                )
+            except (ImportError, RuntimeError) as exc:
+                console.print(f"  [red]napari error:[/red] {exc}")
+                console.print("  [dim]Falling back to auto-accept with Otsu threshold.[/dim]")
+                # Auto-accept fallback
+                from percell3.measure.threshold_viewer import ThresholdDecision
+                decision = ThresholdDecision(
+                    accepted=True, threshold_value=initial_thresh,
+                )
+
+            if decision.skip_remaining:
+                console.print(f"  [yellow]Skipping remaining groups for {fov}[/yellow]")
+                skip_remaining_groups = True
+                continue
+
+            if not decision.accepted:
+                console.print(f"  [dim]Skipped {tag_name}[/dim]")
+                continue
+
+            # Store threshold result
+            result = engine.threshold_group(
+                store, fov=fov, condition=condition, channel=threshold_channel,
+                cell_ids=group_cell_ids,
+                labels=labels, image=image,
+                threshold_value=decision.threshold_value,
+                roi=decision.roi,
+                group_tag=tag_name,
+                bio_rep=bio_rep,
+            )
+            console.print(
+                f"  [green]Accepted {tag_name}[/green]: "
+                f"threshold={result.threshold_value:.1f}, "
+                f"positive={result.positive_fraction:.1%}"
+            )
+            accepted_groups.append((tag_name, group_cell_ids, result.threshold_run_id))
+
+            # Accumulate this group's mask into the combined mask
+            group_written = store.read_mask(fov, condition, threshold_channel, bio_rep=bio_rep)
+            combined_mask |= (group_written > 0)
+
+        # Write combined mask from all accepted groups
+        if accepted_groups:
+            _, _, last_run_id = accepted_groups[-1]
+            store.write_mask(
+                fov, condition, threshold_channel,
+                combined_mask.astype(np.uint8),
+                last_run_id, bio_rep=bio_rep,
+            )
+
+        # 6c. Particle analysis for accepted groups
+        if accepted_groups:
+            console.print(f"\n  [bold]Particle analysis...[/bold]")
+
+            for tag_name, group_cell_ids, thr_run_id in accepted_groups:
+                pa_result = analyzer.analyze_fov(
+                    store, fov=fov, condition=condition,
+                    channel=threshold_channel,
+                    threshold_run_id=thr_run_id,
+                    cell_ids=group_cell_ids,
+                    bio_rep=bio_rep,
+                )
+
+                # Store results
+                if pa_result.particles:
+                    store.add_particles(pa_result.particles)
+                if pa_result.summary_measurements:
+                    store.add_measurements(pa_result.summary_measurements)
+                store.write_particle_labels(
+                    fov, condition, threshold_channel,
+                    pa_result.particle_label_image,
+                    bio_rep=bio_rep,
+                )
+
+                console.print(
+                    f"    {tag_name}: {pa_result.total_particles} particles "
+                    f"in {pa_result.cells_analyzed} cells"
+                )
+                total_particles += pa_result.total_particles
+        else:
+            console.print(f"  [dim]No groups accepted — skipping particle analysis.[/dim]")
+
+        fovs_processed += 1
+
+    # 7. Summary
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print(f"[green]Thresholding complete[/green]")
+    console.print(f"  FOVs processed: {fovs_processed}")
+    console.print(f"  Total particles: {total_particles}")
     console.print()
 
 
@@ -1170,15 +1683,30 @@ def _export_csv(state: MenuState) -> None:
             console.print("[yellow]Export cancelled.[/yellow]")
             return
 
-    # Optional channel/metric filters
+    # Optional channel/metric/scope filters
     ch_filter = menu_prompt("Channels to export (comma-separated, blank = all)", default="")
     met_filter = menu_prompt("Metrics to export (comma-separated, blank = all)", default="")
+
+    console.print("\n[bold]Scope filter:[/bold]")
+    scope_options = [
+        "All scopes",
+        "Whole cell only",
+        "Inside mask only",
+        "Outside mask only",
+    ]
+    scope_choice = numbered_select_one(scope_options, "Scope")
+    scope_map = {
+        "Whole cell only": "whole_cell",
+        "Inside mask only": "mask_inside",
+        "Outside mask only": "mask_outside",
+    }
+    scope_val = scope_map.get(scope_choice)
 
     ch_list = [c.strip() for c in ch_filter.split(",") if c.strip()] or None
     met_list = [m.strip() for m in met_filter.split(",") if m.strip()] or None
 
     with console.status("[bold blue]Exporting measurements..."):
-        store.export_csv(out_path, channels=ch_list, metrics=met_list)
+        store.export_csv(out_path, channels=ch_list, metrics=met_list, scope=scope_val)
     console.print(f"[green]Exported measurements to {out_path}[/green]")
 
 

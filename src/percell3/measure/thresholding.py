@@ -109,6 +109,89 @@ class ThresholdEngine:
             positive_fraction=positive_fraction,
         )
 
+    def threshold_group(
+        self,
+        store: ExperimentStore,
+        fov: str,
+        condition: str,
+        channel: str,
+        cell_ids: list[int],
+        labels: np.ndarray,
+        image: np.ndarray,
+        threshold_value: float,
+        roi: list[tuple[int, int, int, int]] | None = None,
+        group_tag: str | None = None,
+        bio_rep: str | None = None,
+        timepoint: str | None = None,
+    ) -> ThresholdResult:
+        """Store a threshold result for a group of cells.
+
+        Creates a binary mask by applying the threshold to the group image
+        (image with non-group cells zeroed), records the threshold run,
+        and writes the mask to zarr.
+
+        Args:
+            store: Target ExperimentStore.
+            fov: FOV name.
+            condition: Condition name.
+            channel: Channel name that was thresholded.
+            cell_ids: Cell IDs in this group.
+            labels: 2D label image (full FOV).
+            image: 2D channel image (full FOV).
+            threshold_value: Otsu (or manually adjusted) threshold value.
+            roi: Optional ROI rectangles used for Otsu computation.
+            group_tag: Tag name for this group (stored in parameters).
+            bio_rep: Biological replicate name.
+            timepoint: Timepoint.
+
+        Returns:
+            ThresholdResult with run ID and statistics.
+        """
+        from percell3.measure.threshold_viewer import create_group_image
+
+        # Get label values for the group cells
+        cells_df = store.get_cells(condition=condition, bio_rep=bio_rep, fov=fov)
+        group_cells = cells_df[cells_df["id"].isin(cell_ids)]
+        label_values = group_cells["label_value"].tolist()
+
+        group_image, cell_mask = create_group_image(image, labels, label_values)
+
+        # Create binary mask: threshold applied to full group image (not just ROI)
+        mask = (group_image > threshold_value) & cell_mask
+
+        # Record threshold run with parameters
+        parameters = {
+            "method": "otsu",
+            "threshold_value": float(threshold_value),
+            "fov_name": fov,
+            "condition": condition,
+        }
+        if roi:
+            parameters["roi"] = [list(r) for r in roi]
+        if group_tag:
+            parameters["group_tag"] = group_tag
+
+        run_id = store.add_threshold_run(channel, "otsu", parameters)
+
+        # Write mask
+        store.write_mask(
+            fov, condition, channel, mask.astype(np.uint8),
+            run_id, bio_rep=bio_rep, timepoint=timepoint,
+        )
+
+        # Statistics
+        positive_pixels = int(np.sum(mask))
+        total_pixels = int(np.sum(cell_mask))
+        positive_fraction = positive_pixels / total_pixels if total_pixels > 0 else 0.0
+
+        return ThresholdResult(
+            threshold_run_id=run_id,
+            threshold_value=float(threshold_value),
+            positive_pixels=positive_pixels,
+            total_pixels=total_pixels,
+            positive_fraction=positive_fraction,
+        )
+
     def _compute_threshold(
         self,
         image: np.ndarray,

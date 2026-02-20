@@ -60,3 +60,31 @@ class MeasurementRecord:
     channel_id: int
     metric: str
     value: float
+    scope: str = "whole_cell"
+    threshold_run_id: int | None = None
+
+
+@dataclass(frozen=True)
+class ParticleRecord:
+    """A single particle detected within a cell's threshold mask."""
+
+    cell_id: int
+    threshold_run_id: int
+    label_value: int
+    centroid_x: float
+    centroid_y: float
+    bbox_x: int
+    bbox_y: int
+    bbox_w: int
+    bbox_h: int
+    area_pixels: float
+    area_um2: float | None = None
+    perimeter: float | None = None
+    circularity: float | None = None
+    eccentricity: float | None = None
+    solidity: float | None = None
+    major_axis_length: float | None = None
+    minor_axis_length: float | None = None
+    mean_intensity: float | None = None
+    max_intensity: float | None = None
+    integrated_intensity: float | None = None

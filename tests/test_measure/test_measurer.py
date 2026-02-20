@@ -192,3 +192,178 @@ class TestMeasureCells:
             channel="GFP",
         )
         assert records == []
+
+
+class TestMeasureFovMasked:
+    """Tests for Measurer.measure_fov_masked() — inside/outside threshold mask."""
+
+    @pytest.fixture
+    def masked_experiment(self, measure_experiment: ExperimentStore):
+        """Extend measure_experiment with a threshold mask on GFP.
+
+        Threshold mask: top-left quadrant (y<32, x<32) is True.
+        Cell 1 at (10:30, 10:30) is fully inside the mask.
+        Cell 2 at (40:60, 40:60) is fully outside the mask.
+        """
+        store = measure_experiment
+        # Add a threshold run
+        run_id = store.add_threshold_run("GFP", "manual", {"value": 50.0})
+
+        # Create mask: top-left quadrant is True
+        mask = np.zeros((64, 64), dtype=np.uint8)
+        mask[:32, :32] = 255
+        store.write_mask("fov_1", "control", "GFP", mask, run_id)
+
+        return store, run_id
+
+    def test_mask_inside_measures_cells(self, masked_experiment):
+        """mask_inside should produce measurements for all cells."""
+        store, run_id = masked_experiment
+        measurer = Measurer()
+        count = measurer.measure_fov_masked(
+            store,
+            fov="fov_1",
+            condition="control",
+            channels=["GFP"],
+            threshold_channel="GFP",
+            threshold_run_id=run_id,
+            scopes=["mask_inside"],
+        )
+        # 2 cells x 1 channel x 7 metrics = 14
+        assert count == 14
+
+    def test_mask_inside_values(self, masked_experiment):
+        """Cell 1 is fully inside mask, Cell 2 has 0 pixels inside mask."""
+        store, run_id = masked_experiment
+        measurer = Measurer()
+        measurer.measure_fov_masked(
+            store,
+            fov="fov_1",
+            condition="control",
+            channels=["GFP"],
+            threshold_channel="GFP",
+            threshold_run_id=run_id,
+            scopes=["mask_inside"],
+            metrics=["mean_intensity"],
+        )
+        df = store.get_measurements(
+            channels=["GFP"], metrics=["mean_intensity"], scope="mask_inside",
+        )
+        assert len(df) == 2
+        # Sort by value to identify cells
+        df_sorted = df.sort_values("value").reset_index(drop=True)
+        # Cell 2 is fully outside mask → 0 pixels inside → value=0.0
+        assert df_sorted.iloc[0]["value"] == pytest.approx(0.0)
+        # Cell 1 is fully inside mask → mean_intensity = 100.0
+        assert df_sorted.iloc[1]["value"] == pytest.approx(100.0)
+
+    def test_mask_outside_values(self, masked_experiment):
+        """Cell 1 has 0 pixels outside mask, Cell 2 is fully outside."""
+        store, run_id = masked_experiment
+        measurer = Measurer()
+        measurer.measure_fov_masked(
+            store,
+            fov="fov_1",
+            condition="control",
+            channels=["GFP"],
+            threshold_channel="GFP",
+            threshold_run_id=run_id,
+            scopes=["mask_outside"],
+            metrics=["mean_intensity"],
+        )
+        df = store.get_measurements(
+            channels=["GFP"], metrics=["mean_intensity"], scope="mask_outside",
+        )
+        assert len(df) == 2
+        df_sorted = df.sort_values("value").reset_index(drop=True)
+        # Cell 1 is fully inside mask → 0 pixels outside → value=0.0
+        assert df_sorted.iloc[0]["value"] == pytest.approx(0.0)
+        # Cell 2 is fully outside mask → mean_intensity = 200.0
+        assert df_sorted.iloc[1]["value"] == pytest.approx(200.0)
+
+    def test_both_scopes(self, masked_experiment):
+        """Both scopes should produce double the measurements."""
+        store, run_id = masked_experiment
+        measurer = Measurer()
+        count = measurer.measure_fov_masked(
+            store,
+            fov="fov_1",
+            condition="control",
+            channels=["GFP"],
+            threshold_channel="GFP",
+            threshold_run_id=run_id,
+            scopes=["mask_inside", "mask_outside"],
+            metrics=["mean_intensity"],
+        )
+        # 2 cells x 1 channel x 1 metric x 2 scopes = 4
+        assert count == 4
+
+    def test_zero_pixel_cells_get_zero_value(self, masked_experiment):
+        """Cells with 0 pixels in the scoped mask should get value=0.0, not be skipped."""
+        store, run_id = masked_experiment
+        measurer = Measurer()
+        measurer.measure_fov_masked(
+            store,
+            fov="fov_1",
+            condition="control",
+            channels=["GFP"],
+            threshold_channel="GFP",
+            threshold_run_id=run_id,
+            scopes=["mask_inside"],
+            metrics=["area"],
+        )
+        df = store.get_measurements(metrics=["area"], scope="mask_inside")
+        assert len(df) == 2  # Both cells present, not skipped
+        values = sorted(df["value"].tolist())
+        assert values[0] == pytest.approx(0.0)  # Cell 2: 0 pixels inside
+        assert values[1] == pytest.approx(400.0)  # Cell 1: full 20x20
+
+    def test_scope_stored_in_records(self, masked_experiment):
+        """Records should have the correct scope value."""
+        store, run_id = masked_experiment
+        measurer = Measurer()
+        measurer.measure_fov_masked(
+            store,
+            fov="fov_1",
+            condition="control",
+            channels=["GFP"],
+            threshold_channel="GFP",
+            threshold_run_id=run_id,
+            scopes=["mask_inside", "mask_outside"],
+            metrics=["mean_intensity"],
+        )
+        df = store.get_measurements()
+        scopes = set(df["scope"].tolist())
+        assert scopes == {"mask_inside", "mask_outside"}
+
+    def test_threshold_run_id_stored(self, masked_experiment):
+        """Records should have the correct threshold_run_id."""
+        store, run_id = masked_experiment
+        measurer = Measurer()
+        measurer.measure_fov_masked(
+            store,
+            fov="fov_1",
+            condition="control",
+            channels=["GFP"],
+            threshold_channel="GFP",
+            threshold_run_id=run_id,
+            scopes=["mask_inside"],
+            metrics=["mean_intensity"],
+        )
+        df = store.get_measurements(scope="mask_inside")
+        assert all(df["threshold_run_id"] == run_id)
+
+    def test_invalid_scope_raises(self, masked_experiment):
+        """Invalid scope should raise ValueError."""
+        store, run_id = masked_experiment
+        measurer = Measurer()
+        with pytest.raises(ValueError, match="Invalid scope"):
+            measurer.measure_fov_masked(
+                store,
+                fov="fov_1",
+                condition="control",
+                channels=["GFP"],
+                threshold_channel="GFP",
+                threshold_run_id=run_id,
+                scopes=["whole_cell"],
+            )
