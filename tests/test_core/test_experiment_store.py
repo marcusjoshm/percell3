@@ -36,7 +36,7 @@ def experiment_with_data(experiment: ExperimentStore) -> ExperimentStore:
     experiment.add_channel("GFP", role="signal", color="#00FF00")
     experiment.add_condition("control")
     experiment.add_condition("treated")
-    fov_id = experiment.add_fov("r1", condition="control", width=256, height=256)
+    fov_id = experiment.add_fov("control", width=256, height=256)
     seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
     cells = [
@@ -128,16 +128,16 @@ class TestChannels:
             experiment.add_channel("DAPI")
 
 
-# === Acceptance Test 3: Condition/FOV hierarchy ===
+# === Acceptance Test 3: Condition/FOV management (flat model) ===
 
 
 class TestConditionsAndFovs:
     def test_conditions_and_fovs(self, experiment):
         experiment.add_condition("control")
         experiment.add_condition("treated")
-        experiment.add_fov("fov_1", condition="control", width=2048, height=2048)
-        experiment.add_fov("fov_2", condition="control", width=2048, height=2048)
-        experiment.add_fov("fov_1", condition="treated", width=2048, height=2048)
+        experiment.add_fov("control", width=2048, height=2048)
+        experiment.add_fov("control", width=2048, height=2048)
+        experiment.add_fov("treated", width=2048, height=2048)
 
         assert experiment.get_conditions() == ["control", "treated"]
         control_fovs = experiment.get_fovs(condition="control")
@@ -148,6 +148,26 @@ class TestConditionsAndFovs:
         experiment.add_timepoint("t1", time_seconds=60.0)
         assert experiment.get_timepoints() == ["t0", "t1"]
 
+    def test_fov_display_name_auto_generated(self, experiment):
+        experiment.add_condition("HS")
+        fov_id = experiment.add_fov("HS")
+        fov = experiment.get_fov_by_id(fov_id)
+        assert fov.display_name == "HS_N1_FOV_001"
+
+    def test_fov_display_name_sequential(self, experiment):
+        experiment.add_condition("HS")
+        experiment.add_fov("HS")
+        experiment.add_fov("HS")
+        fovs = experiment.get_fovs(condition="HS")
+        assert fovs[0].display_name == "HS_N1_FOV_001"
+        assert fovs[1].display_name == "HS_N1_FOV_002"
+
+    def test_fov_explicit_display_name(self, experiment):
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control", display_name="my_custom_fov")
+        fov = experiment.get_fov_by_id(fov_id)
+        assert fov.display_name == "my_custom_fov"
+
 
 # === Acceptance Test 4: Write and read OME-Zarr image ===
 
@@ -156,31 +176,31 @@ class TestImageIO:
     def test_write_and_read_image(self, experiment):
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
-        experiment.add_fov("fov_1", condition="control", width=512, height=512)
+        fov_id = experiment.add_fov("control", width=512, height=512)
 
         data = np.random.randint(0, 65535, (512, 512), dtype=np.uint16)
-        experiment.write_image("fov_1", "control", "DAPI", data)
+        experiment.write_image(fov_id, "DAPI", data)
 
-        result_dask = experiment.read_image("fov_1", "control", "DAPI")
+        result_dask = experiment.read_image(fov_id, "DAPI")
         assert isinstance(result_dask, da.Array)
 
-        result_np = experiment.read_image_numpy("fov_1", "control", "DAPI")
+        result_np = experiment.read_image_numpy(fov_id, "DAPI")
         np.testing.assert_array_equal(result_np, data)
 
     def test_multi_channel_image(self, experiment):
         experiment.add_channel("DAPI")
         experiment.add_channel("GFP")
         experiment.add_condition("control")
-        experiment.add_fov("r1", condition="control", width=256, height=256)
+        fov_id = experiment.add_fov("control", width=256, height=256)
 
         dapi = np.random.randint(0, 65535, (256, 256), dtype=np.uint16)
         gfp = np.random.randint(0, 65535, (256, 256), dtype=np.uint16)
 
-        experiment.write_image("r1", "control", "DAPI", dapi)
-        experiment.write_image("r1", "control", "GFP", gfp)
+        experiment.write_image(fov_id, "DAPI", dapi)
+        experiment.write_image(fov_id, "GFP", gfp)
 
-        result_dapi = experiment.read_image_numpy("r1", "control", "DAPI")
-        result_gfp = experiment.read_image_numpy("r1", "control", "GFP")
+        result_dapi = experiment.read_image_numpy(fov_id, "DAPI")
+        result_gfp = experiment.read_image_numpy(fov_id, "GFP")
 
         np.testing.assert_array_equal(result_dapi, dapi)
         np.testing.assert_array_equal(result_gfp, gfp)
@@ -193,7 +213,7 @@ class TestCells:
     def test_add_and_query_cells(self, experiment):
         experiment.add_channel("DAPI", role="nucleus")
         experiment.add_condition("control")
-        fov_id = experiment.add_fov("r1", condition="control")
+        fov_id = experiment.add_fov("control")
         seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
         cells = [
@@ -217,6 +237,13 @@ class TestCells:
     def test_cell_count(self, experiment_with_data):
         assert experiment_with_data.get_cell_count() == 10
 
+    def test_cell_count_by_fov_id(self, experiment_with_data):
+        fov = experiment_with_data.get_fovs()[0]
+        assert experiment_with_data.get_cell_count(fov_id=fov.id) == 10
+
+    def test_cell_count_by_condition(self, experiment_with_data):
+        assert experiment_with_data.get_cell_count(condition="control") == 10
+
 
 # === Acceptance Test 6: Measurements ===
 
@@ -237,7 +264,7 @@ class TestMeasurements:
         experiment.add_channel("GFP", role="signal")
         experiment.add_channel("RFP", role="signal")
         experiment.add_condition("control")
-        fov_id = experiment.add_fov("r1", condition="control")
+        fov_id = experiment.add_fov("control")
         seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
         cells = [
@@ -279,15 +306,15 @@ class TestLabels:
     def test_write_and_read_labels(self, experiment):
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
-        experiment.add_fov("r1", condition="control", width=512, height=512)
+        fov_id = experiment.add_fov("control", width=512, height=512)
         seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
         labels = np.zeros((512, 512), dtype=np.int32)
         labels[100:150, 100:150] = 1
         labels[200:260, 200:260] = 2
 
-        experiment.write_labels("r1", "control", labels, segmentation_run_id=seg_id)
-        result = experiment.read_labels("r1", "control", timepoint=None)
+        experiment.write_labels(fov_id, labels, segmentation_run_id=seg_id)
+        result = experiment.read_labels(fov_id)
         np.testing.assert_array_equal(result, labels)
 
 
@@ -298,13 +325,13 @@ class TestNGFFMetadata:
     def test_zarr_has_ngff_metadata(self, experiment):
         experiment.add_channel("DAPI", color="#0000FF")
         experiment.add_condition("control")
-        experiment.add_fov("r1", condition="control", width=128, height=128)
+        fov_id = experiment.add_fov("control", width=128, height=128)
 
         data = np.random.randint(0, 65535, (128, 128), dtype=np.uint16)
-        experiment.write_image("r1", "control", "DAPI", data)
+        experiment.write_image(fov_id, "DAPI", data)
 
         store = zarr.open(str(experiment.images_zarr_path), mode="r")
-        group = store["control/N1/r1"]
+        group = store[f"fov_{fov_id}"]
         attrs = dict(group.attrs)
 
         assert "multiscales" in attrs
@@ -346,14 +373,14 @@ class TestMasks:
     def test_write_and_read_mask(self, experiment):
         experiment.add_channel("GFP")
         experiment.add_condition("control")
-        experiment.add_fov("r1", condition="control", width=128, height=128)
+        fov_id = experiment.add_fov("control", width=128, height=128)
         thr_id = experiment.add_threshold_run(channel="GFP", method="otsu")
 
         mask = np.zeros((128, 128), dtype=bool)
         mask[20:80, 20:80] = True
 
-        experiment.write_mask("r1", "control", "GFP", mask, threshold_run_id=thr_id)
-        result = experiment.read_mask("r1", "control", "GFP", timepoint=None)
+        experiment.write_mask(fov_id, "GFP", mask, threshold_run_id=thr_id)
+        result = experiment.read_mask(fov_id, "GFP")
         assert result.dtype == np.uint8
         assert result[50, 50] == 255
         assert result[0, 0] == 0
@@ -417,10 +444,10 @@ class TestNameValidation:
         with pytest.raises(ValueError, match="must not be empty"):
             experiment.add_condition("")
 
-    def test_fov_name_with_path_traversal(self, experiment):
+    def test_fov_display_name_with_path_traversal(self, experiment):
         experiment.add_condition("control")
         with pytest.raises(ValueError, match="must not contain"):
-            experiment.add_fov("../../etc", condition="control")
+            experiment.add_fov("control", display_name="../../etc")
 
     def test_timepoint_name_with_slash(self, experiment):
         with pytest.raises(ValueError, match="invalid characters"):
@@ -431,38 +458,6 @@ class TestNameValidation:
         experiment.add_channel("GFP_signal")
         experiment.add_condition("control.1")
         experiment.add_timepoint("t0")
-
-
-# === P2/P3 review fixes ===
-
-
-class TestGetCellCountExplicit:
-    def test_count_all(self, experiment_with_data):
-        assert experiment_with_data.get_cell_count() == 10
-
-    def test_count_by_condition(self, experiment_with_data):
-        assert experiment_with_data.get_cell_count(condition="control") == 10
-
-    def test_count_by_condition_and_fov(self, experiment_with_data):
-        assert experiment_with_data.get_cell_count(condition="control", fov="r1") == 10
-
-    def test_count_fov_without_condition_raises(self, experiment_with_data):
-        with pytest.raises(ValueError, match="'condition' is required"):
-            experiment_with_data.get_cell_count(fov="r1")
-
-
-class TestGetCellsFovFilter:
-    def test_fov_without_condition_raises(self, experiment_with_data):
-        with pytest.raises(ValueError, match="'condition' is required"):
-            experiment_with_data.get_cells(fov="r1")
-
-
-class TestExportCsvNoKwargs:
-    def test_export_still_works(self, experiment_with_data, tmp_path):
-        csv_path = tmp_path / "results.csv"
-        experiment_with_data.export_csv(csv_path, channels=["GFP"])
-        df = pd.read_csv(csv_path)
-        assert "cell_id" in df.columns
 
 
 class TestAddChannelIsSegmentation:
@@ -488,7 +483,9 @@ class TestIntrospection:
 
     def test_get_segmentation_runs(self, experiment):
         experiment.add_channel("DAPI")
-        experiment.add_segmentation_run(channel="DAPI", model_name="cyto3", parameters={"diameter": 30})
+        experiment.add_segmentation_run(
+            channel="DAPI", model_name="cyto3", parameters={"diameter": 30}
+        )
         runs = experiment.get_segmentation_runs()
         assert len(runs) == 1
         assert runs[0]["channel"] == "DAPI"
@@ -519,9 +516,9 @@ class TestFrozenDataclasses:
 
     def test_fov_info_frozen(self):
         from percell3.core.models import FovInfo
-        r = FovInfo(id=1, name="r1", condition="control")
+        r = FovInfo(id=1, display_name="ctrl_N1_FOV_001", condition="control")
         with pytest.raises(AttributeError):
-            r.name = "r2"
+            r.display_name = "other"
 
     def test_cell_record_frozen(self):
         cell = CellRecord(
@@ -539,134 +536,98 @@ class TestFrozenDataclasses:
             m.value = 99.0
 
 
-# === Biological Replicates ===
+# === Biological Replicates (experiment-global) ===
 
 
 class TestBioReps:
-    """Tests for the biological replicate layer (condition-scoped)."""
+    """Tests for the biological replicate layer (experiment-global)."""
 
     def test_no_default_bio_rep_at_creation(self, experiment):
-        """New experiment has no bio reps until a condition is created."""
+        """New experiment has no bio reps until one is created."""
         reps = experiment.get_bio_reps()
         assert reps == []
 
     def test_bio_rep_created_lazily_with_fov(self, experiment):
-        """Default N1 bio rep is created per-condition when first FOV is added."""
+        """Default N1 bio rep is created when first FOV is added."""
         experiment.add_condition("control")
-        experiment.add_fov("r1", condition="control")
-        reps = experiment.get_bio_reps(condition="control")
+        experiment.add_fov("control")
+        reps = experiment.get_bio_reps()
         assert reps == ["N1"]
 
     def test_add_bio_rep(self, experiment):
-        experiment.add_condition("control")
-        experiment.add_bio_rep("N2", condition="control")
-        reps = experiment.get_bio_reps(condition="control")
+        experiment.add_bio_rep("N2")
+        reps = experiment.get_bio_reps()
         assert "N2" in reps
 
     def test_add_duplicate_bio_rep_raises(self, experiment):
-        experiment.add_condition("control")
-        experiment.add_bio_rep("N1", condition="control")
+        experiment.add_bio_rep("N1")
         with pytest.raises(DuplicateError):
-            experiment.add_bio_rep("N1", condition="control")
+            experiment.add_bio_rep("N1")
 
-    def test_same_bio_rep_name_different_conditions(self, experiment):
-        """N1/control and N1/treated are separate bio reps."""
+    def test_bio_reps_are_global(self, experiment):
+        """Bio reps are shared across all conditions."""
         experiment.add_condition("control")
         experiment.add_condition("treated")
-        experiment.add_bio_rep("N1", condition="control")
-        experiment.add_bio_rep("N1", condition="treated")
-        assert experiment.get_bio_reps(condition="control") == ["N1"]
-        assert experiment.get_bio_reps(condition="treated") == ["N1"]
+        experiment.add_bio_rep("N1")
+        experiment.add_fov("control", bio_rep="N1")
+        experiment.add_fov("treated", bio_rep="N1")
+        assert experiment.get_bio_reps() == ["N1"]
 
     def test_get_nonexistent_bio_rep_raises(self, experiment):
         with pytest.raises(BioRepNotFoundError):
             experiment.get_bio_rep("N999")
 
     def test_add_fov_auto_creates_default_bio_rep(self, experiment):
-        """Adding FOV without bio_rep auto-creates N1 for the condition."""
+        """Adding FOV without bio_rep auto-creates N1."""
         experiment.add_condition("control")
-        experiment.add_fov("r1", condition="control")
+        experiment.add_fov("control")
         fovs = experiment.get_fovs(condition="control")
         assert len(fovs) == 1
         assert fovs[0].bio_rep == "N1"
 
     def test_add_fov_explicit_bio_rep(self, experiment):
         experiment.add_condition("control")
-        experiment.add_bio_rep("N2", condition="control")
-        experiment.add_fov("r1", condition="control", bio_rep="N2")
+        experiment.add_bio_rep("N2")
+        experiment.add_fov("control", bio_rep="N2")
         fovs = experiment.get_fovs(condition="control", bio_rep="N2")
         assert len(fovs) == 1
         assert fovs[0].bio_rep == "N2"
 
-    def test_add_fov_defaults_to_n1_when_multiple(self, experiment):
-        """When N2+ bio reps exist, bio_rep=None defaults to N1."""
-        experiment.add_condition("control")
-        experiment.add_bio_rep("N1", condition="control")
-        experiment.add_bio_rep("N2", condition="control")
-        experiment.add_fov("r1", condition="control")  # should default to N1
-        fovs = experiment.get_fovs(condition="control", bio_rep="N1")
-        assert len(fovs) == 1
-        assert fovs[0].name == "r1"
-
-    def test_get_fovs_filter_by_bio_rep(self, experiment):
-        experiment.add_condition("control")
-        experiment.add_bio_rep("N2", condition="control")
-        experiment.add_fov("r1", condition="control", bio_rep="N1")
-        experiment.add_fov("r2", condition="control", bio_rep="N2")
-
-        n1_fovs = experiment.get_fovs(condition="control", bio_rep="N1")
-        assert len(n1_fovs) == 1
-        assert n1_fovs[0].name == "r1"
-
-        n2_fovs = experiment.get_fovs(condition="control", bio_rep="N2")
-        assert len(n2_fovs) == 1
-        assert n2_fovs[0].name == "r2"
-
-    def test_same_fov_name_different_bio_reps(self, experiment):
-        """Same FOV name is allowed in different bio reps."""
-        experiment.add_condition("control")
-        experiment.add_bio_rep("N2", condition="control")
-        experiment.add_fov("r1", condition="control", bio_rep="N1")
-        experiment.add_fov("r1", condition="control", bio_rep="N2")
-
-        all_fovs = experiment.get_fovs(condition="control")
-        assert len(all_fovs) == 2
-
     def test_fov_info_has_bio_rep(self, experiment):
         """FovInfo includes bio_rep field."""
         experiment.add_condition("control")
-        experiment.add_fov("r1", condition="control")
+        experiment.add_fov("control")
         fov = experiment.get_fovs(condition="control")[0]
         assert fov.bio_rep == "N1"
 
     def test_write_read_image_with_bio_rep(self, experiment):
-        """Image I/O works with explicit bio_rep."""
+        """Image I/O works with fov_id regardless of bio_rep."""
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
-        experiment.add_fov("r1", condition="control")
+        fov_id = experiment.add_fov("control")
 
         data = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
-        experiment.write_image("r1", "control", "DAPI", data, bio_rep="N1")
-        result = experiment.read_image_numpy("r1", "control", "DAPI", bio_rep="N1")
+        experiment.write_image(fov_id, "DAPI", data)
+        result = experiment.read_image_numpy(fov_id, "DAPI")
         np.testing.assert_array_equal(result, data)
 
-    def test_zarr_path_is_condition_bio_rep_fov(self, experiment):
-        """Zarr group path is condition/bio_rep/fov."""
+    def test_zarr_path_uses_fov_id(self, experiment):
+        """Zarr group path is fov_{id}, not condition/bio_rep/fov."""
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
-        experiment.add_fov("r1", condition="control")
+        fov_id = experiment.add_fov("control")
 
         data = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
-        experiment.write_image("r1", "control", "DAPI", data)
+        experiment.write_image(fov_id, "DAPI", data)
 
         store = zarr.open(str(experiment.images_zarr_path), mode="r")
-        assert "control/N1/r1" in store
+        assert f"fov_{fov_id}" in store
 
     def test_get_cells_bio_rep_column(self, experiment):
         """Cell query results include bio_rep_name."""
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
-        fov_id = experiment.add_fov("r1", condition="control")
+        fov_id = experiment.add_fov("control")
         seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
         cells = [
@@ -686,10 +647,11 @@ class TestBioReps:
     def test_get_cells_filter_by_bio_rep(self, experiment):
         """get_cells(bio_rep=...) filters cells by bio rep."""
         experiment.add_condition("control")
-        experiment.add_bio_rep("N2", condition="control")
+        experiment.add_bio_rep("N1")
+        experiment.add_bio_rep("N2")
         experiment.add_channel("DAPI")
-        fov1 = experiment.add_fov("r1", condition="control", bio_rep="N1")
-        fov2 = experiment.add_fov("r2", condition="control", bio_rep="N2")
+        fov1 = experiment.add_fov("control", bio_rep="N1")
+        fov2 = experiment.add_fov("control", bio_rep="N2")
         seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
         cells_n1 = [
@@ -713,8 +675,10 @@ class TestBioReps:
         experiment.add_cells(cells_n1)
         experiment.add_cells(cells_n2)
 
-        assert experiment.get_cell_count(condition="control", bio_rep="N1") == 3
-        assert experiment.get_cell_count(condition="control", bio_rep="N2") == 5
+        n1_cells = experiment.get_cells(bio_rep="N1")
+        assert len(n1_cells) == 3
+        n2_cells = experiment.get_cells(bio_rep="N2")
+        assert len(n2_cells) == 5
         assert experiment.get_cell_count() == 8
 
     def test_measurement_pivot_includes_bio_rep(self, experiment):
@@ -722,7 +686,7 @@ class TestBioReps:
         experiment.add_channel("DAPI")
         experiment.add_channel("GFP")
         experiment.add_condition("control")
-        fov_id = experiment.add_fov("r1", condition="control")
+        fov_id = experiment.add_fov("control")
         seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
         cells = [
@@ -749,7 +713,7 @@ class TestBioReps:
         """Pivot with mixed scopes: whole_cell gets clean names, mask scopes get suffix."""
         experiment.add_channel("GFP")
         experiment.add_condition("control")
-        fov_id = experiment.add_fov("r1", condition="control")
+        fov_id = experiment.add_fov("control")
         seg_id = experiment.add_segmentation_run(channel="GFP", model_name="cyto3")
 
         cells = [
@@ -776,7 +740,6 @@ class TestBioReps:
         ])
 
         pivot = experiment.get_measurement_pivot()
-        # whole_cell gets clean name, mask scopes get suffix
         assert "GFP_mean_intensity" in pivot.columns
         assert "GFP_mean_intensity_mask_inside" in pivot.columns
         assert "GFP_mean_intensity_mask_outside" in pivot.columns
@@ -788,7 +751,7 @@ class TestBioReps:
         """Pivot with scope filter returns only that scope."""
         experiment.add_channel("GFP")
         experiment.add_condition("control")
-        fov_id = experiment.add_fov("r1", condition="control")
+        fov_id = experiment.add_fov("control")
         seg_id = experiment.add_segmentation_run(channel="GFP", model_name="cyto3")
 
         cells = [
@@ -811,12 +774,10 @@ class TestBioReps:
                               scope="mask_inside"),
         ])
 
-        # Filter to whole_cell only
         pivot = experiment.get_measurement_pivot(scope="whole_cell")
         assert "GFP_mean_intensity" in pivot.columns
         assert "GFP_mean_intensity_mask_inside" not in pivot.columns
 
-        # Filter to mask_inside only — single mask scope still gets suffix
         pivot2 = experiment.get_measurement_pivot(scope="mask_inside")
         assert "GFP_mean_intensity_mask_inside" in pivot2.columns
         assert len(pivot2) == 1
@@ -826,26 +787,22 @@ class TestBioRepNameValidation:
     """Security tests: name validation on bio rep names."""
 
     def test_path_traversal(self, experiment):
-        experiment.add_condition("control")
         with pytest.raises(ValueError, match="must not contain"):
-            experiment.add_bio_rep("../evil", condition="control")
+            experiment.add_bio_rep("../evil")
 
     def test_slash(self, experiment):
-        experiment.add_condition("control")
         with pytest.raises(ValueError, match="invalid characters"):
-            experiment.add_bio_rep("N1/evil", condition="control")
+            experiment.add_bio_rep("N1/evil")
 
     def test_empty_name(self, experiment):
-        experiment.add_condition("control")
         with pytest.raises(ValueError, match="must not be empty"):
-            experiment.add_bio_rep("", condition="control")
+            experiment.add_bio_rep("")
 
     def test_valid_names(self, experiment):
-        experiment.add_condition("control")
-        experiment.add_bio_rep("N1", condition="control")
-        experiment.add_bio_rep("bio-rep-3", condition="control")
-        experiment.add_bio_rep("sample_A", condition="control")
-        assert len(experiment.get_bio_reps(condition="control")) == 3
+        experiment.add_bio_rep("N1")
+        experiment.add_bio_rep("bio-rep-3")
+        experiment.add_bio_rep("sample_A")
+        assert len(experiment.get_bio_reps()) == 3
 
 
 class TestRenameExperiment:
@@ -862,17 +819,16 @@ class TestRenameCondition:
         assert "old_cond" not in experiment.get_conditions()
 
     def test_rename_condition_with_data(self, experiment):
-        """Rename a condition that has images stored in zarr."""
+        """Rename condition is DB-only; zarr paths use fov_id."""
         experiment.add_channel("DAPI")
         experiment.add_condition("ctrl")
-        experiment.add_fov("FOV1", "ctrl", width=64, height=64)
+        fov_id = experiment.add_fov("ctrl", width=64, height=64)
         data = np.zeros((64, 64), dtype=np.uint16)
-        experiment.write_image("FOV1", "ctrl", "DAPI", data)
+        experiment.write_image(fov_id, "DAPI", data)
 
         experiment.rename_condition("ctrl", "control")
         assert "control" in experiment.get_conditions()
-        # Verify data is still readable under the new name
-        img = experiment.read_image("FOV1", "control", "DAPI")
+        img = experiment.read_image(fov_id, "DAPI")
         assert img.shape == (64, 64)
 
 
@@ -888,75 +844,73 @@ class TestRenameChannel:
 class TestRenameBioRep:
     def test_rename_bio_rep(self, experiment):
         experiment.add_condition("ctrl")
-        experiment.add_fov("FOV1", "ctrl")  # auto-creates N1
-        experiment.rename_bio_rep("N1", "Rep1", condition="ctrl")
-        assert "Rep1" in experiment.get_bio_reps(condition="ctrl")
-        assert "N1" not in experiment.get_bio_reps(condition="ctrl")
+        experiment.add_fov("ctrl")  # auto-creates N1
+        experiment.rename_bio_rep("N1", "Rep1")
+        assert "Rep1" in experiment.get_bio_reps()
+        assert "N1" not in experiment.get_bio_reps()
 
     def test_rename_bio_rep_with_data(self, experiment):
-        """Rename a bio-rep that has images stored in zarr."""
+        """Rename bio_rep is DB-only; zarr paths use fov_id."""
         experiment.add_channel("DAPI")
         experiment.add_condition("ctrl")
-        experiment.add_fov("FOV1", "ctrl", width=64, height=64)
+        fov_id = experiment.add_fov("ctrl", width=64, height=64)
         data = np.zeros((64, 64), dtype=np.uint16)
-        experiment.write_image("FOV1", "ctrl", "DAPI", data)
+        experiment.write_image(fov_id, "DAPI", data)
 
-        experiment.rename_bio_rep("N1", "Rep1", condition="ctrl")
-        assert "Rep1" in experiment.get_bio_reps(condition="ctrl")
-        img = experiment.read_image("FOV1", "ctrl", "DAPI", bio_rep="Rep1")
+        experiment.rename_bio_rep("N1", "Rep1")
+        assert "Rep1" in experiment.get_bio_reps()
+        img = experiment.read_image(fov_id, "DAPI")
         assert img.shape == (64, 64)
 
 
 class TestRenameFov:
     def test_rename_fov(self, experiment):
         experiment.add_condition("ctrl")
-        experiment.add_fov("FOV1", "ctrl")
-        experiment.rename_fov("FOV1", "FOV_A", "ctrl")
-        fov_names = [f.name for f in experiment.get_fovs()]
-        assert "FOV_A" in fov_names
-        assert "FOV1" not in fov_names
+        fov_id = experiment.add_fov("ctrl")
+        experiment.rename_fov(fov_id, "FOV_A")
+        fov = experiment.get_fov_by_id(fov_id)
+        assert fov.display_name == "FOV_A"
 
     def test_rename_fov_with_data(self, experiment):
+        """Rename FOV is DB-only; zarr paths use fov_id."""
         experiment.add_channel("DAPI")
         experiment.add_condition("ctrl")
-        experiment.add_fov("FOV1", "ctrl", width=64, height=64)
+        fov_id = experiment.add_fov("ctrl", width=64, height=64)
         data = np.zeros((64, 64), dtype=np.uint16)
-        experiment.write_image("FOV1", "ctrl", "DAPI", data)
+        experiment.write_image(fov_id, "DAPI", data)
 
-        experiment.rename_fov("FOV1", "FOV_A", "ctrl")
-        img = experiment.read_image("FOV_A", "ctrl", "DAPI")
+        experiment.rename_fov(fov_id, "FOV_A")
+        img = experiment.read_image(fov_id, "DAPI")
         assert img.shape == (64, 64)
 
 
 class TestDeleteCellsForFov:
     def test_deletes_cells_and_measurements(self, experiment_with_data):
         store = experiment_with_data
-        # experiment_with_data has 10 cells on FOV "r1" / condition "control"
-        assert store.get_cell_count(condition="control", fov="r1") == 10
+        fov = store.get_fovs()[0]
+        assert store.get_cell_count(fov_id=fov.id) == 10
 
-        deleted = store.delete_cells_for_fov("r1", "control")
+        deleted = store.delete_cells_for_fov(fov.id)
         assert deleted == 10
-        assert store.get_cell_count(condition="control", fov="r1") == 0
+        assert store.get_cell_count(fov_id=fov.id) == 0
 
     def test_returns_zero_for_empty_fov(self, experiment):
         experiment.add_condition("ctrl")
-        experiment.add_fov("r1", "ctrl", width=32, height=32)
-        assert experiment.delete_cells_for_fov("r1", "ctrl") == 0
+        fov_id = experiment.add_fov("ctrl", width=32, height=32)
+        assert experiment.delete_cells_for_fov(fov_id) == 0
 
 
 class TestGetFovSegmentationSummary:
     def test_with_segmented_fovs(self, experiment_with_data):
         store = experiment_with_data
         summary = store.get_fov_segmentation_summary()
-        # experiment_with_data has 10 cells on FOV "r1" with model "cyto3"
-        fovs = store.get_fovs()
-        r1 = [f for f in fovs if f.name == "r1"][0]
-        assert summary[r1.id][0] == 10
-        assert summary[r1.id][1] == "cyto3"
+        fov = store.get_fovs()[0]
+        assert summary[fov.id][0] == 10
+        assert summary[fov.id][1] == "cyto3"
 
     def test_empty_experiment(self, experiment):
         experiment.add_condition("ctrl")
-        fov_id = experiment.add_fov("r1", "ctrl", width=32, height=32)
+        fov_id = experiment.add_fov("ctrl", width=32, height=32)
         summary = experiment.get_fov_segmentation_summary()
         assert summary[fov_id] == (0, None)
 
@@ -973,7 +927,7 @@ class TestParticles:
         experiment.add_channel("DAPI", role="nucleus")
         experiment.add_channel("GFP", role="signal")
         experiment.add_condition("control")
-        fov_id = experiment.add_fov("r1", condition="control", width=128, height=128)
+        fov_id = experiment.add_fov("control", width=128, height=128)
         seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
         cells = [
             CellRecord(
@@ -986,10 +940,10 @@ class TestParticles:
         ]
         cell_ids = experiment.add_cells(cells)
         thr_id = experiment.add_threshold_run(channel="GFP", method="otsu")
-        return experiment, cell_ids, thr_id
+        return experiment, cell_ids, thr_id, fov_id
 
     def test_add_and_get_particles(self, store_with_threshold):
-        store, cell_ids, thr_id = store_with_threshold
+        store, cell_ids, thr_id, fov_id = store_with_threshold
         from percell3.core.models import ParticleRecord
 
         particles = [
@@ -1013,7 +967,7 @@ class TestParticles:
         assert "circularity" in df.columns
 
     def test_get_particles_by_threshold_run(self, store_with_threshold):
-        store, cell_ids, thr_id = store_with_threshold
+        store, cell_ids, thr_id, fov_id = store_with_threshold
         from percell3.core.models import ParticleRecord
 
         particles = [
@@ -1030,12 +984,12 @@ class TestParticles:
         assert len(df) == 1
 
     def test_get_particles_empty(self, store_with_threshold):
-        store, cell_ids, thr_id = store_with_threshold
+        store, cell_ids, thr_id, fov_id = store_with_threshold
         df = store.get_particles(cell_ids=[cell_ids[0]])
         assert len(df) == 0
 
     def test_delete_particles_for_fov(self, store_with_threshold):
-        store, cell_ids, thr_id = store_with_threshold
+        store, cell_ids, thr_id, fov_id = store_with_threshold
         from percell3.core.models import ParticleRecord
 
         particles = [
@@ -1048,14 +1002,14 @@ class TestParticles:
             for cid in cell_ids
         ]
         store.add_particles(particles)
-        deleted = store.delete_particles_for_fov("r1", "control")
+        deleted = store.delete_particles_for_fov(fov_id)
         assert deleted == 3
 
         df = store.get_particles(threshold_run_id=thr_id)
         assert len(df) == 0
 
     def test_delete_particles_for_threshold_run(self, store_with_threshold):
-        store, cell_ids, thr_id = store_with_threshold
+        store, cell_ids, thr_id, fov_id = store_with_threshold
         from percell3.core.models import ParticleRecord
 
         particles = [
@@ -1127,26 +1081,163 @@ class TestParticleLabelIO:
         experiment.add_channel("DAPI")
         experiment.add_channel("GFP")
         experiment.add_condition("control")
-        experiment.add_fov("r1", condition="control", width=128, height=128)
+        fov_id = experiment.add_fov("control", width=128, height=128)
 
         labels = np.zeros((128, 128), dtype=np.int32)
         labels[20:40, 20:40] = 1
         labels[60:80, 60:80] = 2
 
-        experiment.write_particle_labels("r1", "control", "GFP", labels)
-        result = experiment.read_particle_labels("r1", "control", "GFP")
+        experiment.write_particle_labels(fov_id, "GFP", labels)
+        result = experiment.read_particle_labels(fov_id, "GFP")
         np.testing.assert_array_equal(result, labels)
 
     def test_particle_labels_zarr_path(self, experiment):
-        """Particle labels are stored at condition/bio_rep/fov/particles_channel."""
+        """Particle labels are stored at fov_{id}/particles_channel."""
         experiment.add_channel("GFP")
         experiment.add_condition("control")
-        experiment.add_fov("r1", condition="control", width=64, height=64)
+        fov_id = experiment.add_fov("control", width=64, height=64)
 
         labels = np.zeros((64, 64), dtype=np.int32)
         labels[10:20, 10:20] = 1
-        experiment.write_particle_labels("r1", "control", "GFP", labels)
+        experiment.write_particle_labels(fov_id, "GFP", labels)
 
-        import zarr as z
-        store = z.open(str(experiment.masks_zarr_path), mode="r")
-        assert "control/N1/r1/particles_GFP" in store
+        store = zarr.open(str(experiment.masks_zarr_path), mode="r")
+        assert f"fov_{fov_id}/particles_GFP" in store
+
+
+# === FOV Status Cache ===
+
+
+class TestFovStatusCache:
+    def test_cache_updated_on_add_cells(self, experiment):
+        """Status cache is refreshed when cells are added."""
+        experiment.add_channel("DAPI")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+        seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
+
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+        ]
+        experiment.add_cells(cells)
+
+        from percell3.core.queries import select_fov_status_cache
+        cache = select_fov_status_cache(experiment._conn)
+        assert len(cache) == 1
+        assert cache[0]["fov_id"] == fov_id
+        assert cache[0]["cell_count"] == 1
+        assert cache[0]["seg_model"] == "cyto3"
+
+    def test_cache_updated_on_add_measurements(self, experiment):
+        """Status cache is refreshed when measurements are added."""
+        experiment.add_channel("DAPI")
+        experiment.add_channel("GFP")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+        seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
+
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+        ]
+        cell_ids = experiment.add_cells(cells)
+
+        gfp = experiment.get_channel("GFP")
+        experiment.add_measurements([
+            MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
+                              metric="mean_intensity", value=42.0)
+        ])
+
+        from percell3.core.queries import select_fov_status_cache
+        cache = select_fov_status_cache(experiment._conn)
+        assert cache[0]["measured_channels"] == "GFP"
+
+    def test_cache_cleared_on_delete_cells(self, experiment):
+        """Status cache reflects zero cells after deletion."""
+        experiment.add_channel("DAPI")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+        seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
+
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=100, centroid_y=200,
+                bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
+                area_pixels=1200,
+            )
+        ]
+        experiment.add_cells(cells)
+        experiment.delete_cells_for_fov(fov_id)
+
+        from percell3.core.queries import select_fov_status_cache
+        cache = select_fov_status_cache(experiment._conn)
+        assert cache[0]["cell_count"] == 0
+
+
+# === FOV Tags ===
+
+
+class TestFovTags:
+    def test_add_and_get_fov_tag(self, experiment):
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+
+        experiment.add_fov_tag(fov_id, "needs_review")
+        tags = experiment.get_fov_tags(fov_id)
+        assert tags == ["needs_review"]
+
+    def test_remove_fov_tag(self, experiment):
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+
+        experiment.add_fov_tag(fov_id, "needs_review")
+        experiment.remove_fov_tag(fov_id, "needs_review")
+        tags = experiment.get_fov_tags(fov_id)
+        assert tags == []
+
+    def test_fov_tag_creates_tag_if_needed(self, experiment):
+        """add_fov_tag auto-creates the tag if it doesn't exist."""
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+
+        experiment.add_fov_tag(fov_id, "new_tag")
+        assert "new_tag" in experiment.get_tags()
+
+    def test_multiple_fov_tags(self, experiment):
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+
+        experiment.add_fov_tag(fov_id, "tag_a")
+        experiment.add_fov_tag(fov_id, "tag_b")
+        tags = experiment.get_fov_tags(fov_id)
+        assert len(tags) == 2
+        assert set(tags) == {"tag_a", "tag_b"}
+
+
+# === Experiment Summary ===
+
+
+class TestExperimentSummary:
+    def test_empty_experiment(self, experiment):
+        """Summary with no FOVs returns empty list."""
+        summary = experiment.get_experiment_summary()
+        assert summary == []
+
+    def test_summary_with_data(self, experiment_with_data):
+        """Summary returns per-FOV status info."""
+        summary = experiment_with_data.get_experiment_summary()
+        assert len(summary) == 1
+        row = summary[0]
+        assert row["cells"] == 10
+        assert row["condition_name"] == "control"
+        assert "GFP" in row["measured_channels"]

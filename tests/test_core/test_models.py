@@ -28,13 +28,13 @@ class TestChannelConfig:
 
 class TestFovInfo:
     def test_construction(self):
-        r = FovInfo(id=1, name="r1", condition="control", width=2048, height=2048)
-        assert r.name == "r1"
+        r = FovInfo(id=1, display_name="ctrl_N1_FOV_001", condition="control", width=2048, height=2048)
+        assert r.display_name == "ctrl_N1_FOV_001"
         assert r.condition == "control"
         assert r.width == 2048
 
     def test_defaults(self):
-        r = FovInfo(id=1, name="r1", condition="ctrl")
+        r = FovInfo(id=1, display_name="ctrl_N1_FOV_001", condition="ctrl")
         assert r.timepoint is None
         assert r.pixel_size_um is None
         assert r.source_file is None
