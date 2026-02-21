@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from percell3.core import ExperimentStore
-from percell3.core.exceptions import ConditionNotFoundError
+from percell3.core.exceptions import FovNotFoundError
 from percell3.segment.roi_import import RoiImporter
 
 
@@ -21,9 +21,10 @@ def experiment_with_fov(tmp_path: Path) -> ExperimentStore:
     store.add_condition("control")
 
     image = np.random.randint(0, 65535, (128, 128), dtype=np.uint16)
-    store.add_fov("fov_1", "control", width=128, height=128, pixel_size_um=0.65)
-    store.write_image("fov_1", "control", "DAPI", image)
+    fov_id = store.add_fov("control", width=128, height=128, pixel_size_um=0.65)
+    store.write_image(fov_id, "DAPI", image)
 
+    store._test_fov_id = fov_id  # stash for tests
     yield store
     store.close()
 
@@ -43,7 +44,7 @@ class TestImportLabels:
         labels[60:90, 60:90] = 2  # Cell 2
 
         run_id = importer.import_labels(
-            labels, store, "fov_1", "control", channel="manual"
+            labels, store, store._test_fov_id, channel="manual"
         )
 
         assert run_id >= 1
@@ -61,9 +62,9 @@ class TestImportLabels:
         labels[10:40, 10:40] = 1
         labels[50:80, 50:80] = 2
 
-        importer.import_labels(labels, store, "fov_1", "control", channel="manual")
+        importer.import_labels(labels, store, store._test_fov_id, channel="manual")
 
-        stored = store.read_labels("fov_1", "control")
+        stored = store.read_labels(store._test_fov_id)
         np.testing.assert_array_equal(stored, labels)
 
     def test_non_integer_dtype_raises(
@@ -77,7 +78,7 @@ class TestImportLabels:
         labels[10:20, 10:20] = 1.0
 
         with pytest.raises(ValueError, match="integer dtype"):
-            importer.import_labels(labels, store, "fov_1", "control")
+            importer.import_labels(labels, store, store._test_fov_id)
 
     def test_3d_labels_raises(
         self, experiment_with_fov: ExperimentStore
@@ -89,7 +90,7 @@ class TestImportLabels:
         labels = np.zeros((10, 128, 128), dtype=np.int32)
 
         with pytest.raises(ValueError, match="2D"):
-            importer.import_labels(labels, store, "fov_1", "control")
+            importer.import_labels(labels, store, store._test_fov_id)
 
     def test_zero_cell_label_image(
         self, experiment_with_fov: ExperimentStore
@@ -101,7 +102,7 @@ class TestImportLabels:
         labels = np.zeros((128, 128), dtype=np.int32)
 
         run_id = importer.import_labels(
-            labels, store, "fov_1", "control", channel="manual"
+            labels, store, store._test_fov_id, channel="manual"
         )
 
         assert run_id >= 1
@@ -119,7 +120,7 @@ class TestImportLabels:
         labels[10:30, 10:30] = 1
 
         run_id = importer.import_labels(
-            labels, store, "fov_1", "control",
+            labels, store, store._test_fov_id,
             channel="manual", source="imagej",
         )
 
@@ -139,13 +140,12 @@ class TestImportLabels:
         labels[60:90, 60:90] = 2
 
         run_id = importer.import_labels(
-            labels, store, "fov_1", "control", channel="manual"
+            labels, store, store._test_fov_id, channel="manual"
         )
 
         runs = store.get_segmentation_runs()
         run = [r for r in runs if r["id"] == run_id][0]
         assert run["cell_count"] == 2
-
 
     def test_invalid_fov_no_orphaned_data(
         self, experiment_with_fov: ExperimentStore
@@ -157,30 +157,10 @@ class TestImportLabels:
         labels = np.zeros((128, 128), dtype=np.int32)
         labels[10:40, 10:40] = 1
 
-        with pytest.raises(ValueError, match="not found"):
-            importer.import_labels(
-                labels, store, "nonexistent_fov", "control", channel="manual"
-            )
+        with pytest.raises(FovNotFoundError):
+            importer.import_labels(labels, store, 9999, channel="manual")
 
         # No segmentation runs should have been created
-        runs = store.get_segmentation_runs()
-        assert len(runs) == 0
-
-    def test_invalid_condition_no_orphaned_data(
-        self, experiment_with_fov: ExperimentStore
-    ) -> None:
-        """Invalid condition should leave no orphaned data."""
-        store = experiment_with_fov
-        importer = RoiImporter()
-
-        labels = np.zeros((128, 128), dtype=np.int32)
-        labels[10:40, 10:40] = 1
-
-        with pytest.raises(ConditionNotFoundError):
-            importer.import_labels(
-                labels, store, "fov_1", "nonexistent_condition", channel="manual"
-            )
-
         runs = store.get_segmentation_runs()
         assert len(runs) == 0
 
@@ -210,7 +190,7 @@ class TestImportCellposeSeg:
         np.save(str(seg_path), seg_data, allow_pickle=True)
 
         run_id = importer.import_cellpose_seg(
-            seg_path, store, "fov_1", "control", channel="manual"
+            seg_path, store, store._test_fov_id, channel="manual"
         )
 
         assert run_id >= 1
@@ -232,7 +212,7 @@ class TestImportCellposeSeg:
         np.save(str(seg_path), seg_data, allow_pickle=True)
 
         run_id = importer.import_cellpose_seg(
-            seg_path, store, "fov_1", "control", channel="manual"
+            seg_path, store, store._test_fov_id, channel="manual"
         )
 
         runs = store.get_segmentation_runs()
@@ -253,7 +233,7 @@ class TestImportCellposeSeg:
 
         with pytest.raises(ValueError, match="missing 'masks' key"):
             importer.import_cellpose_seg(
-                seg_path, store, "fov_1", "control"
+                seg_path, store, store._test_fov_id
             )
 
     def test_seg_npy_file_not_found(
@@ -266,7 +246,7 @@ class TestImportCellposeSeg:
         with pytest.raises(FileNotFoundError):
             importer.import_cellpose_seg(
                 tmp_path / "nonexistent_seg.npy",
-                store, "fov_1", "control",
+                store, store._test_fov_id,
             )
 
     def test_invalid_fov_no_orphaned_data(
@@ -282,9 +262,9 @@ class TestImportCellposeSeg:
         seg_path = tmp_path / "test_seg.npy"
         np.save(str(seg_path), seg_data, allow_pickle=True)
 
-        with pytest.raises(ValueError, match="not found"):
+        with pytest.raises(FovNotFoundError):
             importer.import_cellpose_seg(
-                seg_path, store, "nonexistent_fov", "control", channel="manual"
+                seg_path, store, 9999, channel="manual"
             )
 
         # No segmentation runs should have been created

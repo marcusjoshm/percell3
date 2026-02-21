@@ -55,7 +55,7 @@ class SegmentationEngine:
             channel: Channel name to segment.
             model: Cellpose model name (e.g., "cpsam", "cyto3", "nuclei").
             diameter: Expected cell diameter in pixels. None = auto-detect.
-            fovs: Optional list of FOV names to process. None = all.
+            fovs: Optional list of FOV display names to process. None = all.
             condition: Optional condition filter.
             progress_callback: Optional callback(current, total, fov_name).
             params: Optional pre-built SegmentationParams. If provided,
@@ -101,7 +101,7 @@ class SegmentationEngine:
         all_fovs = store.get_fovs(condition=condition, bio_rep=bio_rep)
         if fovs is not None:
             fov_set = set(fovs)
-            all_fovs = [f for f in all_fovs if f.name in fov_set]
+            all_fovs = [f for f in all_fovs if f.display_name in fov_set]
 
         if not all_fovs:
             raise ValueError(
@@ -123,19 +123,13 @@ class SegmentationEngine:
         for i, fov_info in enumerate(all_fovs):
             try:
                 # Read image
-                image = store.read_image_numpy(
-                    fov_info.name, fov_info.condition, channel,
-                    bio_rep=fov_info.bio_rep,
-                )
+                image = store.read_image_numpy(fov_info.id, channel)
 
                 # Run segmentation
                 labels = segmenter.segment(image, params)
 
                 # Write labels to zarr
-                store.write_labels(
-                    fov_info.name, fov_info.condition, labels, run_id,
-                    bio_rep=fov_info.bio_rep,
-                )
+                store.write_labels(fov_info.id, labels, run_id)
 
                 # Extract cell properties
                 cells = processor.extract_cells(
@@ -146,13 +140,11 @@ class SegmentationEngine:
                 )
 
                 # Delete existing cells for this FOV (re-segmentation)
-                deleted = store.delete_cells_for_fov(
-                    fov_info.name, fov_info.condition,
-                )
+                deleted = store.delete_cells_for_fov(fov_info.id)
                 if deleted > 0:
                     logger.info(
                         "Replaced %d existing cells for FOV %s",
-                        deleted, fov_info.name,
+                        deleted, fov_info.display_name,
                     )
 
                 # Insert cells into DB
@@ -163,14 +155,14 @@ class SegmentationEngine:
                 fovs_processed += 1
 
                 fov_stats.append({
-                    "fov": fov_info.name,
+                    "fov": fov_info.display_name,
                     "cell_count": len(cells),
                     "status": "ok",
                 })
 
                 if len(cells) == 0:
                     warnings.append(
-                        f"{fov_info.name}: 0 cells detected"
+                        f"{fov_info.display_name}: 0 cells detected"
                     )
 
             except Exception as exc:
@@ -178,20 +170,20 @@ class SegmentationEngine:
                     raise
                 logger.warning(
                     "Segmentation failed for FOV %s: %s",
-                    fov_info.name, exc, exc_info=True,
+                    fov_info.display_name, exc, exc_info=True,
                 )
                 warnings.append(
-                    f"{fov_info.name}: segmentation failed — {exc}"
+                    f"{fov_info.display_name}: segmentation failed — {exc}"
                 )
                 fov_stats.append({
-                    "fov": fov_info.name,
+                    "fov": fov_info.display_name,
                     "cell_count": 0,
                     "status": "failed",
                     "error": str(exc),
                 })
 
             if progress_callback:
-                progress_callback(i + 1, total, fov_info.name)
+                progress_callback(i + 1, total, fov_info.display_name)
 
         # 7. Update cell count in segmentation run
         store.update_segmentation_run_cell_count(run_id, total_cells)

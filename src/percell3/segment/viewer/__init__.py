@@ -27,10 +27,8 @@ NAPARI_AVAILABLE: bool = _napari_available()
 
 def launch_viewer(
     store: ExperimentStore,
-    fov: str,
-    condition: str,
+    fov_id: int,
     channels: list[str] | None = None,
-    bio_rep: str | None = None,
 ) -> int | None:
     """Launch napari to view and edit segmentation labels.
 
@@ -41,10 +39,8 @@ def launch_viewer(
 
     Args:
         store: An open ExperimentStore.
-        fov: FOV name to display.
-        condition: Condition name.
+        fov_id: FOV database ID.
         channels: Channel names to load. If None, all channels are loaded.
-        bio_rep: Optional biological replicate name.
 
     Returns:
         The new segmentation run ID if labels were edited, or None if
@@ -53,7 +49,7 @@ def launch_viewer(
     Raises:
         ImportError: If napari is not installed.
         RuntimeError: If no display server is available (headless).
-        ValueError: If the FOV or condition does not exist.
+        ValueError: If the FOV does not exist.
     """
     if not NAPARI_AVAILABLE:
         raise ImportError(
@@ -62,18 +58,15 @@ def launch_viewer(
         )
     from percell3.segment.viewer._viewer import _launch
 
-    return _launch(store, fov, condition, channels, bio_rep=bio_rep)
+    return _launch(store, fov_id, channels)
 
 
 def save_edited_labels(
     store: ExperimentStore,
     fov_info: "FovInfo",
-    fov: str,
-    condition: str,
     edited_labels: "np.ndarray",
     parent_run_id: int | None,
     channel: str,
-    bio_rep: str | None = None,
 ) -> int:
     """Save edited labels back to ExperimentStore (headless-safe).
 
@@ -82,7 +75,4 @@ def save_edited_labels(
     """
     from percell3.segment.viewer._viewer import save_edited_labels as _impl
 
-    return _impl(
-        store, fov_info, fov, condition, edited_labels,
-        parent_run_id, channel, bio_rep=bio_rep,
-    )
+    return _impl(store, fov_info, edited_labels, parent_run_id, channel)

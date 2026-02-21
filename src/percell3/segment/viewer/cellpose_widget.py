@@ -52,9 +52,7 @@ class CellposeWidget:
     Args:
         viewer: The napari Viewer instance.
         store: An open ExperimentStore.
-        fov: FOV name.
-        condition: Condition name.
-        bio_rep: Biological replicate name (or None).
+        fov_id: FOV database ID.
         channel_names: List of loaded channel names.
     """
 
@@ -65,9 +63,7 @@ class CellposeWidget:
         self,
         viewer: napari.Viewer,
         store: ExperimentStore,
-        fov: str,
-        condition: str,
-        bio_rep: str | None,
+        fov_id: int,
         channel_names: list[str],
     ) -> None:
         from qtpy.QtWidgets import (
@@ -84,9 +80,7 @@ class CellposeWidget:
 
         self._viewer = viewer
         self._store = store
-        self._fov = fov
-        self._condition = condition
-        self._bio_rep = bio_rep
+        self._fov_id = fov_id
         self._channel_names = channel_names
         self._worker: Any = None  # thread_worker handle
 
@@ -273,13 +267,11 @@ class CellposeWidget:
         # --- Read images on the main thread (SQLite-safe) ---
         try:
             image = self._store.read_image_numpy(
-                self._fov, self._condition, params["primary_channel"],
-                bio_rep=self._bio_rep,
+                self._fov_id, params["primary_channel"],
             )
             if params["nucleus_channel"] is not None:
                 nuc_image = self._store.read_image_numpy(
-                    self._fov, self._condition, params["nucleus_channel"],
-                    bio_rep=self._bio_rep,
+                    self._fov_id, params["nucleus_channel"],
                 )
                 image = np.stack([image, nuc_image], axis=-1)
         except Exception as exc:
@@ -329,9 +321,7 @@ class CellposeWidget:
 
         try:
             # All store writes happen here on the main thread
-            fov_info, _ = self._store._resolve_fov(
-                self._fov, self._condition, self._bio_rep,
-            )
+            fov_info = self._store.get_fov_by_id(self._fov_id)
 
             run_params = {
                 "method": "napari_cellpose_widget",
@@ -349,8 +339,7 @@ class CellposeWidget:
             )
 
             cell_count = store_labels_and_cells(
-                self._store, labels, fov_info, self._fov, self._condition,
-                run_id, bio_rep=self._bio_rep,
+                self._store, labels, fov_info, run_id,
             )
 
             # Auto-measure all channels
@@ -359,8 +348,7 @@ class CellposeWidget:
 
                 measurer = Measurer()
                 measurer.measure_fov(
-                    self._store, self._fov, self._condition,
-                    self._channel_names, bio_rep=self._bio_rep,
+                    self._store, self._fov_id, self._channel_names,
                 )
             except Exception as exc:
                 logger.warning("Auto-measurement failed: %s", exc)

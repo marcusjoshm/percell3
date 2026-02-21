@@ -49,11 +49,14 @@ def experiment_with_fovs(tmp_path: Path) -> ExperimentStore:
     store.add_channel("DAPI", role="segmentation")
     store.add_condition("control")
 
-    for name in ("fov_1", "fov_2"):
+    fov_ids = []
+    for _ in range(2):
         image = np.random.randint(0, 65535, (128, 128), dtype=np.uint16)
-        store.add_fov(name, "control", width=128, height=128, pixel_size_um=0.65)
-        store.write_image(name, "control", "DAPI", image)
+        fov_id = store.add_fov("control", width=128, height=128, pixel_size_um=0.65)
+        store.write_image(fov_id, "DAPI", image)
+        fov_ids.append(fov_id)
 
+    store._fov_ids = fov_ids  # stash for tests
     yield store
     store.close()
 
@@ -64,12 +67,15 @@ def experiment_multi_condition(tmp_path: Path) -> ExperimentStore:
     store = ExperimentStore.create(tmp_path / "test.percell")
     store.add_channel("DAPI", role="segmentation")
 
+    fov_ids = {}
     for cond in ("control", "treated"):
         store.add_condition(cond)
         image = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
-        store.add_fov("fov_1", cond, width=64, height=64, pixel_size_um=0.65)
-        store.write_image("fov_1", cond, "DAPI", image)
+        fov_id = store.add_fov(cond, width=64, height=64, pixel_size_um=0.65)
+        store.write_image(fov_id, "DAPI", image)
+        fov_ids[cond] = fov_id
 
+    store._fov_ids = fov_ids  # stash for tests
     yield store
     store.close()
 
@@ -92,11 +98,12 @@ class TestSegmentationEngine:
         assert result.cell_count > 0
 
         # Verify labels in zarr
-        labels_1 = store.read_labels("fov_1", "control")
+        fov_id1, fov_id2 = store._fov_ids
+        labels_1 = store.read_labels(fov_id1)
         assert labels_1.shape == (128, 128)
         assert labels_1.dtype == np.int32
 
-        labels_2 = store.read_labels("fov_2", "control")
+        labels_2 = store.read_labels(fov_id2)
         assert labels_2.shape == (128, 128)
 
         # Verify cells in SQLite
@@ -117,8 +124,11 @@ class TestSegmentationEngine:
         engine.run(store, channel="DAPI", progress_callback=callback)
 
         assert len(calls) == 2
-        assert calls[0] == (1, 2, "fov_1")
-        assert calls[1] == (2, 2, "fov_2")
+        # Callbacks use display_name
+        fovs = store.get_fovs()
+        expected_names = sorted(f.display_name for f in fovs)
+        actual_names = sorted(c[2] for c in calls)
+        assert actual_names == expected_names
 
     def test_missing_channel_raises(
         self, experiment_with_fovs: ExperimentStore
@@ -137,11 +147,14 @@ class TestSegmentationEngine:
         store = experiment_with_fovs
         engine = SegmentationEngine(segmenter=MockSegmenter())
 
-        result = engine.run(store, channel="DAPI", fovs=["fov_1"])
+        # Filter by display_name
+        fovs = store.get_fovs()
+        target_name = fovs[0].display_name
+        result = engine.run(store, channel="DAPI", fovs=[target_name])
 
         assert result.fovs_processed == 1
-        # Only fov_1 should have labels
-        labels = store.read_labels("fov_1", "control")
+        # Only the filtered FOV should have labels
+        labels = store.read_labels(fovs[0].id)
         assert labels.max() > 0
 
     def test_condition_filtering(
@@ -170,7 +183,8 @@ class TestSegmentationEngine:
         assert "0 cells detected" in result.warnings[0]
 
         # Labels should still be stored (all zeros)
-        labels = store.read_labels("fov_1", "control")
+        fov_id1 = store._fov_ids[0]
+        labels = store.read_labels(fov_id1)
         assert labels.max() == 0
 
     def test_resegmentation_replaces_cells(
@@ -209,10 +223,11 @@ class TestSegmentationEngine:
 
         engine.run(store, channel="DAPI")
 
-        cells_df = store.get_cells(condition="control", fov="fov_1")
+        fov_id1, fov_id2 = store._fov_ids
+        cells_df = store.get_cells(fov_id=fov_id1)
         assert not cells_df.empty
 
-        cells_df2 = store.get_cells(condition="control", fov="fov_2")
+        cells_df2 = store.get_cells(fov_id=fov_id2)
         assert not cells_df2.empty
 
     def test_no_fovs_match_raises(

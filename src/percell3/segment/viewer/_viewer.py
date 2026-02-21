@@ -55,10 +55,8 @@ def _channel_colormap(ch: ChannelConfig) -> str:
 
 def _launch(
     store: ExperimentStore,
-    fov: str,
-    condition: str,
+    fov_id: int,
     channels: list[str] | None = None,
-    bio_rep: str | None = None,
 ) -> int | None:
     """Internal launch implementation. Called by launch_viewer()."""
     import napari
@@ -72,7 +70,7 @@ def _launch(
             "Set DISPLAY (X11) or WAYLAND_DISPLAY, or use X11 forwarding."
         )
 
-    fov_info, _ = store._resolve_fov(fov, condition, bio_rep)
+    fov_info = store.get_fov_by_id(fov_id)
 
     all_channels = store.get_channels()
     if not all_channels:
@@ -90,18 +88,20 @@ def _launch(
         raise ValueError(f"No matching channels found for: {channels}")
 
     # --- Create viewer ---
-    viewer = napari.Viewer(title=f"PerCell 3 \u2014 {fov} ({condition})")
+    viewer = napari.Viewer(
+        title=f"PerCell 3 \u2014 {fov_info.display_name} ({fov_info.condition})"
+    )
 
     # --- Load channel images ---
-    _load_channel_layers(viewer, store, fov, condition, selected_channels, bio_rep=bio_rep)
+    _load_channel_layers(viewer, store, fov_id, selected_channels)
 
     # --- Load labels ---
     original_hash, parent_run_id, seg_channel = _load_label_layer(
-        viewer, store, fov, condition, selected_channels, bio_rep=bio_rep,
+        viewer, store, fov_id, selected_channels,
     )
 
     # --- Load threshold masks (if any) ---
-    _load_mask_layers(viewer, store, fov, condition, bio_rep=bio_rep)
+    _load_mask_layers(viewer, store, fov_id)
 
     # --- Add dock widgets ---
     channel_names = [ch.name for ch in selected_channels]
@@ -109,9 +109,7 @@ def _launch(
     from percell3.segment.viewer.cellpose_widget import CellposeWidget
     from percell3.segment.viewer.edit_widget import EditWidget
 
-    cellpose_w = CellposeWidget(
-        viewer, store, fov, condition, bio_rep, channel_names,
-    )
+    cellpose_w = CellposeWidget(viewer, store, fov_id, channel_names)
     viewer.window.add_dock_widget(
         cellpose_w.widget, name="Cellpose", area="right",
     )
@@ -140,8 +138,7 @@ def _launch(
     # Labels changed (or created from scratch)
     channel_name = seg_channel or selected_channels[0].name
     run_id = save_edited_labels(
-        store, fov_info, fov, condition, edited_labels,
-        parent_run_id, channel_name, bio_rep=bio_rep,
+        store, fov_info, edited_labels, parent_run_id, channel_name,
     )
     return run_id
 
@@ -149,14 +146,12 @@ def _launch(
 def _load_channel_layers(
     viewer: napari.Viewer,
     store: ExperimentStore,
-    fov: str,
-    condition: str,
+    fov_id: int,
     channels: list[ChannelConfig],
-    bio_rep: str | None = None,
 ) -> None:
     """Add image layers for each channel."""
     for ch in channels:
-        data = store.read_image(fov, condition, ch.name, bio_rep=bio_rep)
+        data = store.read_image(fov_id, ch.name)
         cmap = _channel_colormap(ch)
 
         viewer.add_image(
@@ -170,10 +165,8 @@ def _load_channel_layers(
 def _load_label_layer(
     viewer: napari.Viewer,
     store: ExperimentStore,
-    fov: str,
-    condition: str,
+    fov_id: int,
     channels: list[ChannelConfig],
-    bio_rep: str | None = None,
 ) -> tuple[str | None, int | None, str | None]:
     """Load the most recent label layer, or create an empty one.
 
@@ -195,7 +188,7 @@ def _load_label_layer(
     # Try to read existing labels
     original_hash: str | None = None
     try:
-        labels = store.read_labels(fov, condition, bio_rep=bio_rep)
+        labels = store.read_labels(fov_id)
         original_hash = hashlib.sha256(labels.tobytes()).hexdigest()
         viewer.add_labels(labels, name="segmentation", opacity=0.5)
     except KeyError:
@@ -215,9 +208,7 @@ def _load_label_layer(
 def _load_mask_layers(
     viewer: napari.Viewer,
     store: ExperimentStore,
-    fov: str,
-    condition: str,
-    bio_rep: str | None = None,
+    fov_id: int,
 ) -> None:
     """Load threshold mask layers for channels that have threshold runs."""
     runs = store.get_threshold_runs()
@@ -231,7 +222,7 @@ def _load_mask_layers(
 
     for channel, run in channel_runs.items():
         try:
-            mask = store.read_mask(fov, condition, channel, bio_rep=bio_rep)
+            mask = store.read_mask(fov_id, channel)
         except KeyError:
             continue
 
@@ -249,12 +240,9 @@ def _load_mask_layers(
 def save_edited_labels(
     store: ExperimentStore,
     fov_info: FovInfo,
-    fov: str,
-    condition: str,
     edited_labels: np.ndarray,
     parent_run_id: int | None,
     channel: str,
-    bio_rep: str | None = None,
 ) -> int:
     """Save edited labels back to ExperimentStore.
 
@@ -265,12 +253,9 @@ def save_edited_labels(
     Args:
         store: An open ExperimentStore.
         fov_info: FOV metadata (used for id and pixel_size_um).
-        fov: FOV name.
-        condition: Condition name.
         edited_labels: 2D int32 label array.
         parent_run_id: ID of the parent segmentation run (or None).
         channel: Channel name for the segmentation run.
-        bio_rep: Optional biological replicate name.
 
     Returns:
         The new segmentation run ID.
@@ -302,8 +287,7 @@ def save_edited_labels(
     # Write labels, extract cells, update count
     try:
         cell_count = store_labels_and_cells(
-            store, labels_int32, fov_info, fov, condition, run_id,
-            bio_rep=bio_rep,
+            store, labels_int32, fov_info, run_id,
         )
     except Exception as exc:
         logger.warning(

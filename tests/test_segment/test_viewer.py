@@ -29,11 +29,11 @@ def experiment_with_segmentation(tmp_path: Path) -> ExperimentStore:
     store.add_channel("DAPI", role="segmentation", color="#0000FF")
     store.add_channel("GFP", role="measurement", color="#00FF00")
     store.add_condition("control")
-    store.add_fov("fov_1", "control", width=64, height=64, pixel_size_um=0.65)
+    fov_id = store.add_fov("control", width=64, height=64, pixel_size_um=0.65)
 
     image = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
-    store.write_image("fov_1", "control", "DAPI", image)
-    store.write_image("fov_1", "control", "GFP", image)
+    store.write_image(fov_id, "DAPI", image)
+    store.write_image(fov_id, "GFP", image)
 
     # Add a segmentation run with labels
     labels = np.zeros((64, 64), dtype=np.int32)
@@ -41,14 +41,15 @@ def experiment_with_segmentation(tmp_path: Path) -> ExperimentStore:
     labels[35:55, 35:55] = 2  # Cell 2
 
     run_id = store.add_segmentation_run("DAPI", "cpsam", {"model": "cpsam"})
-    store.write_labels("fov_1", "control", labels, run_id)
+    store.write_labels(fov_id, labels, run_id)
 
     from percell3.segment.label_processor import extract_cells
 
-    cells = extract_cells(labels, 1, run_id, pixel_size_um=0.65)
+    cells = extract_cells(labels, fov_id, run_id, pixel_size_um=0.65)
     store.add_cells(cells)
     store.update_segmentation_run_cell_count(run_id, len(cells))
 
+    store._test_fov_id = fov_id
     yield store
     store.close()
 
@@ -59,19 +60,19 @@ def experiment_no_segmentation(tmp_path: Path) -> ExperimentStore:
     store = ExperimentStore.create(tmp_path / "test.percell")
     store.add_channel("DAPI", role="segmentation", color="#0000FF")
     store.add_condition("control")
-    store.add_fov("fov_1", "control", width=64, height=64, pixel_size_um=0.65)
+    fov_id = store.add_fov("control", width=64, height=64, pixel_size_um=0.65)
 
     image = np.random.randint(0, 65535, (64, 64), dtype=np.uint16)
-    store.write_image("fov_1", "control", "DAPI", image)
+    store.write_image(fov_id, "DAPI", image)
 
+    store._test_fov_id = fov_id
     yield store
     store.close()
 
 
-def _get_fov_info(store: ExperimentStore) -> object:
-    """Helper to get FovInfo for fov_1/control."""
-    fov_info, _ = store._resolve_fov("fov_1", "control")
-    return fov_info
+def _get_fov_info(store: ExperimentStore):
+    """Helper to get FovInfo for the test FOV."""
+    return store.get_fov_by_id(store._test_fov_id)
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +97,7 @@ class TestNapariAvailability:
             with pytest.raises(ImportError, match="napari is required"):
                 launch_viewer(
                     experiment_with_segmentation,
-                    "fov_1", "control",
+                    experiment_with_segmentation._test_fov_id,
                 )
 
 
@@ -169,7 +170,7 @@ class TestSaveEditedLabels:
         fov_info = _get_fov_info(experiment_with_segmentation)
         run_id = save_edited_labels(
             experiment_with_segmentation,
-            fov_info, "fov_1", "control", edited,
+            fov_info, edited,
             parent_run_id=1, channel="DAPI",
         )
         assert isinstance(run_id, int)
@@ -181,18 +182,18 @@ class TestSaveEditedLabels:
         """Labels read back from zarr should match what was saved."""
         from percell3.segment.viewer._viewer import save_edited_labels
 
+        store = experiment_with_segmentation
         edited = np.zeros((64, 64), dtype=np.int32)
         edited[10:30, 10:30] = 1
         edited[35:55, 35:55] = 2
 
-        fov_info = _get_fov_info(experiment_with_segmentation)
+        fov_info = _get_fov_info(store)
         save_edited_labels(
-            experiment_with_segmentation,
-            fov_info, "fov_1", "control", edited,
+            store, fov_info, edited,
             parent_run_id=1, channel="DAPI",
         )
 
-        read_back = experiment_with_segmentation.read_labels("fov_1", "control")
+        read_back = store.read_labels(store._test_fov_id)
         np.testing.assert_array_equal(read_back, edited)
 
     def test_cell_count_matches_unique_labels(
@@ -209,7 +210,7 @@ class TestSaveEditedLabels:
         fov_info = _get_fov_info(experiment_with_segmentation)
         run_id = save_edited_labels(
             experiment_with_segmentation,
-            fov_info, "fov_1", "control", edited,
+            fov_info, edited,
             parent_run_id=1, channel="DAPI",
         )
 
@@ -223,19 +224,17 @@ class TestSaveEditedLabels:
         """Cell area should match the painted region."""
         from percell3.segment.viewer._viewer import save_edited_labels
 
+        store = experiment_with_segmentation
         edited = np.zeros((64, 64), dtype=np.int32)
         edited[10:40, 10:40] = 1  # 30x30 = 900 pixels
 
-        fov_info = _get_fov_info(experiment_with_segmentation)
+        fov_info = _get_fov_info(store)
         run_id = save_edited_labels(
-            experiment_with_segmentation,
-            fov_info, "fov_1", "control", edited,
+            store, fov_info, edited,
             parent_run_id=None, channel="DAPI",
         )
 
-        cells_df = experiment_with_segmentation.get_cells(
-            condition="control", fov="fov_1",
-        )
+        cells_df = store.get_cells(fov_id=store._test_fov_id)
         # Filter to just the new run's cells
         new_cells = cells_df[cells_df["segmentation_id"] == run_id]
         assert len(new_cells) == 1
@@ -252,7 +251,7 @@ class TestSaveEditedLabels:
         fov_info = _get_fov_info(experiment_with_segmentation)
         run_id = save_edited_labels(
             experiment_with_segmentation,
-            fov_info, "fov_1", "control", empty,
+            fov_info, empty,
             parent_run_id=1, channel="DAPI",
         )
 
@@ -272,7 +271,7 @@ class TestSaveEditedLabels:
         fov_info = _get_fov_info(experiment_with_segmentation)
         run_id = save_edited_labels(
             experiment_with_segmentation,
-            fov_info, "fov_1", "control", edited,
+            fov_info, edited,
             parent_run_id=1, channel="DAPI",
         )
 
@@ -299,7 +298,7 @@ class TestSaveEditedLabels:
         with pytest.raises(ValueError, match="2D"):
             save_edited_labels(
                 experiment_with_segmentation,
-                fov_info, "fov_1", "control", labels_3d,
+                fov_info, labels_3d,
                 parent_run_id=None, channel="DAPI",
             )
 
@@ -314,7 +313,7 @@ class TestSaveEditedLabels:
         with pytest.raises(ValueError, match="negative"):
             save_edited_labels(
                 experiment_with_segmentation,
-                fov_info, "fov_1", "control", labels,
+                fov_info, labels,
                 parent_run_id=None, channel="DAPI",
             )
 
@@ -330,7 +329,7 @@ class TestSaveEditedLabels:
         fov_info = _get_fov_info(experiment_no_segmentation)
         run_id = save_edited_labels(
             experiment_no_segmentation,
-            fov_info, "fov_1", "control", labels,
+            fov_info, labels,
             parent_run_id=None, channel="DAPI",
         )
 
