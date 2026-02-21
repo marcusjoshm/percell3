@@ -64,13 +64,10 @@ class ParticleAnalyzer:
     def analyze_fov(
         self,
         store: ExperimentStore,
-        fov: str,
-        condition: str,
+        fov_id: int,
         channel: str,
         threshold_run_id: int,
         cell_ids: list[int],
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
     ) -> ParticleAnalysisResult:
         """Analyze particles within threshold mask for cells in a FOV.
 
@@ -84,13 +81,10 @@ class ParticleAnalyzer:
 
         Args:
             store: Target ExperimentStore.
-            fov: FOV name.
-            condition: Condition name.
+            fov_id: FOV database ID.
             channel: Channel used for thresholding.
             threshold_run_id: Which threshold run to analyze.
             cell_ids: Cell IDs to analyze (typically one group).
-            bio_rep: Biological replicate name.
-            timepoint: Timepoint.
 
         Returns:
             ParticleAnalysisResult with particles, summaries, and label image.
@@ -99,28 +93,23 @@ class ParticleAnalyzer:
         from skimage.measure import regionprops
 
         # Read data
-        labels = store.read_labels(fov, condition, bio_rep=bio_rep, timepoint=timepoint)
-        threshold_mask = store.read_mask(fov, condition, channel, timepoint=timepoint)
-        channel_image = store.read_image_numpy(
-            fov, condition, channel, bio_rep=bio_rep, timepoint=timepoint,
-        )
+        labels = store.read_labels(fov_id)
+        threshold_mask = store.read_mask(fov_id, channel)
+        channel_image = store.read_image_numpy(fov_id, channel)
 
         # Convert mask: uint8 (0/255) -> bool
         threshold_bool = threshold_mask > 0
 
         # Get cells DataFrame
-        cells_df = store.get_cells(
-            condition=condition, bio_rep=bio_rep, fov=fov, timepoint=timepoint,
-        )
+        cells_df = store.get_cells(fov_id=fov_id)
         cells_df = cells_df[cells_df["id"].isin(cell_ids)]
 
         ch_info = store.get_channel(channel)
         channel_id = ch_info.id
 
         # Get pixel size for area conversion
-        fov_info = store.get_fovs(condition=condition, bio_rep=bio_rep)
-        fov_row = [f for f in fov_info if f.name == fov]
-        pixel_size_um = fov_row[0].pixel_size_um if fov_row else None
+        fov_info = store.get_fov_by_id(fov_id)
+        pixel_size_um = fov_info.pixel_size_um
 
         # Full FOV particle label image
         particle_label_image = np.zeros(labels.shape, dtype=np.int32)

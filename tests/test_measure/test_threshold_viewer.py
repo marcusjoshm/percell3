@@ -49,7 +49,7 @@ def threshold_store(tmp_path: Path) -> ExperimentStore:
     store.add_channel("DAPI", role="nucleus")
     store.add_channel("GFP", role="signal")
     store.add_condition("control")
-    fov_id = store.add_fov("fov_1", "control", width=64, height=64)
+    fov_id = store.add_fov("control", width=64, height=64)
     seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
     # Label image
@@ -57,14 +57,14 @@ def threshold_store(tmp_path: Path) -> ExperimentStore:
     labels[10:30, 10:30] = 1
     labels[25:50, 25:50] = 2
     labels[50:60, 50:60] = 3
-    store.write_labels("fov_1", "control", labels, seg_id)
+    store.write_labels(fov_id, labels, seg_id)
 
     # Bimodal image
     rng = np.random.default_rng(42)
     image = np.zeros((64, 64), dtype=np.uint16)
     image[:, :] = rng.normal(20, 3, (64, 64)).clip(0, 65535).astype(np.uint16)
     image[20:50, 20:50] = rng.normal(200, 10, (30, 30)).clip(0, 65535).astype(np.uint16)
-    store.write_image("fov_1", "control", "GFP", image)
+    store.write_image(fov_id, "GFP", image)
 
     # Add cells
     cells = [
@@ -86,6 +86,7 @@ def threshold_store(tmp_path: Path) -> ExperimentStore:
     ]
     cell_ids = store.add_cells(cells)
 
+    store._test_fov_id = fov_id
     yield store
     store.close()
 
@@ -185,16 +186,17 @@ class TestThresholdDecision:
 
 class TestThresholdGroup:
     def test_stores_mask_and_run(self, threshold_store: ExperimentStore):
+        fov_id = threshold_store._test_fov_id
         engine = ThresholdEngine()
 
-        labels = threshold_store.read_labels("fov_1", "control")
-        image = threshold_store.read_image_numpy("fov_1", "control", "GFP")
-        cells_df = threshold_store.get_cells(condition="control")
+        labels = threshold_store.read_labels(fov_id)
+        image = threshold_store.read_image_numpy(fov_id, "GFP")
+        cells_df = threshold_store.get_cells(fov_id=fov_id)
         cell_ids = cells_df["id"].tolist()[:2]  # Cells 1 and 2
 
         result = engine.threshold_group(
             threshold_store,
-            fov="fov_1", condition="control", channel="GFP",
+            fov_id=fov_id, channel="GFP",
             cell_ids=cell_ids,
             labels=labels, image=image,
             threshold_value=100.0,
@@ -208,42 +210,44 @@ class TestThresholdGroup:
         assert result.total_pixels > 0
 
         # Mask should be stored
-        mask = threshold_store.read_mask("fov_1", "control", "GFP")
+        mask = threshold_store.read_mask(fov_id, "GFP")
         assert mask.shape == (64, 64)
 
     def test_mask_only_within_group_cells(self, threshold_store: ExperimentStore):
         """Mask should only have positive pixels within group cells."""
+        fov_id = threshold_store._test_fov_id
         engine = ThresholdEngine()
 
-        labels = threshold_store.read_labels("fov_1", "control")
-        image = threshold_store.read_image_numpy("fov_1", "control", "GFP")
-        cells_df = threshold_store.get_cells(condition="control")
+        labels = threshold_store.read_labels(fov_id)
+        image = threshold_store.read_image_numpy(fov_id, "GFP")
+        cells_df = threshold_store.get_cells(fov_id=fov_id)
         # Only cell 2 (in the bright region)
         cell_ids = [cells_df["id"].tolist()[1]]
 
         result = engine.threshold_group(
             threshold_store,
-            fov="fov_1", condition="control", channel="GFP",
+            fov_id=fov_id, channel="GFP",
             cell_ids=cell_ids,
             labels=labels, image=image,
             threshold_value=50.0,
         )
 
-        mask = threshold_store.read_mask("fov_1", "control", "GFP")
+        mask = threshold_store.read_mask(fov_id, "GFP")
         # No positive pixels outside cell 2
         cell2_area = labels == 2
         assert np.all(mask[~cell2_area] == 0)
 
     def test_roi_stored_in_parameters(self, threshold_store: ExperimentStore):
+        fov_id = threshold_store._test_fov_id
         engine = ThresholdEngine()
-        labels = threshold_store.read_labels("fov_1", "control")
-        image = threshold_store.read_image_numpy("fov_1", "control", "GFP")
-        cells_df = threshold_store.get_cells(condition="control")
+        labels = threshold_store.read_labels(fov_id)
+        image = threshold_store.read_image_numpy(fov_id, "GFP")
+        cells_df = threshold_store.get_cells(fov_id=fov_id)
 
         roi = [(20, 20, 50, 50)]
         engine.threshold_group(
             threshold_store,
-            fov="fov_1", condition="control", channel="GFP",
+            fov_id=fov_id, channel="GFP",
             cell_ids=cells_df["id"].tolist(),
             labels=labels, image=image,
             threshold_value=100.0,

@@ -15,24 +15,20 @@ class TestMeasureFov:
 
     def test_measure_single_channel(self, measure_experiment: ExperimentStore):
         """Measure GFP on fov_1: should produce measurements for 2 cells x 7 metrics."""
+        fov_id = measure_experiment._test_fov_ids["fov_1"]
         measurer = Measurer()
         count = measurer.measure_fov(
-            measure_experiment,
-            fov="fov_1",
-            condition="control",
-            channels=["GFP"],
+            measure_experiment, fov_id=fov_id, channels=["GFP"],
         )
         # 2 cells x 7 metrics = 14
         assert count == 14
 
     def test_measurements_stored_in_db(self, measure_experiment: ExperimentStore):
         """Measurements should be queryable from the store."""
+        fov_id = measure_experiment._test_fov_ids["fov_1"]
         measurer = Measurer()
         measurer.measure_fov(
-            measure_experiment,
-            fov="fov_1",
-            condition="control",
-            channels=["GFP"],
+            measure_experiment, fov_id=fov_id, channels=["GFP"],
         )
         df = measure_experiment.get_measurements(channels=["GFP"])
         assert not df.empty
@@ -40,12 +36,10 @@ class TestMeasureFov:
 
     def test_mean_intensity_values_correct(self, measure_experiment: ExperimentStore):
         """Cell 1 (GFP=100) and Cell 2 (GFP=200) should have correct mean intensities."""
+        fov_id = measure_experiment._test_fov_ids["fov_1"]
         measurer = Measurer()
         measurer.measure_fov(
-            measure_experiment,
-            fov="fov_1",
-            condition="control",
-            channels=["GFP"],
+            measure_experiment, fov_id=fov_id, channels=["GFP"],
         )
         df = measure_experiment.get_measurements(channels=["GFP"], metrics=["mean_intensity"])
         assert len(df) == 2
@@ -55,24 +49,20 @@ class TestMeasureFov:
 
     def test_measure_multiple_channels(self, measure_experiment: ExperimentStore):
         """Measuring 2 channels should produce 2x measurements."""
+        fov_id = measure_experiment._test_fov_ids["fov_1"]
         measurer = Measurer()
         count = measurer.measure_fov(
-            measure_experiment,
-            fov="fov_1",
-            condition="control",
-            channels=["DAPI", "GFP"],
+            measure_experiment, fov_id=fov_id, channels=["DAPI", "GFP"],
         )
         # 2 cells x 2 channels x 7 metrics = 28
         assert count == 28
 
     def test_measure_specific_metrics(self, measure_experiment: ExperimentStore):
         """Only requested metrics should be computed."""
+        fov_id = measure_experiment._test_fov_ids["fov_1"]
         measurer = Measurer()
         count = measurer.measure_fov(
-            measure_experiment,
-            fov="fov_1",
-            condition="control",
-            channels=["GFP"],
+            measure_experiment, fov_id=fov_id, channels=["GFP"],
             metrics=["mean_intensity", "area"],
         )
         # 2 cells x 1 channel x 2 metrics = 4
@@ -80,13 +70,11 @@ class TestMeasureFov:
 
     def test_unknown_metric_raises(self, measure_experiment: ExperimentStore):
         """Requesting an unknown metric should raise KeyError."""
+        fov_id = measure_experiment._test_fov_ids["fov_1"]
         measurer = Measurer()
         with pytest.raises(KeyError, match="Unknown metric"):
             measurer.measure_fov(
-                measure_experiment,
-                fov="fov_1",
-                condition="control",
-                channels=["GFP"],
+                measure_experiment, fov_id=fov_id, channels=["GFP"],
                 metrics=["nonexistent"],
             )
 
@@ -95,26 +83,22 @@ class TestMeasureFov:
         store = ExperimentStore.create(tmp_path / "empty.percell")
         store.add_channel("GFP")
         store.add_condition("control")
-        store.add_fov("fov_1", "control", width=32, height=32)
+        fov_id = store.add_fov("control", width=32, height=32)
         image = np.zeros((32, 32), dtype=np.uint16)
-        store.write_image("fov_1", "control", "GFP", image)
+        store.write_image(fov_id, "GFP", image)
 
-        # No segmentation → no cells
+        # No segmentation -> no cells
         measurer = Measurer()
-        count = measurer.measure_fov(
-            store, fov="fov_1", condition="control", channels=["GFP"],
-        )
+        count = measurer.measure_fov(store, fov_id=fov_id, channels=["GFP"])
         assert count == 0
         store.close()
 
     def test_area_metric_correct(self, measure_experiment: ExperimentStore):
         """Area should equal the number of pixels in the cell mask (400 = 20x20)."""
+        fov_id = measure_experiment._test_fov_ids["fov_1"]
         measurer = Measurer()
         measurer.measure_fov(
-            measure_experiment,
-            fov="fov_1",
-            condition="control",
-            channels=["GFP"],
+            measure_experiment, fov_id=fov_id, channels=["GFP"],
             metrics=["area"],
         )
         df = measure_experiment.get_measurements(metrics=["area"])
@@ -123,15 +107,13 @@ class TestMeasureFov:
 
     def test_custom_metric_registry(self, single_fov_experiment: ExperimentStore):
         """Custom MetricRegistry should be used for computation."""
+        fov_id = single_fov_experiment._test_fov_id
         reg = MetricRegistry()
         reg.register("always_42", lambda img, mask: 42.0)
 
         measurer = Measurer(metrics=reg)
         count = measurer.measure_fov(
-            single_fov_experiment,
-            fov="fov_1",
-            condition="control",
-            channels=["GFP"],
+            single_fov_experiment, fov_id=fov_id, channels=["GFP"],
             metrics=["always_42"],
         )
         assert count == 1  # 1 cell x 1 metric
@@ -144,17 +126,17 @@ class TestMeasureCells:
 
     def test_returns_records_without_db_write(self, measure_experiment: ExperimentStore):
         """measure_cells returns records but does not write to DB."""
+        fov_id = measure_experiment._test_fov_ids["fov_1"]
         measurer = Measurer()
 
         # Get cell IDs
-        cells_df = measure_experiment.get_cells(condition="control", fov="fov_1")
+        cells_df = measure_experiment.get_cells(fov_id=fov_id)
         cell_ids = cells_df["id"].tolist()
 
         records = measurer.measure_cells(
             measure_experiment,
             cell_ids=cell_ids,
-            fov="fov_1",
-            condition="control",
+            fov_id=fov_id,
             channel="GFP",
             metrics=["mean_intensity"],
         )
@@ -166,15 +148,15 @@ class TestMeasureCells:
 
     def test_subset_of_cells(self, measure_experiment: ExperimentStore):
         """Only requested cell IDs should be measured."""
+        fov_id = measure_experiment._test_fov_ids["fov_1"]
         measurer = Measurer()
-        cells_df = measure_experiment.get_cells(condition="control", fov="fov_1")
+        cells_df = measure_experiment.get_cells(fov_id=fov_id)
         first_cell_id = cells_df["id"].iloc[0]
 
         records = measurer.measure_cells(
             measure_experiment,
             cell_ids=[first_cell_id],
-            fov="fov_1",
-            condition="control",
+            fov_id=fov_id,
             channel="GFP",
             metrics=["mean_intensity"],
         )
@@ -183,12 +165,12 @@ class TestMeasureCells:
 
     def test_nonexistent_cell_ids_returns_empty(self, measure_experiment: ExperimentStore):
         """Non-existent cell IDs should produce no records."""
+        fov_id = measure_experiment._test_fov_ids["fov_1"]
         measurer = Measurer()
         records = measurer.measure_cells(
             measure_experiment,
             cell_ids=[999999],
-            fov="fov_1",
-            condition="control",
+            fov_id=fov_id,
             channel="GFP",
         )
         assert records == []
@@ -206,24 +188,24 @@ class TestMeasureFovMasked:
         Cell 2 at (40:60, 40:60) is fully outside the mask.
         """
         store = measure_experiment
+        fov_id = store._test_fov_ids["fov_1"]
         # Add a threshold run
         run_id = store.add_threshold_run("GFP", "manual", {"value": 50.0})
 
         # Create mask: top-left quadrant is True
         mask = np.zeros((64, 64), dtype=np.uint8)
         mask[:32, :32] = 255
-        store.write_mask("fov_1", "control", "GFP", mask, run_id)
+        store.write_mask(fov_id, "GFP", mask, run_id)
 
         return store, run_id
 
     def test_mask_inside_measures_cells(self, masked_experiment):
         """mask_inside should produce measurements for all cells."""
         store, run_id = masked_experiment
+        fov_id = store._test_fov_ids["fov_1"]
         measurer = Measurer()
         count = measurer.measure_fov_masked(
-            store,
-            fov="fov_1",
-            condition="control",
+            store, fov_id=fov_id,
             channels=["GFP"],
             threshold_channel="GFP",
             threshold_run_id=run_id,
@@ -235,11 +217,10 @@ class TestMeasureFovMasked:
     def test_mask_inside_values(self, masked_experiment):
         """Cell 1 is fully inside mask, Cell 2 has 0 pixels inside mask."""
         store, run_id = masked_experiment
+        fov_id = store._test_fov_ids["fov_1"]
         measurer = Measurer()
         measurer.measure_fov_masked(
-            store,
-            fov="fov_1",
-            condition="control",
+            store, fov_id=fov_id,
             channels=["GFP"],
             threshold_channel="GFP",
             threshold_run_id=run_id,
@@ -252,19 +233,18 @@ class TestMeasureFovMasked:
         assert len(df) == 2
         # Sort by value to identify cells
         df_sorted = df.sort_values("value").reset_index(drop=True)
-        # Cell 2 is fully outside mask → 0 pixels inside → value=0.0
+        # Cell 2 is fully outside mask -> 0 pixels inside -> value=0.0
         assert df_sorted.iloc[0]["value"] == pytest.approx(0.0)
-        # Cell 1 is fully inside mask → mean_intensity = 100.0
+        # Cell 1 is fully inside mask -> mean_intensity = 100.0
         assert df_sorted.iloc[1]["value"] == pytest.approx(100.0)
 
     def test_mask_outside_values(self, masked_experiment):
         """Cell 1 has 0 pixels outside mask, Cell 2 is fully outside."""
         store, run_id = masked_experiment
+        fov_id = store._test_fov_ids["fov_1"]
         measurer = Measurer()
         measurer.measure_fov_masked(
-            store,
-            fov="fov_1",
-            condition="control",
+            store, fov_id=fov_id,
             channels=["GFP"],
             threshold_channel="GFP",
             threshold_run_id=run_id,
@@ -276,19 +256,18 @@ class TestMeasureFovMasked:
         )
         assert len(df) == 2
         df_sorted = df.sort_values("value").reset_index(drop=True)
-        # Cell 1 is fully inside mask → 0 pixels outside → value=0.0
+        # Cell 1 is fully inside mask -> 0 pixels outside -> value=0.0
         assert df_sorted.iloc[0]["value"] == pytest.approx(0.0)
-        # Cell 2 is fully outside mask → mean_intensity = 200.0
+        # Cell 2 is fully outside mask -> mean_intensity = 200.0
         assert df_sorted.iloc[1]["value"] == pytest.approx(200.0)
 
     def test_both_scopes(self, masked_experiment):
         """Both scopes should produce double the measurements."""
         store, run_id = masked_experiment
+        fov_id = store._test_fov_ids["fov_1"]
         measurer = Measurer()
         count = measurer.measure_fov_masked(
-            store,
-            fov="fov_1",
-            condition="control",
+            store, fov_id=fov_id,
             channels=["GFP"],
             threshold_channel="GFP",
             threshold_run_id=run_id,
@@ -301,11 +280,10 @@ class TestMeasureFovMasked:
     def test_zero_pixel_cells_get_zero_value(self, masked_experiment):
         """Cells with 0 pixels in the scoped mask should get value=0.0, not be skipped."""
         store, run_id = masked_experiment
+        fov_id = store._test_fov_ids["fov_1"]
         measurer = Measurer()
         measurer.measure_fov_masked(
-            store,
-            fov="fov_1",
-            condition="control",
+            store, fov_id=fov_id,
             channels=["GFP"],
             threshold_channel="GFP",
             threshold_run_id=run_id,
@@ -321,11 +299,10 @@ class TestMeasureFovMasked:
     def test_scope_stored_in_records(self, masked_experiment):
         """Records should have the correct scope value."""
         store, run_id = masked_experiment
+        fov_id = store._test_fov_ids["fov_1"]
         measurer = Measurer()
         measurer.measure_fov_masked(
-            store,
-            fov="fov_1",
-            condition="control",
+            store, fov_id=fov_id,
             channels=["GFP"],
             threshold_channel="GFP",
             threshold_run_id=run_id,
@@ -339,11 +316,10 @@ class TestMeasureFovMasked:
     def test_threshold_run_id_stored(self, masked_experiment):
         """Records should have the correct threshold_run_id."""
         store, run_id = masked_experiment
+        fov_id = store._test_fov_ids["fov_1"]
         measurer = Measurer()
         measurer.measure_fov_masked(
-            store,
-            fov="fov_1",
-            condition="control",
+            store, fov_id=fov_id,
             channels=["GFP"],
             threshold_channel="GFP",
             threshold_run_id=run_id,
@@ -356,12 +332,11 @@ class TestMeasureFovMasked:
     def test_invalid_scope_raises(self, masked_experiment):
         """Invalid scope should raise ValueError."""
         store, run_id = masked_experiment
+        fov_id = store._test_fov_ids["fov_1"]
         measurer = Measurer()
         with pytest.raises(ValueError, match="Invalid scope"):
             measurer.measure_fov_masked(
-                store,
-                fov="fov_1",
-                condition="control",
+                store, fov_id=fov_id,
                 channels=["GFP"],
                 threshold_channel="GFP",
                 threshold_run_id=run_id,

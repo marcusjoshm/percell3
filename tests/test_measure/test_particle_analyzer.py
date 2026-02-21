@@ -29,7 +29,7 @@ def particle_experiment(tmp_path: Path) -> ExperimentStore:
     store.add_channel("DAPI", role="nucleus")
     store.add_channel("GFP", role="signal")
     store.add_condition("control")
-    fov_id = store.add_fov("fov_1", "control", width=64, height=64, pixel_size_um=0.5)
+    fov_id = store.add_fov("control", width=64, height=64, pixel_size_um=0.5)
     seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
     # Label image
@@ -37,7 +37,7 @@ def particle_experiment(tmp_path: Path) -> ExperimentStore:
     labels[5:25, 5:25] = 1    # Cell 1
     labels[35:55, 35:55] = 2  # Cell 2
     labels[5:15, 40:50] = 3   # Cell 3
-    store.write_labels("fov_1", "control", labels, seg_id)
+    store.write_labels(fov_id, labels, seg_id)
 
     # Channel image: background=20, blobs=200
     image = np.full((64, 64), 20, dtype=np.uint16)
@@ -47,7 +47,7 @@ def particle_experiment(tmp_path: Path) -> ExperimentStore:
     # Cell 2: one blob
     image[40:48, 40:48] = 200 # Blob in cell 2
     # Cell 3: no bright features
-    store.write_image("fov_1", "control", "GFP", image)
+    store.write_image(fov_id, "GFP", image)
 
     # Threshold mask: pixels > 100 inside cells
     mask = np.zeros((64, 64), dtype=bool)
@@ -55,7 +55,7 @@ def particle_experiment(tmp_path: Path) -> ExperimentStore:
     mask[16:22, 16:22] = True # Blob B
     mask[40:48, 40:48] = True # Blob in cell 2
     thr_id = store.add_threshold_run(channel="GFP", method="otsu")
-    store.write_mask("fov_1", "control", "GFP", mask.astype(np.uint8), thr_id)
+    store.write_mask(fov_id, "GFP", mask.astype(np.uint8), thr_id)
 
     # Cells
     cells = [
@@ -77,7 +77,8 @@ def particle_experiment(tmp_path: Path) -> ExperimentStore:
     ]
     cell_ids = store.add_cells(cells)
 
-    # Store cell_ids and threshold_run_id as fixture data
+    # Store test data on fixture
+    store._test_fov_id = fov_id
     store._test_cell_ids = cell_ids
     store._test_thr_id = thr_id
 
@@ -88,12 +89,13 @@ def particle_experiment(tmp_path: Path) -> ExperimentStore:
 class TestParticleAnalyzer:
     def test_detects_particles(self, particle_experiment: ExperimentStore):
         store = particle_experiment
+        fov_id = store._test_fov_id
         cell_ids = store._test_cell_ids
         thr_id = store._test_thr_id
 
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
-            store, fov="fov_1", condition="control", channel="GFP",
+            store, fov_id=fov_id, channel="GFP",
             threshold_run_id=thr_id, cell_ids=cell_ids,
         )
 
@@ -104,9 +106,10 @@ class TestParticleAnalyzer:
 
     def test_particle_records(self, particle_experiment: ExperimentStore):
         store = particle_experiment
+        fov_id = store._test_fov_id
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
-            store, fov="fov_1", condition="control", channel="GFP",
+            store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
         )
 
@@ -124,9 +127,10 @@ class TestParticleAnalyzer:
 
     def test_unique_label_values(self, particle_experiment: ExperimentStore):
         store = particle_experiment
+        fov_id = store._test_fov_id
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
-            store, fov="fov_1", condition="control", channel="GFP",
+            store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
         )
 
@@ -135,9 +139,10 @@ class TestParticleAnalyzer:
 
     def test_particle_label_image(self, particle_experiment: ExperimentStore):
         store = particle_experiment
+        fov_id = store._test_fov_id
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
-            store, fov="fov_1", condition="control", channel="GFP",
+            store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
         )
 
@@ -150,9 +155,10 @@ class TestParticleAnalyzer:
 
     def test_summary_measurements(self, particle_experiment: ExperimentStore):
         store = particle_experiment
+        fov_id = store._test_fov_id
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
-            store, fov="fov_1", condition="control", channel="GFP",
+            store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
         )
 
@@ -166,10 +172,11 @@ class TestParticleAnalyzer:
     def test_cell_with_no_particles(self, particle_experiment: ExperimentStore):
         """Cell 3 has no bright features — should get particle_count=0."""
         store = particle_experiment
+        fov_id = store._test_fov_id
         cell_ids = store._test_cell_ids
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
-            store, fov="fov_1", condition="control", channel="GFP",
+            store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=cell_ids,
         )
 
@@ -182,10 +189,11 @@ class TestParticleAnalyzer:
     def test_min_area_filter(self, particle_experiment: ExperimentStore):
         """Large min_area should filter out small particles."""
         store = particle_experiment
+        fov_id = store._test_fov_id
         # Blobs are 6x6=36 and 8x8=64 pixels, so min_area=100 filters all
         analyzer = ParticleAnalyzer(min_particle_area=100)
         result = analyzer.analyze_fov(
-            store, fov="fov_1", condition="control", channel="GFP",
+            store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
         )
         assert result.total_particles == 0
@@ -193,10 +201,11 @@ class TestParticleAnalyzer:
     def test_particle_count_per_cell(self, particle_experiment: ExperimentStore):
         """Cell 1 should have 2 particles, Cell 2 should have 1."""
         store = particle_experiment
+        fov_id = store._test_fov_id
         cell_ids = store._test_cell_ids
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
-            store, fov="fov_1", condition="control", channel="GFP",
+            store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=cell_ids,
         )
 
@@ -208,10 +217,11 @@ class TestParticleAnalyzer:
     def test_coverage_fraction(self, particle_experiment: ExperimentStore):
         """particle_coverage_fraction should be total_particle_area / cell_area."""
         store = particle_experiment
+        fov_id = store._test_fov_id
         cell_ids = store._test_cell_ids
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
-            store, fov="fov_1", condition="control", channel="GFP",
+            store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=cell_ids,
         )
 
@@ -228,9 +238,10 @@ class TestParticleAnalyzer:
     def test_morphometrics(self, particle_experiment: ExperimentStore):
         """Particles should have morphometric measurements."""
         store = particle_experiment
+        fov_id = store._test_fov_id
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
-            store, fov="fov_1", condition="control", channel="GFP",
+            store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
         )
 

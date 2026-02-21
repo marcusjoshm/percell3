@@ -98,18 +98,16 @@ class BatchMeasurer:
             try:
                 count = measurer.measure_fov(
                     store,
-                    fov=fov_info.name,
-                    condition=fov_info.condition,
+                    fov_id=fov_info.id,
                     channels=channels,
                     metrics=metrics,
-                    bio_rep=fov_info.bio_rep,
                 )
                 total_measurements += count
                 fovs_processed += 1
 
                 if count == 0:
                     warnings.append(
-                        f"{fov_info.name}: 0 measurements (no cells?)"
+                        f"{fov_info.display_name}: 0 measurements (no cells?)"
                     )
 
             except Exception as exc:
@@ -117,14 +115,14 @@ class BatchMeasurer:
                     raise
                 logger.warning(
                     "Measurement failed for FOV %s: %s",
-                    fov_info.name, exc, exc_info=True,
+                    fov_info.display_name, exc, exc_info=True,
                 )
                 warnings.append(
-                    f"{fov_info.name}: measurement failed — {exc}"
+                    f"{fov_info.display_name}: measurement failed — {exc}"
                 )
 
             if progress_callback:
-                progress_callback(i + 1, total, fov_info.name)
+                progress_callback(i + 1, total, fov_info.display_name)
 
         elapsed = time.monotonic() - start
 

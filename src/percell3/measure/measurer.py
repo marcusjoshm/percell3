@@ -33,25 +33,19 @@ class Measurer:
     def measure_fov(
         self,
         store: ExperimentStore,
-        fov: str,
-        condition: str,
+        fov_id: int,
         channels: list[str],
         metrics: list[str] | None = None,
         segmentation_run_id: int | None = None,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
     ) -> int:
         """Measure all cells in a FOV across specified channels.
 
         Args:
             store: Target ExperimentStore.
-            fov: FOV name.
-            condition: Condition name.
+            fov_id: FOV database ID.
             channels: Channel names to measure.
             metrics: Metric names (default: all registered metrics).
             segmentation_run_id: Which segmentation to use (default: latest).
-            bio_rep: Biological replicate name (auto-resolved if None).
-            timepoint: Timepoint (optional).
 
         Returns:
             Number of measurements written.
@@ -65,11 +59,9 @@ class Measurer:
                 raise KeyError(f"Unknown metric {m!r}")
 
         # Get cells for this FOV
-        cells_df = store.get_cells(
-            condition=condition, bio_rep=bio_rep, fov=fov, timepoint=timepoint,
-        )
+        cells_df = store.get_cells(fov_id=fov_id)
         if cells_df.empty:
-            logger.info("No cells found in %s/%s — skipping", condition, fov)
+            logger.info("No cells found for fov_id=%d — skipping", fov_id)
             return 0
 
         # Filter by segmentation run if specified
@@ -79,13 +71,13 @@ class Measurer:
                 return 0
 
         # Read label image once
-        labels = store.read_labels(fov, condition, bio_rep=bio_rep, timepoint=timepoint)
+        labels = store.read_labels(fov_id)
 
         all_records: list[MeasurementRecord] = []
 
         for channel in channels:
             ch_info = store.get_channel(channel)
-            image = store.read_image_numpy(fov, condition, channel, bio_rep=bio_rep, timepoint=timepoint)
+            image = store.read_image_numpy(fov_id, channel)
 
             records = self._measure_cells_on_channel(
                 cells_df, labels, image, ch_info.id, metric_names,
@@ -101,31 +93,25 @@ class Measurer:
         self,
         store: ExperimentStore,
         cell_ids: list[int],
-        fov: str,
-        condition: str,
+        fov_id: int,
         channel: str,
         metrics: list[str] | None = None,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
     ) -> list[MeasurementRecord]:
         """Measure specific cells on a specific channel (preview, no DB write).
 
         Args:
             store: Target ExperimentStore.
             cell_ids: Cell IDs to measure.
-            fov: FOV name.
-            condition: Condition name.
+            fov_id: FOV database ID.
             channel: Channel name.
             metrics: Metric names (default: all).
-            bio_rep: Biological replicate name (auto-resolved if None).
-            timepoint: Timepoint (optional).
 
         Returns:
             List of MeasurementRecords (not written to DB).
         """
         metric_names = metrics or self._metrics.list_metrics()
 
-        cells_df = store.get_cells(condition=condition, bio_rep=bio_rep, fov=fov, timepoint=timepoint)
+        cells_df = store.get_cells(fov_id=fov_id)
         if cells_df.empty:
             return []
 
@@ -133,9 +119,9 @@ class Measurer:
         if cells_df.empty:
             return []
 
-        labels = store.read_labels(fov, condition, bio_rep=bio_rep, timepoint=timepoint)
+        labels = store.read_labels(fov_id)
         ch_info = store.get_channel(channel)
-        image = store.read_image_numpy(fov, condition, channel, bio_rep=bio_rep, timepoint=timepoint)
+        image = store.read_image_numpy(fov_id, channel)
 
         return self._measure_cells_on_channel(
             cells_df, labels, image, ch_info.id, metric_names,
@@ -144,15 +130,12 @@ class Measurer:
     def measure_fov_masked(
         self,
         store: ExperimentStore,
-        fov: str,
-        condition: str,
+        fov_id: int,
         channels: list[str],
         threshold_channel: str,
         threshold_run_id: int,
         scopes: list[str],
         metrics: list[str] | None = None,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
     ) -> int:
         """Measure cells using a threshold mask to define inside/outside regions.
 
@@ -163,15 +146,12 @@ class Measurer:
 
         Args:
             store: Target ExperimentStore.
-            fov: FOV name.
-            condition: Condition name.
+            fov_id: FOV database ID.
             channels: Channel names to measure.
             threshold_channel: Channel whose threshold mask to use.
             threshold_run_id: ID of the threshold run that produced the mask.
             scopes: Subset of ['mask_inside', 'mask_outside'].
             metrics: Metric names (default: all registered metrics).
-            bio_rep: Biological replicate name (auto-resolved if None).
-            timepoint: Timepoint (optional).
 
         Returns:
             Number of measurements written.
@@ -186,17 +166,13 @@ class Measurer:
             if s not in valid_scopes:
                 raise ValueError(f"Invalid scope {s!r}, must be one of {valid_scopes}")
 
-        cells_df = store.get_cells(
-            condition=condition, bio_rep=bio_rep, fov=fov, timepoint=timepoint,
-        )
+        cells_df = store.get_cells(fov_id=fov_id)
         if cells_df.empty:
-            logger.info("No cells found in %s/%s — skipping", condition, fov)
+            logger.info("No cells found for fov_id=%d — skipping", fov_id)
             return 0
 
-        labels = store.read_labels(fov, condition, bio_rep=bio_rep, timepoint=timepoint)
-        thresh_mask = store.read_mask(
-            fov, condition, threshold_channel, bio_rep=bio_rep, timepoint=timepoint,
-        )
+        labels = store.read_labels(fov_id)
+        thresh_mask = store.read_mask(fov_id, threshold_channel)
         # Normalize mask to boolean (stored as uint8 0/255)
         thresh_bool = thresh_mask > 0
 
@@ -204,9 +180,7 @@ class Measurer:
 
         for channel in channels:
             ch_info = store.get_channel(channel)
-            image = store.read_image_numpy(
-                fov, condition, channel, bio_rep=bio_rep, timepoint=timepoint,
-            )
+            image = store.read_image_numpy(fov_id, channel)
 
             for _, cell in cells_df.iterrows():
                 cell_id = int(cell["id"])

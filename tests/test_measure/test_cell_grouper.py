@@ -23,7 +23,7 @@ def grouper_experiment(tmp_path: Path) -> ExperimentStore:
     store.add_channel("DAPI", role="nucleus")
     store.add_channel("GFP", role="signal")
     store.add_condition("control")
-    fov_id = store.add_fov("fov_1", "control", width=256, height=256)
+    fov_id = store.add_fov("control", width=256, height=256)
     seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
     # 30 cells with bimodal mean_intensity: 15 low (~50), 15 high (~200)
@@ -51,6 +51,7 @@ def grouper_experiment(tmp_path: Path) -> ExperimentStore:
         ))
     store.add_measurements(measurements)
 
+    store._test_fov_id = fov_id
     yield store
     store.close()
 
@@ -62,7 +63,7 @@ def few_cells_experiment(tmp_path: Path) -> ExperimentStore:
     store.add_channel("DAPI")
     store.add_channel("GFP")
     store.add_condition("control")
-    fov_id = store.add_fov("fov_1", "control", width=64, height=64)
+    fov_id = store.add_fov("control", width=64, height=64)
     seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
 
     cells = [
@@ -86,6 +87,7 @@ def few_cells_experiment(tmp_path: Path) -> ExperimentStore:
     ]
     store.add_measurements(measurements)
 
+    store._test_fov_id = fov_id
     yield store
     store.close()
 
@@ -93,9 +95,10 @@ def few_cells_experiment(tmp_path: Path) -> ExperimentStore:
 class TestCellGrouper:
     def test_bimodal_finds_two_groups(self, grouper_experiment: ExperimentStore):
         """With a clearly bimodal distribution, GMM should find 2 groups."""
+        fov_id = grouper_experiment._test_fov_id
         grouper = CellGrouper()
         result = grouper.group_cells(
-            grouper_experiment, fov="fov_1", condition="control",
+            grouper_experiment, fov_id=fov_id,
             channel="GFP", metric="mean_intensity",
         )
         assert isinstance(result, GroupingResult)
@@ -108,9 +111,10 @@ class TestCellGrouper:
 
     def test_cells_tagged(self, grouper_experiment: ExperimentStore):
         """Cells should be tagged with their group assignment."""
+        fov_id = grouper_experiment._test_fov_id
         grouper = CellGrouper()
         result = grouper.group_cells(
-            grouper_experiment, fov="fov_1", condition="control",
+            grouper_experiment, fov_id=fov_id,
             channel="GFP", metric="mean_intensity",
         )
         # Check that cells are tagged
@@ -122,9 +126,10 @@ class TestCellGrouper:
 
     def test_all_cells_assigned(self, grouper_experiment: ExperimentStore):
         """Every cell should be in exactly one group."""
+        fov_id = grouper_experiment._test_fov_id
         grouper = CellGrouper()
         result = grouper.group_cells(
-            grouper_experiment, fov="fov_1", condition="control",
+            grouper_experiment, fov_id=fov_id,
             channel="GFP", metric="mean_intensity",
         )
         total_tagged = 0
@@ -133,14 +138,15 @@ class TestCellGrouper:
                 condition="control", tags=[tag_name],
             )
             total_tagged += len(tagged)
-        total_cells = len(grouper_experiment.get_cells(condition="control"))
+        total_cells = len(grouper_experiment.get_cells(fov_id=fov_id))
         assert total_tagged == total_cells
 
     def test_few_cells_single_group(self, few_cells_experiment: ExperimentStore):
         """With fewer than MIN_CELLS_FOR_GMM, should use single group."""
+        fov_id = few_cells_experiment._test_fov_id
         grouper = CellGrouper()
         result = grouper.group_cells(
-            few_cells_experiment, fov="fov_1", condition="control",
+            few_cells_experiment, fov_id=fov_id,
             channel="GFP", metric="mean_intensity",
         )
         assert result.n_groups == 1
@@ -149,9 +155,10 @@ class TestCellGrouper:
 
     def test_area_metric_from_cells_table(self, grouper_experiment: ExperimentStore):
         """area_pixels metric should work without explicit measurements."""
+        fov_id = grouper_experiment._test_fov_id
         grouper = CellGrouper()
         result = grouper.group_cells(
-            grouper_experiment, fov="fov_1", condition="control",
+            grouper_experiment, fov_id=fov_id,
             channel="GFP", metric="area_pixels",
         )
         assert result.n_groups >= 1
@@ -162,12 +169,12 @@ class TestCellGrouper:
         store = ExperimentStore.create(tmp_path / "empty.percell")
         store.add_channel("GFP")
         store.add_condition("control")
-        store.add_fov("fov_1", "control", width=64, height=64)
+        fov_id = store.add_fov("control", width=64, height=64)
 
         grouper = CellGrouper()
         with pytest.raises(ValueError, match="No cells found"):
             grouper.group_cells(
-                store, fov="fov_1", condition="control",
+                store, fov_id=fov_id,
                 channel="GFP", metric="mean_intensity",
             )
         store.close()
@@ -178,7 +185,7 @@ class TestCellGrouper:
         store.add_channel("DAPI")
         store.add_channel("GFP")
         store.add_condition("control")
-        fov_id = store.add_fov("fov_1", "control", width=64, height=64)
+        fov_id = store.add_fov("control", width=64, height=64)
         seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
         store.add_cells([CellRecord(
             fov_id=fov_id, segmentation_id=seg_id, label_value=1,
@@ -190,22 +197,23 @@ class TestCellGrouper:
         grouper = CellGrouper()
         with pytest.raises(ValueError, match="No measurements"):
             grouper.group_cells(
-                store, fov="fov_1", condition="control",
+                store, fov_id=fov_id,
                 channel="GFP", metric="mean_intensity",
             )
         store.close()
 
     def test_regrouping_cleans_old_tags(self, grouper_experiment: ExperimentStore):
         """Re-grouping should remove old group tags before assigning new ones."""
+        fov_id = grouper_experiment._test_fov_id
         grouper = CellGrouper()
         # First grouping
         result1 = grouper.group_cells(
-            grouper_experiment, fov="fov_1", condition="control",
+            grouper_experiment, fov_id=fov_id,
             channel="GFP", metric="mean_intensity",
         )
         # Second grouping (same params)
         result2 = grouper.group_cells(
-            grouper_experiment, fov="fov_1", condition="control",
+            grouper_experiment, fov_id=fov_id,
             channel="GFP", metric="mean_intensity",
         )
         # All cells should still be in exactly one group
@@ -215,23 +223,25 @@ class TestCellGrouper:
                 condition="control", tags=[tag_name],
             )
             total_tagged += len(tagged)
-        total_cells = len(grouper_experiment.get_cells(condition="control"))
+        total_cells = len(grouper_experiment.get_cells(fov_id=fov_id))
         assert total_tagged == total_cells
 
     def test_bic_scores_populated(self, grouper_experiment: ExperimentStore):
         """BIC scores should be populated for GMM fitting."""
+        fov_id = grouper_experiment._test_fov_id
         grouper = CellGrouper()
         result = grouper.group_cells(
-            grouper_experiment, fov="fov_1", condition="control",
+            grouper_experiment, fov_id=fov_id,
             channel="GFP", metric="mean_intensity",
         )
         assert len(result.bic_scores) > 0
 
     def test_group_labels_match_cell_ids(self, grouper_experiment: ExperimentStore):
         """group_labels array length should match cell_ids length."""
+        fov_id = grouper_experiment._test_fov_id
         grouper = CellGrouper()
         result = grouper.group_cells(
-            grouper_experiment, fov="fov_1", condition="control",
+            grouper_experiment, fov_id=fov_id,
             channel="GFP", metric="mean_intensity",
         )
         assert len(result.group_labels) == len(result.cell_ids)

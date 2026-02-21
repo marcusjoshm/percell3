@@ -17,12 +17,14 @@ def measure_experiment(tmp_path: Path) -> ExperimentStore:
 
     Layout:
         - Condition: "control"
-        - FOVs: "fov_1" (64x64), "fov_2" (64x64)
+        - FOVs: 2 FOVs (64x64)
         - Channels: "DAPI" (segmentation), "GFP" (measurement)
         - Each FOV has a label image with 2 cells and corresponding cell records.
 
     Cell 1: label=1, bbox (10,10,20,20) — filled with value 100 in GFP
     Cell 2: label=2, bbox (40,40,20,20) — filled with value 200 in GFP
+
+    Access fov_ids via store._test_fov_ids dict (keyed "fov_1", "fov_2").
     """
     store = ExperimentStore.create(tmp_path / "test.percell")
     store.add_channel("DAPI", role="segmentation")
@@ -31,32 +33,30 @@ def measure_experiment(tmp_path: Path) -> ExperimentStore:
 
     seg_run_id = store.add_segmentation_run("DAPI", "mock", {"diameter": 30.0})
 
-    for fov_name in ("fov_1", "fov_2"):
-        store.add_fov(fov_name, "control", width=64, height=64, pixel_size_um=0.65)
+    fov_ids = {}
+    for key in ("fov_1", "fov_2"):
+        fov_id = store.add_fov("control", width=64, height=64, pixel_size_um=0.65)
+        fov_ids[key] = fov_id
 
         # DAPI image — uniform background
         dapi = np.full((64, 64), 50, dtype=np.uint16)
-        store.write_image(fov_name, "control", "DAPI", dapi)
+        store.write_image(fov_id, "DAPI", dapi)
 
         # GFP image — cells have distinct intensities
         gfp = np.zeros((64, 64), dtype=np.uint16)
         gfp[10:30, 10:30] = 100  # Cell 1 region
         gfp[40:60, 40:60] = 200  # Cell 2 region
-        store.write_image(fov_name, "control", "GFP", gfp)
+        store.write_image(fov_id, "GFP", gfp)
 
         # Label image — 2 cells
         labels = np.zeros((64, 64), dtype=np.int32)
         labels[10:30, 10:30] = 1
         labels[40:60, 40:60] = 2
-        store.write_labels(fov_name, "control", labels, seg_run_id)
-
-        # Get FOV info for cell records
-        fovs = store.get_fovs(condition="control")
-        fov_info = [f for f in fovs if f.name == fov_name][0]
+        store.write_labels(fov_id, labels, seg_run_id)
 
         cells = [
             CellRecord(
-                fov_id=fov_info.id,
+                fov_id=fov_id,
                 segmentation_id=seg_run_id,
                 label_value=1,
                 centroid_x=20.0, centroid_y=20.0,
@@ -64,7 +64,7 @@ def measure_experiment(tmp_path: Path) -> ExperimentStore:
                 area_pixels=400.0,
             ),
             CellRecord(
-                fov_id=fov_info.id,
+                fov_id=fov_id,
                 segmentation_id=seg_run_id,
                 label_value=2,
                 centroid_x=50.0, centroid_y=50.0,
@@ -74,6 +74,7 @@ def measure_experiment(tmp_path: Path) -> ExperimentStore:
         ]
         store.add_cells(cells)
 
+    store._test_fov_ids = fov_ids
     yield store
     store.close()
 
@@ -84,23 +85,22 @@ def single_fov_experiment(tmp_path: Path) -> ExperimentStore:
     store = ExperimentStore.create(tmp_path / "test.percell")
     store.add_channel("GFP")
     store.add_condition("control")
-    store.add_fov("fov_1", "control", width=32, height=32)
+    fov_id = store.add_fov("control", width=32, height=32)
 
     # Image: known pattern — cell area has value 10
     image = np.zeros((32, 32), dtype=np.uint16)
     image[5:15, 5:15] = 10
-    store.write_image("fov_1", "control", "GFP", image)
+    store.write_image(fov_id, "GFP", image)
 
     # Labels
     seg_run_id = store.add_segmentation_run("GFP", "mock", {})
     labels = np.zeros((32, 32), dtype=np.int32)
     labels[5:15, 5:15] = 1
-    store.write_labels("fov_1", "control", labels, seg_run_id)
+    store.write_labels(fov_id, labels, seg_run_id)
 
     # Cell
-    fovs = store.get_fovs(condition="control")
     cell = CellRecord(
-        fov_id=fovs[0].id,
+        fov_id=fov_id,
         segmentation_id=seg_run_id,
         label_value=1,
         centroid_x=10.0, centroid_y=10.0,
@@ -109,5 +109,6 @@ def single_fov_experiment(tmp_path: Path) -> ExperimentStore:
     )
     store.add_cells([cell])
 
+    store._test_fov_id = fov_id
     yield store
     store.close()

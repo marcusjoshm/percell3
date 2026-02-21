@@ -41,25 +41,19 @@ class ThresholdEngine:
     def threshold_fov(
         self,
         store: ExperimentStore,
-        fov: str,
-        condition: str,
+        fov_id: int,
         channel: str,
         method: str = "otsu",
         manual_value: float | None = None,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
     ) -> ThresholdResult:
         """Apply thresholding to a channel image in a FOV.
 
         Args:
             store: Target ExperimentStore.
-            fov: FOV name.
-            condition: Condition name.
+            fov_id: FOV database ID.
             channel: Channel name to threshold.
             method: Thresholding method ("otsu", "adaptive", "manual", "triangle", "li").
             manual_value: Threshold value (required when method="manual").
-            bio_rep: Biological replicate name (auto-resolved if None).
-            timepoint: Timepoint (optional).
 
         Returns:
             ThresholdResult with threshold value and statistics.
@@ -76,7 +70,7 @@ class ThresholdEngine:
             raise ValueError("manual_value is required when method='manual'")
 
         # Read channel image
-        image = store.read_image_numpy(fov, condition, channel, bio_rep=bio_rep, timepoint=timepoint)
+        image = store.read_image_numpy(fov_id, channel)
 
         # Compute threshold
         threshold_value = self._compute_threshold(image, method, manual_value)
@@ -94,7 +88,7 @@ class ThresholdEngine:
         run_id = store.add_threshold_run(channel, method, parameters)
 
         # Write mask to masks.zarr
-        store.write_mask(fov, condition, channel, mask.astype(np.uint8), run_id, bio_rep=bio_rep, timepoint=timepoint)
+        store.write_mask(fov_id, channel, mask.astype(np.uint8), run_id)
 
         # Statistics
         positive_pixels = int(np.sum(mask))
@@ -112,8 +106,7 @@ class ThresholdEngine:
     def threshold_group(
         self,
         store: ExperimentStore,
-        fov: str,
-        condition: str,
+        fov_id: int,
         channel: str,
         cell_ids: list[int],
         labels: np.ndarray,
@@ -121,8 +114,6 @@ class ThresholdEngine:
         threshold_value: float,
         roi: list[tuple[int, int, int, int]] | None = None,
         group_tag: str | None = None,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
     ) -> ThresholdResult:
         """Store a threshold result for a group of cells.
 
@@ -132,8 +123,7 @@ class ThresholdEngine:
 
         Args:
             store: Target ExperimentStore.
-            fov: FOV name.
-            condition: Condition name.
+            fov_id: FOV database ID.
             channel: Channel name that was thresholded.
             cell_ids: Cell IDs in this group.
             labels: 2D label image (full FOV).
@@ -141,8 +131,6 @@ class ThresholdEngine:
             threshold_value: Otsu (or manually adjusted) threshold value.
             roi: Optional ROI rectangles used for Otsu computation.
             group_tag: Tag name for this group (stored in parameters).
-            bio_rep: Biological replicate name.
-            timepoint: Timepoint.
 
         Returns:
             ThresholdResult with run ID and statistics.
@@ -150,7 +138,7 @@ class ThresholdEngine:
         from percell3.measure.threshold_viewer import create_group_image
 
         # Get label values for the group cells
-        cells_df = store.get_cells(condition=condition, bio_rep=bio_rep, fov=fov)
+        cells_df = store.get_cells(fov_id=fov_id)
         group_cells = cells_df[cells_df["id"].isin(cell_ids)]
         label_values = group_cells["label_value"].tolist()
 
@@ -160,11 +148,12 @@ class ThresholdEngine:
         mask = (group_image > threshold_value) & cell_mask
 
         # Record threshold run with parameters
+        fov_info = store.get_fov_by_id(fov_id)
         parameters = {
             "method": "otsu",
             "threshold_value": float(threshold_value),
-            "fov_name": fov,
-            "condition": condition,
+            "fov_name": fov_info.display_name,
+            "condition": fov_info.condition,
         }
         if roi:
             parameters["roi"] = [list(r) for r in roi]
@@ -174,10 +163,7 @@ class ThresholdEngine:
         run_id = store.add_threshold_run(channel, "otsu", parameters)
 
         # Write mask
-        store.write_mask(
-            fov, condition, channel, mask.astype(np.uint8),
-            run_id, bio_rep=bio_rep, timepoint=timepoint,
-        )
+        store.write_mask(fov_id, channel, mask.astype(np.uint8), run_id)
 
         # Statistics
         positive_pixels = int(np.sum(mask))

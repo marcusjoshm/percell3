@@ -64,7 +64,7 @@ class TestBatchMeasurer:
         """Empty channel list should raise ValueError."""
         store = ExperimentStore.create(tmp_path / "empty.percell")
         store.add_condition("control")
-        store.add_fov("fov_1", "control", width=32, height=32)
+        store.add_fov("control", width=32, height=32)
 
         batch = BatchMeasurer()
         with pytest.raises(ValueError, match="No channels"):
@@ -90,9 +90,9 @@ class TestBatchMeasurer:
         store.add_condition("treated")
 
         for cond in ("control", "treated"):
-            store.add_fov("fov_1", cond, width=32, height=32)
+            fov_id = store.add_fov(cond, width=32, height=32)
             image = np.full((32, 32), 100, dtype=np.uint16)
-            store.write_image("fov_1", cond, "GFP", image)
+            store.write_image(fov_id, "GFP", image)
 
         batch = BatchMeasurer()
         # No cells exist, so we expect 0 measurements but no error
@@ -108,9 +108,9 @@ class TestBatchMeasurer:
         store = ExperimentStore.create(tmp_path / "warn.percell")
         store.add_channel("GFP")
         store.add_condition("control")
-        store.add_fov("fov_1", "control", width=32, height=32)
+        fov_id = store.add_fov("control", width=32, height=32)
         image = np.zeros((32, 32), dtype=np.uint16)
-        store.write_image("fov_1", "control", "GFP", image)
+        store.write_image(fov_id, "GFP", image)
 
         batch = BatchMeasurer()
         result = batch.measure_experiment(store)

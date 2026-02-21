@@ -43,22 +43,18 @@ class CellGrouper:
     def group_cells(
         self,
         store: ExperimentStore,
-        fov: str,
-        condition: str,
+        fov_id: int,
         channel: str,
         metric: str,
-        bio_rep: str | None = None,
         max_components: int = 10,
     ) -> GroupingResult:
         """Group cells in a FOV by metric value using GMM with BIC.
 
         Args:
             store: Target ExperimentStore.
-            fov: FOV name.
-            condition: Condition name.
+            fov_id: FOV database ID.
             channel: Channel name for grouping metric.
             metric: Metric name (e.g., "mean_intensity", "area_pixels").
-            bio_rep: Biological replicate (auto-resolved if None).
             max_components: Maximum GMM components to test.
 
         Returns:
@@ -68,9 +64,9 @@ class CellGrouper:
             ValueError: If no cells found or metric not measured.
         """
         # 1. Get cells for this FOV
-        cells_df = store.get_cells(condition=condition, bio_rep=bio_rep, fov=fov)
+        cells_df = store.get_cells(fov_id=fov_id)
         if cells_df.empty:
-            raise ValueError(f"No cells found in {condition}/{fov}")
+            raise ValueError(f"No cells found for fov_id={fov_id}")
 
         cell_ids = cells_df["id"].tolist()
 
@@ -85,8 +81,8 @@ class CellGrouper:
 
         if len(cell_ids) < MIN_CELLS_FOR_GMM:
             logger.warning(
-                "Only %d cells in %s/%s — using single group (need %d for GMM)",
-                len(cell_ids), condition, fov, MIN_CELLS_FOR_GMM,
+                "Only %d cells in fov_id=%d — using single group (need %d for GMM)",
+                len(cell_ids), fov_id, MIN_CELLS_FOR_GMM,
             )
             result = self._single_group(cell_ids, values, tag_prefix)
         else:
