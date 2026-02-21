@@ -73,9 +73,9 @@ class TestEndToEnd:
 
             fovs = store.get_fovs(condition="control")
             assert len(fovs) == 1
-            assert fovs[0].name == "Well_A1"
+            assert fovs[0].display_name == "control_N1_Well_A1"
 
-            img = store.read_image_numpy("Well_A1", "control", "DAPI")
+            img = store.read_image_numpy(fovs[0].id, "DAPI")
             np.testing.assert_array_equal(img, dapi)
 
     def test_scan_plan_yaml_round_trip_execute(self, tmp_path):
@@ -108,7 +108,9 @@ class TestEndToEnd:
             assert result.fovs_imported == 1
             assert result.images_written == 1
 
-            img = store.read_image_numpy("FOV1", "treated", "DAPI")
+            fovs = store.get_fovs(condition="treated")
+            assert len(fovs) == 1
+            img = store.read_image_numpy(fovs[0].id, "DAPI")
             np.testing.assert_array_equal(img, data)
 
 

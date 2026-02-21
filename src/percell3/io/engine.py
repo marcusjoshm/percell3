@@ -136,20 +136,20 @@ class ImportEngine:
             else:
                 bio_rep = default_bio_rep
 
-            if progress_callback:
-                progress_callback(idx + 1, total_fovs, fov_name)
+            # Build globally unique display_name
+            display_name = f"{condition}_{bio_rep}_{fov_name}"
 
-            # Check existing FOVs (cached per condition+bio_rep)
-            cache_key = f"{condition}:{bio_rep}"
-            if cache_key not in _existing_cache:
-                _existing_cache[cache_key] = {
-                    f.name for f in store.get_fovs(
-                        condition=condition, bio_rep=bio_rep,
-                    )
+            if progress_callback:
+                progress_callback(idx + 1, total_fovs, display_name)
+
+            # Check existing FOVs (cached globally by display_name)
+            if not _existing_cache:
+                _existing_cache["_all"] = {
+                    f.display_name for f in store.get_fovs()
                 }
 
-            if fov_name in _existing_cache[cache_key]:
-                warnings.append(f"FOV '{fov_name}' already exists in '{condition}', skipping")
+            if display_name in _existing_cache.get("_all", set()):
+                warnings.append(f"FOV '{display_name}' already exists, skipping")
                 skipped += 1
                 continue
 
@@ -161,16 +161,16 @@ class ImportEngine:
             h, w = first_file.shape[:2]
 
             # Register FOV
-            store.add_fov(
-                fov_name,
+            fov_id = store.add_fov(
                 condition,
                 bio_rep=bio_rep,
+                display_name=display_name,
                 width=w,
                 height=h,
                 pixel_size_um=pixel_size,
                 source_file=str(first_file.path),
             )
-            _existing_cache[cache_key].add(fov_name)
+            _existing_cache.setdefault("_all", set()).add(display_name)
 
             # Write each channel
             for ch_token, ch_files in sorted(channel_files.items()):
@@ -188,7 +188,7 @@ class ImportEngine:
                         # Multi-page TIFF — apply projection
                         data = _project_array(data, plan.z_transform)
 
-                store.write_image(fov_name, condition, ch_name, data, bio_rep=bio_rep)
+                store.write_image(fov_id, ch_name, data)
                 images_written += 1
 
             fovs_imported += 1

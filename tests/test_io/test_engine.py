@@ -56,7 +56,8 @@ class TestSingleChannelImport:
             assert result.images_written == 1
 
             # Verify data round-trips
-            img = store.read_image_numpy("FOV1", "control", "DAPI")
+            fov = store.get_fovs(condition="control")[0]
+            img = store.read_image_numpy(fov.id, "DAPI")
             np.testing.assert_array_equal(img, data)
 
 
@@ -88,8 +89,9 @@ class TestMultiChannelImport:
             assert result.channels_registered == 2
             assert result.images_written == 2
 
-            img_dapi = store.read_image_numpy("FOV1", "control", "DAPI")
-            img_gfp = store.read_image_numpy("FOV1", "control", "GFP")
+            fov = store.get_fovs(condition="control")[0]
+            img_dapi = store.read_image_numpy(fov.id, "DAPI")
+            img_gfp = store.read_image_numpy(fov.id, "GFP")
             np.testing.assert_array_equal(img_dapi, dapi)
             np.testing.assert_array_equal(img_gfp, gfp)
 
@@ -144,7 +146,8 @@ class TestZProjectionImport:
             result = engine.execute(plan, store)
 
             assert result.images_written == 1
-            img = store.read_image_numpy("FOV1", "control", "DAPI")
+            fov = store.get_fovs(condition="control")[0]
+            img = store.read_image_numpy(fov.id, "DAPI")
             assert img[0, 0] == 50  # max of 10, 50, 30
 
 
@@ -193,7 +196,7 @@ class TestFOVRenaming:
 
             fovs = store.get_fovs(condition="control")
             assert len(fovs) == 1
-            assert fovs[0].name == "Well_A1"
+            assert fovs[0].display_name == "control_N1_Well_A1"
 
 
 class TestIncrementalImport:
@@ -245,7 +248,7 @@ class TestProgressCallback:
             engine.execute(plan, store, progress_callback=lambda c, t, n: calls.append((c, t, n)))
 
             assert len(calls) == 1
-            assert calls[0] == (1, 1, "FOV1")
+            assert calls[0] == (1, 1, "control_N1_FOV1")
 
 
 class TestMultiConditionImport:
@@ -286,8 +289,8 @@ class TestMultiConditionImport:
             fovs_treated = store.get_fovs(condition="treated")
             assert len(fovs_ctrl) == 1
             assert len(fovs_treated) == 1
-            assert fovs_ctrl[0].name == "s00"
-            assert fovs_treated[0].name == "s00"
+            assert fovs_ctrl[0].display_name == "ctrl_N1_s00"
+            assert fovs_treated[0].display_name == "treated_N1_s00"
 
     def test_condition_map_empty_uses_fallback(self, tmp_path):
         """When condition_map is empty, single condition field is used."""
