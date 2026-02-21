@@ -41,11 +41,11 @@ def experiment_with_data(experiment: ExperimentStore) -> ExperimentStore:
     experiment.add_channel("GFP")
     experiment.add_condition("control")
     data = np.zeros((64, 64), dtype=np.uint16)
-    experiment.add_fov(
-        "fov1", "control", width=64, height=64, pixel_size_um=0.65,
+    fov_id = experiment.add_fov(
+        "control", width=64, height=64, pixel_size_um=0.65,
     )
-    experiment.write_image("fov1", "control", "DAPI", data)
-    experiment.write_image("fov1", "control", "GFP", data)
+    experiment.write_image(fov_id, "DAPI", data)
+    experiment.write_image(fov_id, "GFP", data)
     return experiment
 
 
@@ -160,7 +160,7 @@ def experiment_with_particle_images(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP")
 
     store.add_condition("control")
-    fov_id = store.add_fov("fov1", "control", width=64, height=64, pixel_size_um=0.5)
+    fov_id = store.add_fov("control", width=64, height=64, pixel_size_um=0.5)
 
     # Write channel images with distinct intensities
     dapi_img = np.full((64, 64), 50, dtype=np.uint16)
@@ -168,21 +168,21 @@ def experiment_with_particle_images(tmp_path: Path) -> ExperimentStore:
     # Bright spot in cell 1 region for particle
     dapi_img[18:26, 8:16] = 200
     gfp_img[18:26, 8:16] = 150
-    store.write_image("fov1", "control", "DAPI", dapi_img)
-    store.write_image("fov1", "control", "GFP", gfp_img)
+    store.write_image(fov_id, "DAPI", dapi_img)
+    store.write_image(fov_id, "GFP", gfp_img)
 
     # Label image
     labels = np.zeros((64, 64), dtype=np.int32)
     labels[15:30, 5:20] = 1
     labels[30:45, 20:35] = 2
     seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
-    store.write_labels("fov1", "control", labels, seg_id)
+    store.write_labels(fov_id, labels, seg_id)
 
     # Threshold mask — only the bright spot
     mask = np.zeros((64, 64), dtype=np.uint8)
     mask[18:26, 8:16] = 1
     thr_id = store.add_threshold_run(channel="GFP", method="otsu")
-    store.write_mask("fov1", "control", "GFP", mask, thr_id)
+    store.write_mask(fov_id, "GFP", mask, thr_id)
 
     # Cells
     cells = [

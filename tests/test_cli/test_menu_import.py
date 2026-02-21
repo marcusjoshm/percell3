@@ -132,8 +132,8 @@ class TestNextFovNumber:
         with ExperimentStore.create(tmp_path / "test.percell") as store:
             store.add_condition("ctrl")
             data = np.zeros((32, 32), dtype=np.uint16)
-            store.add_fov("FOV_001", "ctrl", bio_rep="N1", width=32, height=32)
-            store.add_fov("FOV_002", "ctrl", bio_rep="N1", width=32, height=32)
+            store.add_fov("ctrl", bio_rep="N1", display_name="ctrl_N1_FOV_001", width=32, height=32)
+            store.add_fov("ctrl", bio_rep="N1", display_name="ctrl_N1_FOV_002", width=32, height=32)
             num = next_fov_number(store, "ctrl", "N1")
             assert num == 3
 
@@ -205,8 +205,8 @@ class TestPromptBioRepForAssignment:
         with ExperimentStore.create(tmp_path / "test.percell") as store:
             store.add_condition("ctrl")
             data = np.zeros((32, 32), dtype=np.uint16)
-            store.add_fov("fov1", "ctrl", bio_rep="N1", width=32, height=32)
-            store.add_fov("fov2", "ctrl", bio_rep="N2", width=32, height=32)
+            store.add_fov("ctrl", bio_rep="N1", display_name="ctrl_N1_fov1", width=32, height=32)
+            store.add_fov("ctrl", bio_rep="N2", display_name="ctrl_N2_fov2", width=32, height=32)
             # Pick "N1" (item 1)
             with patch.object(console, "input", return_value="1"):
                 result = _prompt_bio_rep_for_assignment(store, "ctrl")

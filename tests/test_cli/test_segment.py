@@ -122,6 +122,7 @@ class TestSegmentCommand:
         """--fovs filter should be parsed as comma-separated."""
         store = experiment_with_data
         exp_path = str(store.path)
+        fov_name = store.get_fovs()[0].display_name
 
         with patch(
             "percell3.segment.cellpose_adapter.CellposeAdapter",
@@ -129,7 +130,7 @@ class TestSegmentCommand:
         ):
             result = runner.invoke(cli, [
                 "segment", "-e", exp_path, "-c", "DAPI",
-                "--fovs", "fov1",
+                "--fovs", fov_name,
             ])
 
         assert result.exit_code == 0, result.output

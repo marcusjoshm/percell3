@@ -54,7 +54,7 @@ class TestQueryFovs:
         exp_path = str(experiment_with_data.path)
         result = runner.invoke(cli, ["query", "-e", exp_path, "fovs"])
         assert result.exit_code == 0
-        assert "fov1" in result.output
+        assert "control_N1_FOV_001" in result.output
         assert "control" in result.output
 
     def test_fovs_with_condition_filter(
@@ -65,7 +65,7 @@ class TestQueryFovs:
             cli, ["query", "-e", exp_path, "fovs", "--condition", "control"]
         )
         assert result.exit_code == 0
-        assert "fov1" in result.output
+        assert "control_N1_FOV_001" in result.output
 
     def test_fovs_empty(
         self, runner: CliRunner, experiment_path: Path,

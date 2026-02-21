@@ -581,7 +581,7 @@ def _prompt_condition_for_assignment(store: ExperimentStore) -> str:
 
 def _prompt_bio_rep_for_assignment(store: ExperimentStore, condition: str) -> str:
     """Prompt for bio rep, showing existing bio reps for the chosen condition."""
-    existing = store.get_bio_reps(condition=condition)
+    existing = store.get_bio_reps()
     if existing:
         options = existing + ["(new bio rep)"]
         console.print(f"\n[bold]Bio reps for '{condition}':[/bold]")
@@ -689,7 +689,7 @@ def _show_fov_status_table(
         shape = f"{f.width} x {f.height}" if f.width and f.height else "-"
         table.add_row(
             str(i),
-            f.name,
+            f.display_name,
             f.condition,
             f.bio_rep,
             shape,
@@ -772,7 +772,7 @@ def _segment_cells(state: MenuState) -> None:
     _show_fov_status_table(all_fovs, seg_summary)
 
     if len(all_fovs) == 1:
-        console.print(f"  [dim](auto-selected: {all_fovs[0].name})[/dim]")
+        console.print(f"  [dim](auto-selected: {all_fovs[0].display_name})[/dim]")
         selected_fovs = all_fovs
     else:
         selected_fovs = _select_fovs_from_table(all_fovs)
@@ -796,7 +796,7 @@ def _segment_cells(state: MenuState) -> None:
         )
         for f in reseg_fovs[:5]:
             count = seg_summary[f.id][0]
-            console.print(f"    - {f.name}/{f.condition} ({count} cells)")
+            console.print(f"    - {f.display_name} ({count} cells)")
         if len(reseg_fovs) > 5:
             console.print(f"    ... and {len(reseg_fovs) - 5} more")
 
@@ -808,7 +808,7 @@ def _segment_cells(state: MenuState) -> None:
     from percell3.segment import SegmentationEngine
 
     engine = SegmentationEngine()
-    fov_names = [f.name for f in selected_fovs]
+    fov_names = [f.display_name for f in selected_fovs]
 
     with make_progress() as progress:
         task = progress.add_task("Segmenting...", total=None)
@@ -858,15 +858,13 @@ def _segment_cells(state: MenuState) -> None:
                 for ai, fov_info in enumerate(selected_fovs):
                     count = auto_measurer.measure_fov(
                         store,
-                        fov=fov_info.name,
-                        condition=fov_info.condition,
+                        fov_id=fov_info.id,
                         channels=ch_names,
-                        bio_rep=fov_info.bio_rep,
                     )
                     total_auto += count
                     auto_progress.update(
                         auto_task, completed=ai + 1,
-                        description=f"Measuring {fov_info.name}",
+                        description=f"Measuring {fov_info.display_name}",
                     )
 
             n_metrics = len(_AutoMeasurer()._metrics.list_metrics())
@@ -886,35 +884,27 @@ def _view_napari(state: MenuState) -> None:
     """Launch napari to view and edit segmentation labels."""
     store = state.require_experiment()
 
-    # Select condition first (bio reps are scoped per condition)
-    conditions = store.get_conditions()
-    if not conditions:
-        console.print("[red]No conditions found.[/red] Import images first.")
+    # Show FOV table for selection
+    all_fovs = store.get_fovs()
+    if not all_fovs:
+        console.print("[red]No FOVs found.[/red] Import images first.")
         return
 
-    console.print("\n[bold]Conditions:[/bold]")
-    condition = numbered_select_one(conditions, "Condition")
+    seg_summary = store.get_fov_segmentation_summary()
+    _show_fov_status_table(all_fovs, seg_summary)
 
-    # Select biological replicate (scoped to condition)
-    bio_rep = _prompt_bio_rep(store, condition=condition)
-
-    # Select FOV
-    fovs = store.get_fovs(condition=condition, bio_rep=bio_rep)
-    if not fovs:
-        console.print(f"[red]No FOVs found for condition {condition!r}.[/red]")
-        return
-
-    fov_names = [f.name for f in fovs]
+    fov_names = [f.display_name for f in all_fovs]
     console.print(f"\n[bold]FOVs ({len(fov_names)}):[/bold]")
-    fov = numbered_select_one(fov_names, "FOV to view")
+    fov_name = numbered_select_one(fov_names, "FOV to view")
+    fov_info = next(f for f in all_fovs if f.display_name == fov_name)
 
-    console.print(f"\nOpening [cyan]{fov}[/cyan] ({condition}) in napari...")
+    console.print(f"\nOpening [cyan]{fov_name}[/cyan] in napari...")
     console.print("[dim]Close the napari window to save any label edits.[/dim]\n")
 
     from percell3.segment.viewer import launch_viewer
 
     try:
-        run_id = launch_viewer(store, fov, condition, bio_rep=bio_rep)
+        run_id = launch_viewer(store, fov_info.id)
     except ImportError as exc:
         console.print(
             f"[red]napari could not be loaded:[/red] {exc}\n"
@@ -988,7 +978,7 @@ def _measure_whole_cell(store, channels, all_fovs) -> None:
 
     _show_fov_status_table(fovs_with_cells, seg_summary)
     if len(fovs_with_cells) == 1:
-        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].name})[/dim]")
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].display_name})[/dim]")
         selected_fovs = fovs_with_cells
     else:
         selected_fovs = _select_fovs_from_table(fovs_with_cells)
@@ -1003,12 +993,7 @@ def _measure_whole_cell(store, channels, all_fovs) -> None:
         console.print("[yellow]Measurement cancelled.[/yellow]")
         return
 
-    # Run BatchMeasurer
-    from percell3.measure.batch import BatchMeasurer
-
-    batch = BatchMeasurer()
-
-    # Filter to selected FOV conditions for per-FOV measurement
+    # Run per-FOV measurement
     with make_progress() as progress:
         task = progress.add_task("Measuring...", total=len(selected_fovs))
 
@@ -1020,15 +1005,13 @@ def _measure_whole_cell(store, channels, all_fovs) -> None:
         for i, fov_info in enumerate(selected_fovs):
             count = measurer.measure_fov(
                 store,
-                fov=fov_info.name,
-                condition=fov_info.condition,
+                fov_id=fov_info.id,
                 channels=selected_channels,
-                bio_rep=fov_info.bio_rep,
             )
             total_measurements += count
             progress.update(
                 task, completed=i + 1,
-                description=f"Measuring {fov_info.name}",
+                description=f"Measuring {fov_info.display_name}",
             )
 
     console.print(f"\n[green]Measurement complete[/green]")
@@ -1075,7 +1058,7 @@ def _measure_masked(store, channels, all_fovs, scopes: list[str]) -> None:
 
     _show_fov_status_table(fovs_with_cells, seg_summary)
     if len(fovs_with_cells) == 1:
-        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].name})[/dim]")
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].display_name})[/dim]")
         selected_fovs = fovs_with_cells
     else:
         selected_fovs = _select_fovs_from_table(fovs_with_cells)
@@ -1106,24 +1089,22 @@ def _measure_masked(store, channels, all_fovs, scopes: list[str]) -> None:
             try:
                 count = measurer.measure_fov_masked(
                     store,
-                    fov=fov_info.name,
-                    condition=fov_info.condition,
+                    fov_id=fov_info.id,
                     channels=selected_channels,
                     threshold_channel=threshold_channel,
                     threshold_run_id=threshold_run_id,
                     scopes=scopes,
-                    bio_rep=fov_info.bio_rep,
                 )
                 total_measurements += count
                 fovs_processed += 1
             except Exception as exc:
                 if isinstance(exc, (MemoryError, KeyboardInterrupt, SystemExit)):
                     raise
-                warnings.append(f"{fov_info.name}: {exc}")
+                warnings.append(f"{fov_info.display_name}: {exc}")
 
             progress.update(
                 task, completed=i + 1,
-                description=f"Measuring {fov_info.name}",
+                description=f"Measuring {fov_info.display_name}",
             )
 
     console.print(f"\n[green]Masked measurement complete[/green]")
@@ -1189,7 +1170,7 @@ def _apply_threshold(state: MenuState) -> None:
 
     _show_fov_status_table(fovs_with_cells, seg_summary)
     if len(fovs_with_cells) == 1:
-        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].name})[/dim]")
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].display_name})[/dim]")
         selected_fovs = fovs_with_cells
     else:
         selected_fovs = _select_fovs_from_table(fovs_with_cells)
@@ -1221,19 +1202,16 @@ def _apply_threshold(state: MenuState) -> None:
         if skip_remaining_fovs:
             break
 
-        fov = fov_info.name
-        condition = fov_info.condition
-        bio_rep = fov_info.bio_rep
+        fov_id = fov_info.id
 
         console.print(f"\n[bold]{'='*60}[/bold]")
-        console.print(f"[bold]FOV: {fov} ({condition}/{bio_rep})[/bold]")
+        console.print(f"[bold]FOV: {fov_info.display_name} ({fov_info.condition}/{fov_info.bio_rep})[/bold]")
 
         # 6a. Group cells
         try:
             grouping_result = grouper.group_cells(
-                store, fov=fov, condition=condition,
+                store, fov_id=fov_id,
                 channel=grouping_channel, metric=grouping_metric,
-                bio_rep=bio_rep,
             )
         except ValueError as e:
             console.print(f"  [yellow]Skipping: {e}[/yellow]")
@@ -1248,10 +1226,8 @@ def _apply_threshold(state: MenuState) -> None:
 
         # 6b. Read images and labels for this FOV
         import numpy as np
-        labels = store.read_labels(fov, condition, bio_rep=bio_rep)
-        image = store.read_image_numpy(
-            fov, condition, threshold_channel, bio_rep=bio_rep,
-        )
+        labels = store.read_labels(fov_id)
+        image = store.read_image_numpy(fov_id, threshold_channel)
 
         accepted_groups: list[tuple[str, list[int], int]] = []  # (tag, cell_ids, run_id)
         combined_mask = np.zeros(labels.shape, dtype=bool)
@@ -1271,7 +1247,7 @@ def _apply_threshold(state: MenuState) -> None:
                 continue
 
             # Get label values for this group
-            cells_df = store.get_cells(condition=condition, bio_rep=bio_rep, fov=fov)
+            cells_df = store.get_cells(fov_id=fov_id)
             group_cells = cells_df[cells_df["id"].isin(group_cell_ids)]
             label_values = group_cells["label_value"].tolist()
 
@@ -1300,7 +1276,7 @@ def _apply_threshold(state: MenuState) -> None:
                 decision = launch_threshold_viewer(
                     group_image, cell_mask,
                     group_name=group_display,
-                    fov_name=fov,
+                    fov_name=fov_info.display_name,
                     initial_threshold=initial_thresh,
                 )
             except (ImportError, RuntimeError) as exc:
@@ -1313,7 +1289,7 @@ def _apply_threshold(state: MenuState) -> None:
                 )
 
             if decision.skip_remaining:
-                console.print(f"  [yellow]Skipping remaining groups for {fov}[/yellow]")
+                console.print(f"  [yellow]Skipping remaining groups for {fov_info.display_name}[/yellow]")
                 skip_remaining_groups = True
                 continue
 
@@ -1323,13 +1299,12 @@ def _apply_threshold(state: MenuState) -> None:
 
             # Store threshold result
             result = engine.threshold_group(
-                store, fov=fov, condition=condition, channel=threshold_channel,
+                store, fov_id=fov_id, channel=threshold_channel,
                 cell_ids=group_cell_ids,
                 labels=labels, image=image,
                 threshold_value=decision.threshold_value,
                 roi=decision.roi,
                 group_tag=tag_name,
-                bio_rep=bio_rep,
             )
             console.print(
                 f"  [green]Accepted {tag_name}[/green]: "
@@ -1339,16 +1314,16 @@ def _apply_threshold(state: MenuState) -> None:
             accepted_groups.append((tag_name, group_cell_ids, result.threshold_run_id))
 
             # Accumulate this group's mask into the combined mask
-            group_written = store.read_mask(fov, condition, threshold_channel, bio_rep=bio_rep)
+            group_written = store.read_mask(fov_id, threshold_channel)
             combined_mask |= (group_written > 0)
 
         # Write combined mask from all accepted groups
         if accepted_groups:
             _, _, last_run_id = accepted_groups[-1]
             store.write_mask(
-                fov, condition, threshold_channel,
+                fov_id, threshold_channel,
                 combined_mask.astype(np.uint8),
-                last_run_id, bio_rep=bio_rep,
+                last_run_id,
             )
 
         # 6c. Particle analysis for accepted groups
@@ -1357,11 +1332,10 @@ def _apply_threshold(state: MenuState) -> None:
 
             for tag_name, group_cell_ids, thr_run_id in accepted_groups:
                 pa_result = analyzer.analyze_fov(
-                    store, fov=fov, condition=condition,
+                    store, fov_id=fov_id,
                     channel=threshold_channel,
                     threshold_run_id=thr_run_id,
                     cell_ids=group_cell_ids,
-                    bio_rep=bio_rep,
                 )
 
                 # Store results
@@ -1370,9 +1344,8 @@ def _apply_threshold(state: MenuState) -> None:
                 if pa_result.summary_measurements:
                     store.add_measurements(pa_result.summary_measurements)
                 store.write_particle_labels(
-                    fov, condition, threshold_channel,
+                    fov_id, threshold_channel,
                     pa_result.particle_label_image,
-                    bio_rep=bio_rep,
                 )
 
                 console.print(
@@ -1393,9 +1366,9 @@ def _apply_threshold(state: MenuState) -> None:
     console.print()
 
 
-def _prompt_bio_rep(store: ExperimentStore, condition: str | None = None) -> str:
+def _prompt_bio_rep(store: ExperimentStore) -> str:
     """Prompt for biological replicate. Auto-resolves when only 1 exists."""
-    reps = store.get_bio_reps(condition=condition)
+    reps = store.get_bio_reps()
     if len(reps) <= 1:
         return reps[0] if reps else "N1"
     console.print("\n[bold]Biological replicates:[/bold]")
@@ -1578,7 +1551,7 @@ def _query_experiment(state: MenuState) -> None:
             return
         rows = [
             {
-                "name": f.name,
+                "name": f.display_name,
                 "condition": f.condition,
                 "bio_rep": f.bio_rep,
                 "size": f"{f.width}x{f.height}" if f.width else "",
@@ -1615,7 +1588,7 @@ def _query_experiment(state: MenuState) -> None:
                 except ValueError:
                     cond_filter = cond_str
 
-        rep_list = store.get_bio_reps(condition=cond_filter)
+        rep_list = store.get_bio_reps()
         if not rep_list:
             console.print("[dim]No biological replicates found.[/dim]")
             return
@@ -1700,23 +1673,17 @@ def _edit_experiment(state: MenuState) -> None:
         console.print(f"[green]Condition '{old}' → '{new_name}'[/green]")
 
     elif choice == "3":
-        # Need to select condition + bio-rep to disambiguate FOV
-        conditions = store.get_conditions()
-        if not conditions:
-            console.print("[dim]No conditions found.[/dim]")
-            return
-        console.print("\n[bold]Conditions:[/bold]")
-        condition = numbered_select_one(conditions, "Condition")
-        bio_rep = _prompt_bio_rep(store)
-        fovs = store.get_fovs(condition=condition, bio_rep=bio_rep)
+        # Select FOV to rename from full list
+        fovs = store.get_fovs()
         if not fovs:
             console.print("[dim]No FOVs found.[/dim]")
             return
-        fov_names = [f.name for f in fovs]
+        fov_names = [f.display_name for f in fovs]
         console.print(f"\n[bold]FOVs ({len(fov_names)}):[/bold]")
         old = numbered_select_one(fov_names, "FOV to rename")
+        fov_info = next(f for f in fovs if f.display_name == old)
         new_name = menu_prompt(f"New name for '{old}'")
-        store.rename_fov(old, new_name, condition, bio_rep=bio_rep)
+        store.rename_fov(fov_info.id, new_name)
         console.print(f"[green]FOV '{old}' → '{new_name}'[/green]")
 
     elif choice == "4":
@@ -1731,21 +1698,15 @@ def _edit_experiment(state: MenuState) -> None:
         console.print(f"[green]Channel '{old}' → '{new_name}'[/green]")
 
     elif choice == "5":
-        # Bio reps are scoped per condition — select condition first
-        conditions = store.get_conditions()
-        if not conditions:
-            console.print("[dim]No conditions found.[/dim]")
-            return
-        console.print("\n[bold]Conditions:[/bold]")
-        cond = numbered_select_one(conditions, "Condition")
-        reps = store.get_bio_reps(condition=cond)
+        # Bio reps are global in the flat model
+        reps = store.get_bio_reps()
         if not reps:
             console.print("[dim]No biological replicates found.[/dim]")
             return
         console.print("\n[bold]Biological replicates:[/bold]")
         old = numbered_select_one(reps, "Bio-rep to rename")
         new_name = menu_prompt(f"New name for '{old}'")
-        store.rename_bio_rep(old, new_name, condition=cond)
+        store.rename_bio_rep(old, new_name)
         console.print(f"[green]Bio-rep '{old}' → '{new_name}'[/green]")
 
 

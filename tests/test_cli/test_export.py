@@ -410,7 +410,7 @@ class TestSummaryCommand:
         assert result.exit_code == 0, result.output
         assert "Experiment Summary" in result.output
         assert "control" in result.output
-        assert "fov1" in result.output
+        assert "N1" in result.output  # bio rep column shows N1
 
     def test_summary_csv_format(
         self,

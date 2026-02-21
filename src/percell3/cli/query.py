@@ -108,7 +108,7 @@ def fovs(ctx: click.Context, fmt: str, condition: str | None, bio_rep: str | Non
 
     rows = [
         {
-            "name": f.name,
+            "name": f.display_name,
             "condition": f.condition,
             "bio_rep": f.bio_rep,
             "size": f"{f.width}x{f.height}" if f.width else "",

@@ -43,65 +43,50 @@ class TestViewCommand:
     ) -> None:
         """When napari is missing, show install instructions."""
         exp_path = str(experiment_with_data.path)
+        fov = experiment_with_data.get_fovs()[0]
 
         with patch("percell3.segment.viewer.NAPARI_AVAILABLE", False):
             result = runner.invoke(cli, [
-                "view", "-e", exp_path, "-f", "fov1",
+                "view", "-e", exp_path, "-f", fov.display_name,
             ])
 
         assert result.exit_code != 0
         assert "napari could not be loaded" in result.output
         assert "pip install" in result.output
 
-    def test_auto_detect_single_condition(
+    def test_view_launches_viewer(
         self, runner: CliRunner, experiment_with_data: ExperimentStore,
     ) -> None:
-        """When only one condition exists, auto-detect it."""
+        """View command finds FOV by display_name and calls launch_viewer."""
         exp_path = str(experiment_with_data.path)
+        fov = experiment_with_data.get_fovs()[0]
 
         mock_launch = MagicMock(return_value=None)
         with patch("percell3.segment.viewer.NAPARI_AVAILABLE", True), \
              patch("percell3.segment.viewer.launch_viewer", mock_launch):
             result = runner.invoke(cli, [
-                "view", "-e", exp_path, "-f", "fov1",
+                "view", "-e", exp_path, "-f", fov.display_name,
             ])
 
         assert result.exit_code == 0, result.output
         assert "No changes detected" in result.output
         mock_launch.assert_called_once()
         call_args = mock_launch.call_args
-        assert call_args[0][1] == "fov1"
-        assert call_args[0][2] == "control"  # auto-detected
-
-    def test_view_with_explicit_condition(
-        self, runner: CliRunner, experiment_with_data: ExperimentStore,
-    ) -> None:
-        """Explicit --condition should be passed through."""
-        exp_path = str(experiment_with_data.path)
-
-        mock_launch = MagicMock(return_value=None)
-        with patch("percell3.segment.viewer.NAPARI_AVAILABLE", True), \
-             patch("percell3.segment.viewer.launch_viewer", mock_launch):
-            result = runner.invoke(cli, [
-                "view", "-e", exp_path, "-f", "fov1",
-                "--condition", "control",
-            ])
-
-        assert result.exit_code == 0, result.output
-        call_args = mock_launch.call_args
-        assert call_args[0][2] == "control"
+        assert call_args[0][1] == fov.id  # fov_id
+        assert call_args[0][2] is None  # no channel filter
 
     def test_view_reports_saved_run_id(
         self, runner: CliRunner, experiment_with_data: ExperimentStore,
     ) -> None:
         """When labels are edited, report the run_id."""
         exp_path = str(experiment_with_data.path)
+        fov = experiment_with_data.get_fovs()[0]
 
         mock_launch = MagicMock(return_value=42)
         with patch("percell3.segment.viewer.NAPARI_AVAILABLE", True), \
              patch("percell3.segment.viewer.launch_viewer", mock_launch):
             result = runner.invoke(cli, [
-                "view", "-e", exp_path, "-f", "fov1",
+                "view", "-e", exp_path, "-f", fov.display_name,
             ])
 
         assert result.exit_code == 0, result.output
@@ -113,37 +98,30 @@ class TestViewCommand:
     ) -> None:
         """--channels should be split and passed through."""
         exp_path = str(experiment_with_data.path)
+        fov = experiment_with_data.get_fovs()[0]
 
         mock_launch = MagicMock(return_value=None)
         with patch("percell3.segment.viewer.NAPARI_AVAILABLE", True), \
              patch("percell3.segment.viewer.launch_viewer", mock_launch):
             result = runner.invoke(cli, [
-                "view", "-e", exp_path, "-f", "fov1",
+                "view", "-e", exp_path, "-f", fov.display_name,
                 "--channels", "DAPI,GFP",
             ])
 
         assert result.exit_code == 0, result.output
         call_args = mock_launch.call_args
-        assert call_args[0][3] == ["DAPI", "GFP"]
+        assert call_args[0][2] == ["DAPI", "GFP"]
 
-    def test_multiple_conditions_without_flag_errors(
-        self, runner: CliRunner, tmp_path: Path,
+    def test_unknown_fov_errors(
+        self, runner: CliRunner, experiment_with_data: ExperimentStore,
     ) -> None:
-        """Multiple conditions without --condition should error with helpful message."""
-        store = ExperimentStore.create(tmp_path / "multi.percell")
-        store.add_channel("DAPI")
-        store.add_condition("control")
-        store.add_condition("treated")
-        store.add_fov("r1", "control", width=64, height=64)
-        store.add_fov("r2", "treated", width=64, height=64)
-        store.write_image("r1", "control", "DAPI", np.zeros((64, 64), dtype=np.uint16))
-        store.write_image("r2", "treated", "DAPI", np.zeros((64, 64), dtype=np.uint16))
-        store.close()
+        """Non-existent FOV display_name should error with helpful message."""
+        exp_path = str(experiment_with_data.path)
 
         with patch("percell3.segment.viewer.NAPARI_AVAILABLE", True):
             result = runner.invoke(cli, [
-                "view", "-e", str(tmp_path / "multi.percell"), "-f", "r1",
+                "view", "-e", exp_path, "-f", "nonexistent_fov",
             ])
 
         assert result.exit_code != 0
-        assert "Multiple conditions" in result.output
+        assert "No FOV named" in result.output

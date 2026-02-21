@@ -49,7 +49,7 @@ class TestShowFovStatusTable:
     def test_renders_without_crash(self, tmp_path: Path):
         with ExperimentStore.create(tmp_path / "test.percell") as store:
             store.add_condition("ctrl")
-            fov_id = store.add_fov("FOV_001", "ctrl", width=64, height=64)
+            fov_id = store.add_fov("ctrl", width=64, height=64)
             fovs = store.get_fovs()
             summary = {fov_id: (0, None)}
             # Should not raise
@@ -58,7 +58,7 @@ class TestShowFovStatusTable:
     def test_renders_with_segmentation_data(self, tmp_path: Path):
         with ExperimentStore.create(tmp_path / "test.percell") as store:
             store.add_condition("ctrl")
-            fov_id = store.add_fov("FOV_001", "ctrl", width=64, height=64)
+            fov_id = store.add_fov("ctrl", width=64, height=64)
             fovs = store.get_fovs()
             summary = {fov_id: (100, "cpsam")}
             # Should not raise
@@ -76,9 +76,9 @@ class TestSelectFovsFromTable:
         with ExperimentStore.create(tmp_path / "test.percell") as store:
             store.add_condition("ctrl")
             store.add_condition("treated")
-            store.add_fov("FOV_001", "ctrl", width=64, height=64)
-            store.add_fov("FOV_001", "treated", width=64, height=64)
-            store.add_fov("FOV_002", "ctrl", width=64, height=64)
+            store.add_fov("ctrl", display_name="ctrl_FOV_001", width=64, height=64)
+            store.add_fov("treated", display_name="treated_FOV_001", width=64, height=64)
+            store.add_fov("ctrl", display_name="ctrl_FOV_002", width=64, height=64)
             yield store.get_fovs()
 
     def test_all_keyword(self, fovs):
@@ -95,5 +95,5 @@ class TestSelectFovsFromTable:
         with patch.object(console, "input", return_value="1 3"):
             result = _select_fovs_from_table(fovs)
         assert len(result) == 2
-        assert result[0].name == fovs[0].name
-        assert result[1].name == fovs[2].name
+        assert result[0].display_name == fovs[0].display_name
+        assert result[1].display_name == fovs[2].display_name
