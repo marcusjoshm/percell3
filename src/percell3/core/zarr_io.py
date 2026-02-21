@@ -32,62 +32,29 @@ MASK_CHUNKS = (512, 512)
 # ---------------------------------------------------------------------------
 
 
-def _fov_group_path(
-    bio_rep: str,
-    condition: str,
-    fov: str,
-    timepoint: str | None = None,
-) -> str:
-    """Build the zarr group path for a condition/bio_rep/FOV."""
-    if timepoint:
-        return f"{condition}/{bio_rep}/{timepoint}/{fov}"
-    return f"{condition}/{bio_rep}/{fov}"
+def fov_group_path(fov_id: int) -> str:
+    """Zarr group path for a FOV's images and labels."""
+    return f"fov_{fov_id}"
 
 
-def image_group_path(
-    bio_rep: str,
-    condition: str,
-    fov: str,
-    timepoint: str | None = None,
-) -> str:
-    """Build the zarr group path for an image FOV."""
-    return _fov_group_path(bio_rep, condition, fov, timepoint)
+def image_group_path(fov_id: int) -> str:
+    """Zarr group path for a FOV's channel images."""
+    return fov_group_path(fov_id)
 
 
-def label_group_path(
-    bio_rep: str,
-    condition: str,
-    fov: str,
-    timepoint: str | None = None,
-) -> str:
-    """Build the zarr group path for a label FOV."""
-    return _fov_group_path(bio_rep, condition, fov, timepoint)
+def label_group_path(fov_id: int) -> str:
+    """Zarr group path for a FOV's label image."""
+    return fov_group_path(fov_id)
 
 
-def mask_group_path(
-    bio_rep: str,
-    condition: str,
-    fov: str,
-    channel: str,
-    timepoint: str | None = None,
-) -> str:
-    """Build the zarr group path for a mask."""
-    if timepoint:
-        return f"{condition}/{bio_rep}/{timepoint}/{fov}/threshold_{channel}"
-    return f"{condition}/{bio_rep}/{fov}/threshold_{channel}"
+def mask_group_path(fov_id: int, channel: str) -> str:
+    """Zarr group path for a FOV's threshold mask."""
+    return f"fov_{fov_id}/threshold_{channel}"
 
 
-def particle_label_group_path(
-    bio_rep: str,
-    condition: str,
-    fov: str,
-    channel: str,
-    timepoint: str | None = None,
-) -> str:
-    """Build the zarr group path for particle labels."""
-    if timepoint:
-        return f"{condition}/{bio_rep}/{timepoint}/{fov}/particles_{channel}"
-    return f"{condition}/{bio_rep}/{fov}/particles_{channel}"
+def particle_label_group_path(fov_id: int, channel: str) -> str:
+    """Zarr group path for a FOV's particle labels."""
+    return f"fov_{fov_id}/particles_{channel}"
 
 
 # ---------------------------------------------------------------------------

@@ -42,53 +42,6 @@ from percell3.core.models import (
 from percell3.core.schema import create_schema, open_database
 
 
-def _move_zarr_children(
-    store_path: Path,
-    old_name: str,
-    new_name: str,
-    level: str,
-    parent_prefix: str = "",
-) -> None:
-    """Move zarr groups when renaming an entity.
-
-    Zarr hierarchy: {condition}/{bio_rep}/[{timepoint}/]{fov}
-    - condition: top-level group rename
-    - bio_rep: lives under each condition, rename within condition
-    - fov: lives under parent_prefix
-    Does nothing if the source doesn't exist (e.g., no data yet).
-    """
-    import zarr
-
-    if not store_path.exists():
-        return
-    root = zarr.open_group(str(store_path), mode="r+")
-
-    if level == "condition":
-        # Top-level group rename: old_name → new_name
-        if old_name in root:
-            root.move(old_name, new_name)
-    elif level == "bio_rep":
-        # bio_rep lives under a condition: {condition}/{old_name} → {condition}/{new_name}
-        if parent_prefix:
-            try:
-                cond_group = root[parent_prefix]
-            except KeyError:
-                return
-            if hasattr(cond_group, "keys") and old_name in cond_group:
-                cond_group.move(old_name, new_name)
-    elif level == "fov":
-        # FOV lives under parent_prefix: {condition}/{bio_rep}/{old_name} → .../{new_name}
-        if parent_prefix:
-            try:
-                parent = root[parent_prefix]
-            except KeyError:
-                return
-        else:
-            parent = root
-        if hasattr(parent, "keys") and old_name in parent:
-            parent.move(old_name, new_name)
-
-
 def _rename_mask_groups(
     masks_path: Path,
     old_channel: str,
@@ -232,58 +185,18 @@ class ExperimentStore:
 
     # --- Biological Replicate Management ---
 
-    def add_bio_rep(self, name: str, condition: str) -> int:
-        """Add a biological replicate scoped to a condition."""
+    def add_bio_rep(self, name: str) -> int:
+        """Add an experiment-global biological replicate."""
         _validate_name(name, "bio_rep name")
-        cond_id = queries.select_condition_id(self._conn, condition)
-        return queries.insert_bio_rep(self._conn, name, condition_id=cond_id)
+        return queries.insert_bio_rep(self._conn, name)
 
-    def get_bio_reps(self, condition: str | None = None) -> list[str]:
-        """Return bio rep names, optionally filtered by condition."""
-        cond_id = queries.select_condition_id(self._conn, condition) if condition else None
-        return queries.select_bio_reps(self._conn, condition_id=cond_id)
+    def get_bio_reps(self) -> list[str]:
+        """Return all bio rep names."""
+        return queries.select_bio_reps(self._conn)
 
-    def get_bio_rep(self, name: str, condition: str | None = None) -> str:
-        cond_id = queries.select_condition_id(self._conn, condition) if condition else None
-        row = queries.select_bio_rep_by_name(self._conn, name, condition_id=cond_id)
+    def get_bio_rep(self, name: str) -> str:
+        row = queries.select_bio_rep_by_name(self._conn, name)
         return row["name"]
-
-    def _resolve_bio_rep(
-        self, bio_rep: str | None, condition: str | None = None,
-    ) -> tuple[int, str]:
-        """Resolve bio_rep name to (id, name) within a condition scope.
-
-        If bio_rep is None and condition has exactly one bio_rep, auto-resolves.
-        """
-        if condition is not None:
-            cond_id = queries.select_condition_id(self._conn, condition)
-        else:
-            cond_id = None
-
-        if bio_rep is not None:
-            row = queries.select_bio_rep_by_name(
-                self._conn, bio_rep, condition_id=cond_id,
-            )
-            return row["id"], row["name"]
-
-        # Auto-resolve when only 1 bio rep exists for this condition
-        if cond_id is not None:
-            rows = self._conn.execute(
-                "SELECT id, name FROM bio_reps WHERE condition_id = ? ORDER BY id",
-                (cond_id,),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT id, name FROM bio_reps ORDER BY id"
-            ).fetchall()
-        if len(rows) == 1:
-            return rows[0]["id"], rows[0]["name"]
-        if len(rows) == 0:
-            raise BioRepNotFoundError("N1")
-        names = [r["name"] for r in rows]
-        raise ValueError(
-            f"Multiple bio reps exist ({', '.join(names)}); specify one explicitly"
-        )
 
     # --- Condition/Timepoint/FOV Management ---
 
@@ -297,36 +210,41 @@ class ExperimentStore:
 
     def add_fov(
         self,
-        name: str,
         condition: str,
         bio_rep: str | None = None,
+        display_name: str | None = None,
         timepoint: str | None = None,
         width: int | None = None,
         height: int | None = None,
         pixel_size_um: float | None = None,
         source_file: str | None = None,
     ) -> int:
-        """Add a FOV to a condition. Auto-creates default 'N1' bio rep if needed."""
-        _validate_name(name, "fov name")
+        """Add a FOV. Auto-generates display_name and creates bio_rep 'N1' if needed.
+
+        Returns the new FOV ID.
+        """
         cond_id = queries.select_condition_id(self._conn, condition)
 
-        # Lazy creation: ensure a default bio rep exists for this condition
+        # Lazy creation: ensure a default bio rep exists
         br_name = bio_rep or "N1"
         try:
-            br_row = queries.select_bio_rep_by_name(
-                self._conn, br_name, condition_id=cond_id,
-            )
+            br_row = queries.select_bio_rep_by_name(self._conn, br_name)
             bio_rep_id = br_row["id"]
         except BioRepNotFoundError:
-            # Auto-create the bio rep for this condition
             _validate_name(br_name, "bio_rep name")
-            bio_rep_id = queries.insert_bio_rep(
-                self._conn, br_name, condition_id=cond_id,
+            bio_rep_id = queries.insert_bio_rep(self._conn, br_name)
+
+        # Auto-generate display_name if not provided
+        if display_name is None:
+            display_name = queries.generate_display_name(
+                self._conn, condition, br_name,
             )
+        _validate_name(display_name, "fov display_name")
 
         tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
         return queries.insert_fov(
-            self._conn, name, bio_rep_id=bio_rep_id,
+            self._conn, display_name=display_name,
+            condition_id=cond_id, bio_rep_id=bio_rep_id,
             timepoint_id=tp_id, width=width, height=height,
             pixel_size_um=pixel_size_um, source_file=source_file,
         )
@@ -347,16 +265,18 @@ class ExperimentStore:
         br_id = None
         if bio_rep:
             try:
-                br_row = queries.select_bio_rep_by_name(
-                    self._conn, bio_rep, condition_id=cond_id,
-                )
+                br_row = queries.select_bio_rep_by_name(self._conn, bio_rep)
                 br_id = br_row["id"]
             except BioRepNotFoundError:
-                return []  # No FOVs can exist for a non-existent bio rep
+                return []
         tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
         return queries.select_fovs(
             self._conn, condition_id=cond_id, bio_rep_id=br_id, timepoint_id=tp_id,
         )
+
+    def get_fov_by_id(self, fov_id: int) -> FovInfo:
+        """Get a single FOV by ID."""
+        return queries.select_fov_by_id(self._conn, fov_id)
 
     # --- Rename operations ---
 
@@ -365,131 +285,57 @@ class ExperimentStore:
         queries.rename_experiment(self._conn, new_name)
 
     def rename_condition(self, old_name: str, new_name: str) -> None:
-        """Rename a condition. Updates SQLite and moves zarr groups.
-
-        In the new hierarchy, condition is the top-level zarr group.
-        """
+        """Rename a condition. DB-only — zarr paths use fov_id, not names."""
         _validate_name(new_name, "condition name")
-        # Move zarr groups first; if this fails, SQLite stays unchanged
-        for store_path in (self.images_zarr_path, self.labels_zarr_path, self.masks_zarr_path):
-            _move_zarr_children(store_path, old_name, new_name, level="condition")
         queries.rename_condition(self._conn, old_name, new_name)
 
     def rename_channel(self, old_name: str, new_name: str) -> None:
         """Rename a channel. Updates SQLite and NGFF metadata."""
         _validate_name(new_name, "channel name")
         queries.rename_channel(self._conn, old_name, new_name)
-        # Update NGFF channel labels in images.zarr
         zarr_io.rename_channel_in_ngff(self.images_zarr_path, old_name, new_name)
-        # Rename threshold mask groups
         _rename_mask_groups(self.masks_zarr_path, old_name, new_name)
 
-    def rename_bio_rep(
-        self, old_name: str, new_name: str, condition: str | None = None,
-    ) -> None:
-        """Rename a biological replicate. Updates SQLite and moves zarr groups.
-
-        In the new hierarchy, bio_rep lives under condition:
-        {condition}/{old_name} → {condition}/{new_name}
-        """
+    def rename_bio_rep(self, old_name: str, new_name: str) -> None:
+        """Rename a biological replicate. DB-only."""
         _validate_name(new_name, "bio_rep name")
-        cond_id = queries.select_condition_id(self._conn, condition) if condition else None
-        # Need condition name for zarr path
-        if condition:
-            for store_path in (self.images_zarr_path, self.labels_zarr_path, self.masks_zarr_path):
-                _move_zarr_children(
-                    store_path, old_name, new_name,
-                    level="bio_rep", parent_prefix=condition,
-                )
-        queries.rename_bio_rep(self._conn, old_name, new_name, condition_id=cond_id)
+        queries.rename_bio_rep(self._conn, old_name, new_name)
 
-    def rename_fov(
-        self,
-        old_name: str,
-        new_name: str,
-        condition: str,
-        bio_rep: str | None = None,
-    ) -> None:
-        """Rename a FOV within a condition/bio-rep. Updates SQLite and moves zarr groups."""
-        _validate_name(new_name, "fov name")
-        br_id, br_name = self._resolve_bio_rep(bio_rep, condition=condition)
-        cond_id = queries.select_condition_id(self._conn, condition)
-        for store_path in (self.images_zarr_path, self.labels_zarr_path, self.masks_zarr_path):
-            _move_zarr_children(
-                store_path, old_name, new_name,
-                level="fov", parent_prefix=f"{condition}/{br_name}",
-            )
-        queries.rename_fov(self._conn, old_name, new_name, cond_id, br_id)
+    def rename_fov(self, fov_id: int, new_display_name: str) -> None:
+        """Rename a FOV by ID. DB-only — zarr paths use fov_id."""
+        _validate_name(new_display_name, "fov display_name")
+        queries.rename_fov(self._conn, fov_id, new_display_name)
 
     # --- Image I/O ---
-
-    def _resolve_fov(
-        self,
-        fov: str,
-        condition: str,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
-    ) -> tuple[FovInfo, str]:
-        """Resolve FOV name to FovInfo and zarr group path."""
-        br_id, br_name = self._resolve_bio_rep(bio_rep, condition=condition)
-        cond_id = queries.select_condition_id(self._conn, condition)
-        tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
-        fov_info = queries.select_fov_by_name(
-            self._conn, fov, condition_id=cond_id, bio_rep_id=br_id, timepoint_id=tp_id,
-        )
-        gp = zarr_io.image_group_path(br_name, condition, fov, timepoint)
-        return fov_info, gp
 
     def _channels_meta(self) -> list[dict]:
         """Build channel metadata list for NGFF."""
         channels = self.get_channels()
         return [{"name": ch.name, "color": ch.color or "FFFFFF"} for ch in channels]
 
-    def write_image(
-        self,
-        fov: str,
-        condition: str,
-        channel: str,
-        data: np.ndarray,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
-    ) -> None:
-        fov_info, gp = self._resolve_fov(fov, condition, bio_rep, timepoint)
+    def write_image(self, fov_id: int, channel: str, data: np.ndarray) -> None:
+        fov_info = self.get_fov_by_id(fov_id)
+        gp = zarr_io.image_group_path(fov_id)
         ch = self.get_channel(channel)
         channels = self.get_channels()
-        num_channels = len(channels)
 
         zarr_io.write_image_channel(
             self.images_zarr_path,
             gp,
             channel_index=ch.display_order,
-            num_channels=num_channels,
+            num_channels=len(channels),
             data=data,
             channels_meta=self._channels_meta(),
             pixel_size_um=fov_info.pixel_size_um,
         )
 
-    def read_image(
-        self,
-        fov: str,
-        condition: str,
-        channel: str,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
-    ) -> da.Array:
-        _, gp = self._resolve_fov(fov, condition, bio_rep, timepoint)
+    def read_image(self, fov_id: int, channel: str) -> da.Array:
+        gp = zarr_io.image_group_path(fov_id)
         ch = self.get_channel(channel)
         return zarr_io.read_image_channel(self.images_zarr_path, gp, ch.display_order)
 
-    def read_image_numpy(
-        self,
-        fov: str,
-        condition: str,
-        channel: str,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
-    ) -> np.ndarray:
-        _, gp = self._resolve_fov(fov, condition, bio_rep, timepoint)
+    def read_image_numpy(self, fov_id: int, channel: str) -> np.ndarray:
+        gp = zarr_io.image_group_path(fov_id)
         ch = self.get_channel(channel)
         return zarr_io.read_image_channel_numpy(
             self.images_zarr_path, gp, ch.display_order
@@ -497,19 +343,10 @@ class ExperimentStore:
 
     # --- Label Images ---
 
-    def write_labels(
-        self,
-        fov: str,
-        condition: str,
-        labels: np.ndarray,
-        segmentation_run_id: int,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
-    ) -> None:
-        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
-        br_name = fov_info.bio_rep
-        gp = zarr_io.label_group_path(br_name, condition, fov, timepoint)
-        img_gp = zarr_io.image_group_path(br_name, condition, fov, timepoint)
+    def write_labels(self, fov_id: int, labels: np.ndarray, segmentation_run_id: int) -> None:
+        fov_info = self.get_fov_by_id(fov_id)
+        gp = zarr_io.label_group_path(fov_id)
+        img_gp = zarr_io.image_group_path(fov_id)
         source_path = f"../../images.zarr/{img_gp}"
         zarr_io.write_labels(
             self.labels_zarr_path, gp, labels,
@@ -517,29 +354,25 @@ class ExperimentStore:
             pixel_size_um=fov_info.pixel_size_um,
         )
 
-    def read_labels(
-        self,
-        fov: str,
-        condition: str,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
-    ) -> np.ndarray:
-        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
-        br_name = fov_info.bio_rep
-        gp = zarr_io.label_group_path(br_name, condition, fov, timepoint)
+    def read_labels(self, fov_id: int) -> np.ndarray:
+        gp = zarr_io.label_group_path(fov_id)
         return zarr_io.read_labels(self.labels_zarr_path, gp)
 
     # --- Cell Records ---
 
     def add_cells(self, cells: list[CellRecord]) -> list[int]:
-        return queries.insert_cells(self._conn, cells)
+        ids = queries.insert_cells(self._conn, cells)
+        # Update status cache for affected FOVs
+        fov_ids = {c.fov_id for c in cells}
+        for fov_id in fov_ids:
+            self.update_fov_status_cache(fov_id)
+        return ids
 
     def get_cells(
         self,
+        fov_id: int | None = None,
         condition: str | None = None,
         bio_rep: str | None = None,
-        fov: str | None = None,
-        timepoint: str | None = None,
         is_valid: bool = True,
         min_area: float | None = None,
         max_area: float | None = None,
@@ -548,26 +381,8 @@ class ExperimentStore:
         cond_id = queries.select_condition_id(self._conn, condition) if condition else None
         br_id = None
         if bio_rep:
-            br_row = queries.select_bio_rep_by_name(
-                self._conn, bio_rep, condition_id=cond_id,
-            )
+            br_row = queries.select_bio_rep_by_name(self._conn, bio_rep)
             br_id = br_row["id"]
-
-        # Resolve fov to fov_id if provided
-        fov_id = None
-        if fov:
-            if condition is None:
-                raise ValueError("'condition' is required when filtering by 'fov'")
-            tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
-            fov_info = queries.select_fov_by_name(
-                self._conn, fov, condition_id=cond_id, bio_rep_id=br_id,
-                timepoint_id=tp_id,
-            )
-            fov_id = fov_info.id
-
-        tp_id_filter = None
-        if timepoint:
-            tp_id_filter = queries.select_timepoint_id(self._conn, timepoint)
 
         tag_ids = None
         if tags:
@@ -582,7 +397,6 @@ class ExperimentStore:
             condition_id=cond_id,
             bio_rep_id=br_id,
             fov_id=fov_id,
-            timepoint_id=tp_id_filter,
             is_valid=is_valid,
             min_area=min_area,
             max_area=max_area,
@@ -592,48 +406,24 @@ class ExperimentStore:
 
     def get_cell_count(
         self,
+        fov_id: int | None = None,
         condition: str | None = None,
-        bio_rep: str | None = None,
-        fov: str | None = None,
         is_valid: bool = True,
     ) -> int:
         cond_id = queries.select_condition_id(self._conn, condition) if condition else None
-        br_id = None
-        if bio_rep:
-            br_row = queries.select_bio_rep_by_name(
-                self._conn, bio_rep, condition_id=cond_id,
-            )
-            br_id = br_row["id"]
-        fov_id = None
-        if fov:
-            if condition is None:
-                raise ValueError("'condition' is required when filtering by 'fov'")
-            tp_id = None
-            fov_info = queries.select_fov_by_name(
-                self._conn, fov, condition_id=cond_id, bio_rep_id=br_id,
-                timepoint_id=tp_id,
-            )
-            fov_id = fov_info.id
         return queries.count_cells(
-            self._conn, condition_id=cond_id, bio_rep_id=br_id,
-            fov_id=fov_id, is_valid=is_valid,
+            self._conn, condition_id=cond_id, fov_id=fov_id, is_valid=is_valid,
         )
 
-    def delete_cells_for_fov(self, fov_name: str, condition: str) -> int:
+    def delete_cells_for_fov(self, fov_id: int) -> int:
         """Delete all cells (and measurements/tags) for a FOV.
-
-        Args:
-            fov_name: FOV name.
-            condition: Condition name (required to resolve FOV).
 
         Returns:
             Number of cells deleted.
         """
-        cond_id = queries.select_condition_id(self._conn, condition)
-        fov_info = queries.select_fov_by_name(
-            self._conn, fov_name, condition_id=cond_id,
-        )
-        return queries.delete_cells_for_fov(self._conn, fov_info.id)
+        count = queries.delete_cells_for_fov(self._conn, fov_id)
+        self.update_fov_status_cache(fov_id)
+        return count
 
     def get_fov_segmentation_summary(self) -> dict[int, tuple[int, str | None]]:
         """Return segmentation status for all FOVs.
@@ -648,6 +438,16 @@ class ExperimentStore:
 
     def add_measurements(self, measurements: list[MeasurementRecord]) -> None:
         queries.insert_measurements(self._conn, measurements)
+        # Update status cache for affected FOVs
+        cell_ids = {m.cell_id for m in measurements}
+        if cell_ids:
+            placeholders = ",".join("?" * len(cell_ids))
+            rows = self._conn.execute(
+                f"SELECT DISTINCT fov_id FROM cells WHERE id IN ({placeholders})",
+                list(cell_ids),
+            ).fetchall()
+            for r in rows:
+                self.update_fov_status_cache(r["fov_id"])
 
     def list_measured_channels(self) -> list[str]:
         """Return sorted channel names that have at least one measurement."""
@@ -718,35 +518,16 @@ class ExperimentStore:
 
     # --- Masks ---
 
-    def write_mask(
-        self,
-        fov: str,
-        condition: str,
-        channel: str,
-        mask: np.ndarray,
-        threshold_run_id: int,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
-    ) -> None:
-        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
-        br_name = fov_info.bio_rep
-        gp = zarr_io.mask_group_path(br_name, condition, fov, channel, timepoint)
+    def write_mask(self, fov_id: int, channel: str, mask: np.ndarray, threshold_run_id: int) -> None:
+        fov_info = self.get_fov_by_id(fov_id)
+        gp = zarr_io.mask_group_path(fov_id, channel)
         zarr_io.write_mask(
             self.masks_zarr_path, gp, mask,
             pixel_size_um=fov_info.pixel_size_um,
         )
 
-    def read_mask(
-        self,
-        fov: str,
-        condition: str,
-        channel: str,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
-    ) -> np.ndarray:
-        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
-        br_name = fov_info.bio_rep
-        gp = zarr_io.mask_group_path(br_name, condition, fov, channel, timepoint)
+    def read_mask(self, fov_id: int, channel: str) -> np.ndarray:
+        gp = zarr_io.mask_group_path(fov_id, channel)
         return zarr_io.read_mask(self.masks_zarr_path, gp)
 
     # --- Segmentation Runs ---
@@ -851,6 +632,16 @@ class ExperimentStore:
     def add_particles(self, particles: list[ParticleRecord]) -> None:
         """Bulk insert particle records."""
         queries.insert_particles(self._conn, particles)
+        # Update status cache for affected FOVs
+        cell_ids = {p.cell_id for p in particles}
+        if cell_ids:
+            placeholders = ",".join("?" * len(cell_ids))
+            rows = self._conn.execute(
+                f"SELECT DISTINCT fov_id FROM cells WHERE id IN ({placeholders})",
+                list(cell_ids),
+            ).fetchall()
+            for r in rows:
+                self.update_fov_status_cache(r["fov_id"])
 
     def get_particles(
         self,
@@ -865,17 +656,15 @@ class ExperimentStore:
         )
         return pd.DataFrame(rows)
 
-    def delete_particles_for_fov(self, fov_name: str, condition: str) -> int:
+    def delete_particles_for_fov(self, fov_id: int) -> int:
         """Delete all particles for cells in a FOV.
 
         Returns:
             Number of particles deleted.
         """
-        cond_id = queries.select_condition_id(self._conn, condition)
-        fov_info = queries.select_fov_by_name(
-            self._conn, fov_name, condition_id=cond_id,
-        )
-        return queries.delete_particles_for_fov(self._conn, fov_info.id)
+        count = queries.delete_particles_for_fov(self._conn, fov_id)
+        self.update_fov_status_cache(fov_id)
+        return count
 
     def delete_particles_for_threshold_run(self, threshold_run_id: int) -> int:
         """Delete all particles for a specific threshold run."""
@@ -891,42 +680,113 @@ class ExperimentStore:
         """Per-FOV summary of cells, measurements, thresholds, and particles."""
         return queries.select_experiment_summary(self._conn)
 
+    # --- FOV Status Cache ---
+
+    def update_fov_status_cache(self, fov_id: int) -> None:
+        """Refresh the status cache for a single FOV by querying actual data."""
+        conn = self._conn
+
+        # Cell count + seg model
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt, "
+            "  (SELECT sr.model_name FROM segmentation_runs sr "
+            "   JOIN cells c2 ON c2.segmentation_id = sr.id "
+            "   WHERE c2.fov_id = ? AND c2.is_valid = 1 "
+            "   ORDER BY sr.id DESC LIMIT 1) AS seg_model "
+            "FROM cells WHERE fov_id = ? AND is_valid = 1",
+            (fov_id, fov_id),
+        ).fetchone()
+        cell_count = row["cnt"] if row else 0
+        seg_model = (row["seg_model"] or "") if row else ""
+
+        # Measured channels (whole_cell scope, excluding particle_ metrics)
+        wc_rows = conn.execute(
+            "SELECT DISTINCT ch.name FROM measurements m "
+            "JOIN cells c ON m.cell_id = c.id "
+            "JOIN channels ch ON m.channel_id = ch.id "
+            "WHERE c.fov_id = ? AND m.scope = 'whole_cell' "
+            "AND m.metric NOT LIKE 'particle_%' "
+            "ORDER BY ch.name",
+            (fov_id,),
+        ).fetchall()
+        measured_channels = ",".join(r["name"] for r in wc_rows)
+
+        # Masked channels (mask_inside scope)
+        mi_rows = conn.execute(
+            "SELECT DISTINCT ch.name FROM measurements m "
+            "JOIN cells c ON m.cell_id = c.id "
+            "JOIN channels ch ON m.channel_id = ch.id "
+            "WHERE c.fov_id = ? AND m.scope = 'mask_inside' "
+            "ORDER BY ch.name",
+            (fov_id,),
+        ).fetchall()
+        masked_channels = ",".join(r["name"] for r in mi_rows)
+
+        # Particle channels + count
+        pc_rows = conn.execute(
+            "SELECT DISTINCT ch.name FROM measurements m "
+            "JOIN cells c ON m.cell_id = c.id "
+            "JOIN channels ch ON m.channel_id = ch.id "
+            "WHERE c.fov_id = ? AND m.metric = 'particle_count' "
+            "ORDER BY ch.name",
+            (fov_id,),
+        ).fetchall()
+        particle_channels = ",".join(r["name"] for r in pc_rows)
+
+        p_row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM particles p "
+            "JOIN cells c ON p.cell_id = c.id "
+            "WHERE c.fov_id = ?",
+            (fov_id,),
+        ).fetchone()
+        particle_count = p_row["cnt"] if p_row else 0
+
+        queries.upsert_fov_status_cache(
+            conn, fov_id, cell_count, seg_model,
+            measured_channels, masked_channels,
+            particle_channels, particle_count,
+        )
+
+    def refresh_all_status_cache(self) -> None:
+        """Refresh status cache for all FOVs."""
+        fovs = self.get_fovs()
+        for fov in fovs:
+            self.update_fov_status_cache(fov.id)
+
+    # --- FOV Tags ---
+
+    def add_fov_tag(self, fov_id: int, tag_name: str) -> None:
+        """Tag a FOV. Creates the tag if it doesn't exist."""
+        tag_id = queries.select_tag_id(self._conn, tag_name)
+        if tag_id is None:
+            tag_id = self.add_tag(tag_name)
+        queries.insert_fov_tag(self._conn, fov_id, tag_id)
+
+    def remove_fov_tag(self, fov_id: int, tag_name: str) -> None:
+        """Remove a tag from a FOV."""
+        tag_id = queries.select_tag_id(self._conn, tag_name)
+        if tag_id is not None:
+            queries.delete_fov_tag(self._conn, fov_id, tag_id)
+
+    def get_fov_tags(self, fov_id: int) -> list[str]:
+        """Get all tag names for a FOV."""
+        rows = queries.select_fov_tags(self._conn, fov_id)
+        return [r["name"] for r in rows]
+
     # --- Particle Label I/O ---
 
-    def write_particle_labels(
-        self,
-        fov: str,
-        condition: str,
-        channel: str,
-        labels: np.ndarray,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
-    ) -> None:
+    def write_particle_labels(self, fov_id: int, channel: str, labels: np.ndarray) -> None:
         """Write a particle label image to masks.zarr."""
-        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
-        br_name = fov_info.bio_rep
-        gp = zarr_io.particle_label_group_path(
-            br_name, condition, fov, channel, timepoint,
-        )
+        fov_info = self.get_fov_by_id(fov_id)
+        gp = zarr_io.particle_label_group_path(fov_id, channel)
         zarr_io.write_particle_labels(
             self.masks_zarr_path, gp, labels,
             pixel_size_um=fov_info.pixel_size_um,
         )
 
-    def read_particle_labels(
-        self,
-        fov: str,
-        condition: str,
-        channel: str,
-        bio_rep: str | None = None,
-        timepoint: str | None = None,
-    ) -> np.ndarray:
+    def read_particle_labels(self, fov_id: int, channel: str) -> np.ndarray:
         """Read a particle label image from masks.zarr."""
-        fov_info, _ = self._resolve_fov(fov, condition, bio_rep, timepoint)
-        br_name = fov_info.bio_rep
-        gp = zarr_io.particle_label_group_path(
-            br_name, condition, fov, channel, timepoint,
-        )
+        gp = zarr_io.particle_label_group_path(fov_id, channel)
         return zarr_io.read_particle_labels(self.masks_zarr_path, gp)
 
     # --- Export ---
@@ -1039,13 +899,25 @@ class ExperimentStore:
                 df[f"{ch}_{suffix}"] = 0.0
 
         # Process one FOV at a time to avoid reading images repeatedly
-        fov_groups = df.groupby(
-            ["fov_name", "condition_name", "bio_rep_name"],
-        )
+        # Group by fov_id which we get from cells
+        if "fov_id" not in df.columns:
+            # If fov_id is not in the particle query results, we need to add it
+            # by joining through cells
+            pass
 
-        for (fov, cond, bio_rep), gdf in fov_groups:
+        # Use fov_name grouping to get unique FOV IDs from the cell context
+        fov_groups = df.groupby("fov_name")
+
+        for fov_name, gdf in fov_groups:
+            # Look up fov_id from display_name
             try:
-                labels = self.read_labels(fov, cond, bio_rep=bio_rep)
+                fov_info = queries.select_fov_by_display_name(self._conn, str(fov_name))
+                fov_id = fov_info.id
+            except Exception:
+                continue
+
+            try:
+                labels = self.read_labels(fov_id)
             except Exception:
                 continue
 
@@ -1053,9 +925,7 @@ class ExperimentStore:
             threshold_mask = None
             if threshold_channel:
                 try:
-                    raw = self.read_mask(
-                        fov, cond, threshold_channel, bio_rep=bio_rep,
-                    )
+                    raw = self.read_mask(fov_id, threshold_channel)
                     threshold_mask = raw > 0
                 except Exception:
                     pass
@@ -1064,9 +934,7 @@ class ExperimentStore:
             ch_images: dict[str, np.ndarray] = {}
             for ch in channels:
                 try:
-                    ch_images[ch] = self.read_image_numpy(
-                        fov, cond, ch, bio_rep=bio_rep,
-                    )
+                    ch_images[ch] = self.read_image_numpy(fov_id, ch)
                 except Exception:
                     pass
             if not ch_images:

@@ -23,7 +23,7 @@ class FovInfo:
     """Metadata for a field of view (FOV)."""
 
     id: int
-    name: str
+    display_name: str
     condition: str
     bio_rep: str = "N1"
     timepoint: str | None = None

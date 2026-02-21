@@ -81,7 +81,7 @@ def _row_to_fov(r: sqlite3.Row) -> FovInfo:
     """Convert a database row to a FovInfo."""
     return FovInfo(
         id=r["id"],
-        name=r["name"],
+        display_name=r["display_name"],
         condition=r["condition"],
         bio_rep=r["bio_rep"],
         timepoint=r["timepoint"],
@@ -181,66 +181,45 @@ def select_timepoint_id(conn: sqlite3.Connection, name: str) -> int | None:
 # ---------------------------------------------------------------------------
 
 
-def insert_bio_rep(conn: sqlite3.Connection, name: str, condition_id: int) -> int:
-    """Insert a biological replicate scoped to a condition. Returns the bio rep ID."""
+def insert_bio_rep(conn: sqlite3.Connection, name: str) -> int:
+    """Insert an experiment-global biological replicate. Returns the bio rep ID."""
     try:
         cur = conn.execute(
-            "INSERT INTO bio_reps (name, condition_id) VALUES (?, ?)",
-            (name, condition_id),
+            "INSERT INTO bio_reps (name) VALUES (?)",
+            (name,),
         )
         conn.commit()
     except sqlite3.IntegrityError:
-        raise DuplicateError("bio_rep", f"{name} (condition_id={condition_id})")
+        raise DuplicateError("bio_rep", name)
     return cur.lastrowid  # type: ignore[return-value]
 
 
-def select_bio_reps(
-    conn: sqlite3.Connection,
-    condition_id: int | None = None,
-) -> list[str]:
-    """Return bio rep names, optionally filtered by condition."""
-    if condition_id is not None:
-        rows = conn.execute(
-            "SELECT name FROM bio_reps WHERE condition_id = ? ORDER BY id",
-            (condition_id,),
-        ).fetchall()
-    else:
-        rows = conn.execute("SELECT name FROM bio_reps ORDER BY id").fetchall()
+def select_bio_reps(conn: sqlite3.Connection) -> list[str]:
+    """Return all bio rep names."""
+    rows = conn.execute("SELECT name FROM bio_reps ORDER BY id").fetchall()
     return [r["name"] for r in rows]
 
 
 def select_bio_rep_by_name(
     conn: sqlite3.Connection,
     name: str,
-    condition_id: int | None = None,
 ) -> sqlite3.Row:
-    """Look up a bio rep by name, optionally scoped to a condition.
+    """Look up a bio rep by name.
 
     Raises BioRepNotFoundError if not found.
     """
-    if condition_id is not None:
-        row = conn.execute(
-            "SELECT id, name, condition_id FROM bio_reps "
-            "WHERE name = ? AND condition_id = ?",
-            (name, condition_id),
-        ).fetchone()
-    else:
-        row = conn.execute(
-            "SELECT id, name, condition_id FROM bio_reps WHERE name = ?",
-            (name,),
-        ).fetchone()
+    row = conn.execute(
+        "SELECT id, name FROM bio_reps WHERE name = ?",
+        (name,),
+    ).fetchone()
     if row is None:
         raise BioRepNotFoundError(name)
     return row
 
 
-def select_bio_rep_id(
-    conn: sqlite3.Connection,
-    name: str,
-    condition_id: int,
-) -> int:
-    """Get bio rep ID by name within a condition. Raises BioRepNotFoundError."""
-    row = select_bio_rep_by_name(conn, name, condition_id=condition_id)
+def select_bio_rep_id(conn: sqlite3.Connection, name: str) -> int:
+    """Get bio rep ID by name. Raises BioRepNotFoundError."""
+    row = select_bio_rep_by_name(conn, name)
     return row["id"]
 
 
@@ -252,7 +231,8 @@ def select_bio_rep_id(
 
 def insert_fov(
     conn: sqlite3.Connection,
-    name: str,
+    display_name: str,
+    condition_id: int,
     bio_rep_id: int,
     timepoint_id: int | None = None,
     width: int | None = None,
@@ -260,34 +240,30 @@ def insert_fov(
     pixel_size_um: float | None = None,
     source_file: str | None = None,
 ) -> int:
-    """Insert a FOV. Condition is derived from bio_rep's condition_id."""
-    # SQLite treats NULLs as distinct in UNIQUE constraints, so check manually
-    if timepoint_id is None:
-        existing = conn.execute(
-            "SELECT id FROM fovs WHERE name = ? AND bio_rep_id = ? "
-            "AND timepoint_id IS NULL",
-            (name, bio_rep_id),
-        ).fetchone()
-    else:
-        existing = conn.execute(
-            "SELECT id FROM fovs WHERE name = ? AND bio_rep_id = ? "
-            "AND timepoint_id = ?",
-            (name, bio_rep_id, timepoint_id),
-        ).fetchone()
-    if existing:
-        raise DuplicateError("fov", name)
+    """Insert a FOV with a globally unique display_name. Returns the FOV ID."""
     try:
         cur = conn.execute(
-            "INSERT INTO fovs (name, bio_rep_id, timepoint_id, "
+            "INSERT INTO fovs (display_name, condition_id, bio_rep_id, timepoint_id, "
             "width, height, pixel_size_um, source_file) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (name, bio_rep_id, timepoint_id, width, height,
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (display_name, condition_id, bio_rep_id, timepoint_id, width, height,
              pixel_size_um, source_file),
         )
         conn.commit()
     except sqlite3.IntegrityError:
-        raise DuplicateError("fov", name)
+        raise DuplicateError("fov", display_name)
     return cur.lastrowid  # type: ignore[return-value]
+
+
+_FOV_SELECT_COLS = (
+    "SELECT f.id, f.display_name, c.name AS condition, b.name AS bio_rep, "
+    "t.name AS timepoint, "
+    "f.width, f.height, f.pixel_size_um, f.source_file "
+    "FROM fovs f "
+    "JOIN conditions c ON f.condition_id = c.id "
+    "JOIN bio_reps b ON f.bio_rep_id = b.id "
+    "LEFT JOIN timepoints t ON f.timepoint_id = t.id"
+)
 
 
 def select_fovs(
@@ -296,19 +272,11 @@ def select_fovs(
     bio_rep_id: int | None = None,
     timepoint_id: int | None = None,
 ) -> list[FovInfo]:
-    query = (
-        "SELECT f.id, f.name, c.name AS condition, b.name AS bio_rep, "
-        "t.name AS timepoint, "
-        "f.width, f.height, f.pixel_size_um, f.source_file "
-        "FROM fovs f "
-        "JOIN bio_reps b ON f.bio_rep_id = b.id "
-        "JOIN conditions c ON b.condition_id = c.id "
-        "LEFT JOIN timepoints t ON f.timepoint_id = t.id"
-    )
+    query = _FOV_SELECT_COLS
     params: list = []
     clauses: list[str] = []
     if condition_id is not None:
-        clauses.append("b.condition_id = ?")
+        clauses.append("f.condition_id = ?")
         params.append(condition_id)
     if bio_rep_id is not None:
         clauses.append("f.bio_rep_id = ?")
@@ -324,43 +292,23 @@ def select_fovs(
     return [_row_to_fov(r) for r in rows]
 
 
-def select_fov_by_name(
-    conn: sqlite3.Connection,
-    name: str,
-    condition_id: int | None = None,
-    bio_rep_id: int | None = None,
-    timepoint_id: int | None = None,
-) -> FovInfo:
-    """Look up a FOV by name. Condition is resolved through bio_reps."""
-    base = (
-        "SELECT f.id, f.name, c.name AS condition, b.name AS bio_rep, "
-        "t.name AS timepoint, "
-        "f.width, f.height, f.pixel_size_um, f.source_file "
-        "FROM fovs f "
-        "JOIN bio_reps b ON f.bio_rep_id = b.id "
-        "JOIN conditions c ON b.condition_id = c.id "
-        "LEFT JOIN timepoints t ON f.timepoint_id = t.id "
-        "WHERE f.name = ?"
-    )
-    params: list = [name]
-
-    if condition_id is not None:
-        base += " AND b.condition_id = ?"
-        params.append(condition_id)
-
-    if bio_rep_id is not None:
-        base += " AND f.bio_rep_id = ?"
-        params.append(bio_rep_id)
-
-    if timepoint_id is not None:
-        base += " AND f.timepoint_id = ?"
-        params.append(timepoint_id)
-    else:
-        base += " AND f.timepoint_id IS NULL"
-
-    row = conn.execute(base, params).fetchone()
+def select_fov_by_id(conn: sqlite3.Connection, fov_id: int) -> FovInfo:
+    """Look up a FOV by ID. Raises FovNotFoundError."""
+    row = conn.execute(
+        _FOV_SELECT_COLS + " WHERE f.id = ?", (fov_id,)
+    ).fetchone()
     if row is None:
-        raise FovNotFoundError(name)
+        raise FovNotFoundError(str(fov_id))
+    return _row_to_fov(row)
+
+
+def select_fov_by_display_name(conn: sqlite3.Connection, display_name: str) -> FovInfo:
+    """Look up a FOV by display_name. Raises FovNotFoundError."""
+    row = conn.execute(
+        _FOV_SELECT_COLS + " WHERE f.display_name = ?", (display_name,)
+    ).fetchone()
+    if row is None:
+        raise FovNotFoundError(display_name)
     return _row_to_fov(row)
 
 
@@ -471,13 +419,13 @@ def select_cells(
         "SELECT c.id, c.fov_id, c.segmentation_id, c.label_value, "
         "c.centroid_x, c.centroid_y, c.bbox_x, c.bbox_y, c.bbox_w, c.bbox_h, "
         "c.area_pixels, c.area_um2, c.perimeter, c.circularity, c.is_valid, "
-        "f.name AS fov_name, cond.name AS condition_name, "
+        "f.display_name AS fov_name, cond.name AS condition_name, "
         "b.name AS bio_rep_name, "
         "t.name AS timepoint_name "
         "FROM cells c "
         "JOIN fovs f ON c.fov_id = f.id "
+        "JOIN conditions cond ON f.condition_id = cond.id "
         "JOIN bio_reps b ON f.bio_rep_id = b.id "
-        "JOIN conditions cond ON b.condition_id = cond.id "
         "LEFT JOIN timepoints t ON f.timepoint_id = t.id"
     )
     params: list = []
@@ -486,7 +434,7 @@ def select_cells(
     if is_valid:
         clauses.append("c.is_valid = 1")
     if condition_id is not None:
-        clauses.append("b.condition_id = ?")
+        clauses.append("f.condition_id = ?")
         params.append(condition_id)
     if bio_rep_id is not None:
         clauses.append("f.bio_rep_id = ?")
@@ -529,8 +477,7 @@ def count_cells(
     if needs_fov_join:
         query = (
             "SELECT COUNT(*) FROM cells c "
-            "JOIN fovs f ON c.fov_id = f.id "
-            "JOIN bio_reps b ON f.bio_rep_id = b.id"
+            "JOIN fovs f ON c.fov_id = f.id"
         )
     else:
         query = "SELECT COUNT(*) FROM cells c"
@@ -539,7 +486,7 @@ def count_cells(
     if is_valid:
         clauses.append("c.is_valid = 1")
     if condition_id is not None:
-        clauses.append("b.condition_id = ?")
+        clauses.append("f.condition_id = ?")
         params.append(condition_id)
     if bio_rep_id is not None:
         clauses.append("f.bio_rep_id = ?")
@@ -867,10 +814,9 @@ def rename_bio_rep(
     conn: sqlite3.Connection,
     old_name: str,
     new_name: str,
-    condition_id: int | None = None,
 ) -> None:
     """Rename a biological replicate. Raises BioRepNotFoundError / DuplicateError."""
-    row = select_bio_rep_by_name(conn, old_name, condition_id=condition_id)
+    row = select_bio_rep_by_name(conn, old_name)
     try:
         conn.execute("UPDATE bio_reps SET name = ? WHERE id = ?", (new_name, row["id"]))
         conn.commit()
@@ -881,22 +827,24 @@ def rename_bio_rep(
 
 def rename_fov(
     conn: sqlite3.Connection,
-    old_name: str,
-    new_name: str,
-    condition_id: int | None = None,
-    bio_rep_id: int | None = None,
+    fov_id: int,
+    new_display_name: str,
 ) -> None:
-    """Rename a FOV within a specific condition and bio-rep.
-
-    Raises FovNotFoundError / DuplicateError.
-    """
-    fov = select_fov_by_name(conn, old_name, condition_id=condition_id, bio_rep_id=bio_rep_id)
+    """Rename a FOV by ID. Raises FovNotFoundError / DuplicateError."""
+    existing = conn.execute(
+        "SELECT id FROM fovs WHERE id = ?", (fov_id,)
+    ).fetchone()
+    if existing is None:
+        raise FovNotFoundError(str(fov_id))
     try:
-        conn.execute("UPDATE fovs SET name = ? WHERE id = ?", (new_name, fov.id))
+        conn.execute(
+            "UPDATE fovs SET display_name = ? WHERE id = ?",
+            (new_display_name, fov_id),
+        )
         conn.commit()
     except sqlite3.IntegrityError:
         conn.rollback()
-        raise DuplicateError("fov", new_name)
+        raise DuplicateError("fov", new_display_name)
 
 
 # ---------------------------------------------------------------------------
@@ -974,12 +922,12 @@ def select_particles_with_cell_info(
     """
     query = (
         "SELECT p.*, c.label_value AS cell_label_value, "
-        "f.name AS fov_name, cond.name AS condition_name, br.name AS bio_rep_name "
+        "f.display_name AS fov_name, cond.name AS condition_name, br.name AS bio_rep_name "
         "FROM particles p "
         "JOIN cells c ON p.cell_id = c.id "
         "JOIN fovs f ON c.fov_id = f.id "
-        "JOIN bio_reps br ON f.bio_rep_id = br.id "
-        "JOIN conditions cond ON br.condition_id = cond.id"
+        "JOIN conditions cond ON f.condition_id = cond.id "
+        "JOIN bio_reps br ON f.bio_rep_id = br.id"
     )
     params: list = []
     if threshold_run_id is not None:
@@ -1063,7 +1011,7 @@ def select_experiment_summary(conn: sqlite3.Connection) -> list[dict]:
     query = """
         SELECT
             f.id AS fov_id,
-            f.name AS fov_name,
+            f.display_name AS fov_name,
             cond.name AS condition_name,
             b.name AS bio_rep_name,
             f.width, f.height,
@@ -1074,8 +1022,8 @@ def select_experiment_summary(conn: sqlite3.Connection) -> list[dict]:
             COALESCE(meas_agg.particle_channels, '') AS particle_channels,
             COALESCE(part_agg.particle_count, 0) AS particles
         FROM fovs f
+        JOIN conditions cond ON f.condition_id = cond.id
         JOIN bio_reps b ON f.bio_rep_id = b.id
-        JOIN conditions cond ON b.condition_id = cond.id
         LEFT JOIN (
             SELECT c.fov_id,
                    COUNT(*) AS cell_count,
@@ -1106,10 +1054,141 @@ def select_experiment_summary(conn: sqlite3.Connection) -> list[dict]:
             JOIN cells c ON p.cell_id = c.id
             GROUP BY c.fov_id
         ) part_agg ON part_agg.fov_id = f.id
-        ORDER BY cond.name, b.name, f.name
+        ORDER BY cond.name, b.name, f.display_name
     """
     rows = conn.execute(query).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# FOV Status Cache
+# ---------------------------------------------------------------------------
+
+
+def upsert_fov_status_cache(
+    conn: sqlite3.Connection,
+    fov_id: int,
+    cell_count: int,
+    seg_model: str,
+    measured_channels: str,
+    masked_channels: str,
+    particle_channels: str,
+    particle_count: int,
+) -> None:
+    """Insert or update the status cache for a FOV."""
+    conn.execute(
+        "INSERT INTO fov_status_cache "
+        "(fov_id, cell_count, seg_model, measured_channels, masked_channels, "
+        "particle_channels, particle_count, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) "
+        "ON CONFLICT(fov_id) DO UPDATE SET "
+        "cell_count=excluded.cell_count, seg_model=excluded.seg_model, "
+        "measured_channels=excluded.measured_channels, "
+        "masked_channels=excluded.masked_channels, "
+        "particle_channels=excluded.particle_channels, "
+        "particle_count=excluded.particle_count, "
+        "updated_at=excluded.updated_at",
+        (fov_id, cell_count, seg_model, measured_channels, masked_channels,
+         particle_channels, particle_count),
+    )
+    conn.commit()
+
+
+def select_fov_status_cache(conn: sqlite3.Connection) -> list[dict]:
+    """Return all FOV status cache entries."""
+    rows = conn.execute(
+        "SELECT * FROM fov_status_cache ORDER BY fov_id"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# FOV Tags
+# ---------------------------------------------------------------------------
+
+
+def insert_fov_tag(conn: sqlite3.Connection, fov_id: int, tag_id: int) -> None:
+    """Tag a FOV. Ignores duplicates."""
+    conn.execute(
+        "INSERT OR IGNORE INTO fov_tags (fov_id, tag_id) VALUES (?, ?)",
+        (fov_id, tag_id),
+    )
+    conn.commit()
+
+
+def delete_fov_tag(conn: sqlite3.Connection, fov_id: int, tag_id: int) -> None:
+    """Remove a tag from a FOV."""
+    conn.execute(
+        "DELETE FROM fov_tags WHERE fov_id = ? AND tag_id = ?",
+        (fov_id, tag_id),
+    )
+    conn.commit()
+
+
+def select_fov_tags(
+    conn: sqlite3.Connection,
+    fov_id: int | None = None,
+) -> list[dict]:
+    """Get tags for a specific FOV, or all FOV-tag pairs."""
+    if fov_id is not None:
+        rows = conn.execute(
+            "SELECT t.name, t.color FROM fov_tags ft "
+            "JOIN tags t ON ft.tag_id = t.id WHERE ft.fov_id = ? "
+            "ORDER BY t.name",
+            (fov_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT ft.fov_id, t.name, t.color FROM fov_tags ft "
+            "JOIN tags t ON ft.tag_id = t.id ORDER BY ft.fov_id, t.name"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def select_fovs_by_tag(conn: sqlite3.Connection, tag_name: str) -> list[int]:
+    """Get all FOV IDs that have a given tag."""
+    rows = conn.execute(
+        "SELECT ft.fov_id FROM fov_tags ft "
+        "JOIN tags t ON ft.tag_id = t.id WHERE t.name = ? "
+        "ORDER BY ft.fov_id",
+        (tag_name,),
+    ).fetchall()
+    return [r["fov_id"] for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Display Name Generation
+# ---------------------------------------------------------------------------
+
+
+def generate_display_name(
+    conn: sqlite3.Connection,
+    condition_name: str,
+    bio_rep_name: str,
+    base_name: str = "FOV",
+) -> str:
+    """Generate a unique display name like 'HS_N1_FOV_001'.
+
+    Auto-appends _2, _3, etc. on collision.
+    """
+    # Count existing FOVs with this condition+bio_rep prefix to determine number
+    prefix = f"{condition_name}_{bio_rep_name}_{base_name}_"
+    count = conn.execute(
+        "SELECT COUNT(*) FROM fovs WHERE display_name LIKE ?",
+        (prefix + "%",),
+    ).fetchone()[0]
+    candidate = f"{prefix}{count + 1:03d}"
+
+    # Handle collisions
+    for attempt in range(2, 101):
+        existing = conn.execute(
+            "SELECT id FROM fovs WHERE display_name = ?", (candidate,)
+        ).fetchone()
+        if existing is None:
+            return candidate
+        candidate = f"{prefix}{count + 1:03d}_{attempt}"
+
+    raise DuplicateError("fov", candidate)
 
 
 def delete_tags_by_prefix(

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
-    percell_version TEXT NOT NULL DEFAULT '3.3.0',
+    percell_version TEXT NOT NULL DEFAULT '3.4.0',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -47,21 +47,19 @@ CREATE TABLE IF NOT EXISTS timepoints (
 
 CREATE TABLE IF NOT EXISTS bio_reps (
     id INTEGER PRIMARY KEY,
-    condition_id INTEGER NOT NULL REFERENCES conditions(id),
-    name TEXT NOT NULL DEFAULT 'N1',
-    UNIQUE(condition_id, name)
+    name TEXT NOT NULL UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS fovs (
     id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
+    display_name TEXT NOT NULL UNIQUE,
+    condition_id INTEGER NOT NULL REFERENCES conditions(id),
     bio_rep_id INTEGER NOT NULL REFERENCES bio_reps(id),
     timepoint_id INTEGER REFERENCES timepoints(id),
     width INTEGER,
     height INTEGER,
     pixel_size_um REAL,
-    source_file TEXT,
-    UNIQUE(name, bio_rep_id, timepoint_id)
+    source_file TEXT
 );
 
 CREATE TABLE IF NOT EXISTS segmentation_runs (
@@ -135,6 +133,23 @@ CREATE TABLE IF NOT EXISTS cell_tags (
     PRIMARY KEY (cell_id, tag_id)
 );
 
+CREATE TABLE IF NOT EXISTS fov_status_cache (
+    fov_id INTEGER PRIMARY KEY REFERENCES fovs(id) ON DELETE CASCADE,
+    cell_count INTEGER NOT NULL DEFAULT 0,
+    seg_model TEXT DEFAULT '',
+    measured_channels TEXT DEFAULT '',
+    masked_channels TEXT DEFAULT '',
+    particle_channels TEXT DEFAULT '',
+    particle_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS fov_tags (
+    fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (fov_id, tag_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_cells_fov ON cells(fov_id);
 CREATE INDEX IF NOT EXISTS idx_cells_fov_valid ON cells(fov_id, is_valid);
 CREATE INDEX IF NOT EXISTS idx_cells_segmentation ON cells(segmentation_id);
@@ -167,8 +182,10 @@ CREATE TABLE IF NOT EXISTS particles (
     UNIQUE(cell_id, threshold_run_id, label_value)
 );
 
-CREATE INDEX IF NOT EXISTS idx_bio_reps_condition ON bio_reps(condition_id);
+CREATE INDEX IF NOT EXISTS idx_fovs_condition ON fovs(condition_id);
 CREATE INDEX IF NOT EXISTS idx_fovs_bio_rep ON fovs(bio_rep_id);
+CREATE INDEX IF NOT EXISTS idx_fov_tags_fov ON fov_tags(fov_id);
+CREATE INDEX IF NOT EXISTS idx_fov_tags_tag ON fov_tags(tag_id);
 CREATE INDEX IF NOT EXISTS idx_particles_cell ON particles(cell_id);
 CREATE INDEX IF NOT EXISTS idx_particles_run ON particles(threshold_run_id);
 """
@@ -177,16 +194,18 @@ EXPECTED_TABLES = frozenset({
     "experiments", "channels", "conditions", "timepoints", "bio_reps", "fovs",
     "segmentation_runs", "cells", "measurements", "threshold_runs",
     "analysis_runs", "tags", "cell_tags", "particles",
+    "fov_status_cache", "fov_tags",
 })
 
 EXPECTED_INDEXES = frozenset({
     "idx_cells_fov", "idx_cells_fov_valid", "idx_cells_segmentation", "idx_cells_area",
     "idx_measurements_cell", "idx_measurements_channel", "idx_measurements_metric",
-    "idx_bio_reps_condition", "idx_fovs_bio_rep",
+    "idx_fovs_condition", "idx_fovs_bio_rep",
+    "idx_fov_tags_fov", "idx_fov_tags_tag",
     "idx_particles_cell", "idx_particles_run",
 })
 
-EXPECTED_VERSION = "3.3.0"
+EXPECTED_VERSION = "3.4.0"
 
 
 def create_schema(
@@ -215,79 +234,10 @@ def create_schema(
     return conn
 
 
-def _migrate_3_2_to_3_3(conn: sqlite3.Connection) -> None:
-    """Migrate schema from 3.2.0 to 3.3.0.
-
-    Changes:
-    - Adds scope and threshold_run_id to measurements (temp table swap).
-    - Creates particles table and indexes if missing from older databases.
-    """
-    conn.executescript("""
-        -- Measurements: add scope + threshold_run_id, update unique constraint
-        CREATE TABLE measurements_new (
-            id INTEGER PRIMARY KEY,
-            cell_id INTEGER NOT NULL REFERENCES cells(id),
-            channel_id INTEGER NOT NULL REFERENCES channels(id),
-            metric TEXT NOT NULL,
-            value REAL NOT NULL,
-            scope TEXT NOT NULL DEFAULT 'whole_cell',
-            threshold_run_id INTEGER REFERENCES threshold_runs(id),
-            UNIQUE(cell_id, channel_id, metric, scope),
-            CHECK(scope IN ('whole_cell', 'mask_inside', 'mask_outside'))
-        );
-
-        INSERT INTO measurements_new (id, cell_id, channel_id, metric, value, scope)
-            SELECT id, cell_id, channel_id, metric, value, 'whole_cell'
-            FROM measurements;
-
-        DROP TABLE measurements;
-        ALTER TABLE measurements_new RENAME TO measurements;
-
-        CREATE INDEX IF NOT EXISTS idx_measurements_cell ON measurements(cell_id);
-        CREATE INDEX IF NOT EXISTS idx_measurements_channel ON measurements(channel_id);
-        CREATE INDEX IF NOT EXISTS idx_measurements_metric ON measurements(metric);
-
-        -- Particles table (may be missing from older 3.2 databases)
-        CREATE TABLE IF NOT EXISTS particles (
-            id INTEGER PRIMARY KEY,
-            cell_id INTEGER NOT NULL REFERENCES cells(id),
-            threshold_run_id INTEGER NOT NULL REFERENCES threshold_runs(id),
-            label_value INTEGER NOT NULL,
-            centroid_x REAL NOT NULL,
-            centroid_y REAL NOT NULL,
-            bbox_x INTEGER NOT NULL,
-            bbox_y INTEGER NOT NULL,
-            bbox_w INTEGER NOT NULL,
-            bbox_h INTEGER NOT NULL,
-            area_pixels REAL NOT NULL,
-            area_um2 REAL,
-            perimeter REAL,
-            circularity REAL,
-            eccentricity REAL,
-            solidity REAL,
-            major_axis_length REAL,
-            minor_axis_length REAL,
-            mean_intensity REAL,
-            max_intensity REAL,
-            integrated_intensity REAL,
-            UNIQUE(cell_id, threshold_run_id, label_value)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_bio_reps_condition ON bio_reps(condition_id);
-        CREATE INDEX IF NOT EXISTS idx_fovs_bio_rep ON fovs(bio_rep_id);
-        CREATE INDEX IF NOT EXISTS idx_particles_cell ON particles(cell_id);
-        CREATE INDEX IF NOT EXISTS idx_particles_run ON particles(threshold_run_id);
-
-        UPDATE experiments SET percell_version = '3.3.0';
-    """)
-
-
 def _ensure_tables(conn: sqlite3.Connection) -> None:
     """Create any missing tables and indexes expected by the current schema.
 
-    This handles databases that were partially migrated or created by older
-    code that didn't have all tables (e.g., particles added after initial
-    schema).  Uses CREATE TABLE/INDEX IF NOT EXISTS so it's safe to run on
+    Uses CREATE TABLE/INDEX IF NOT EXISTS so it's safe to run on
     complete databases.
     """
     existing = {
@@ -349,10 +299,29 @@ def _ensure_tables(conn: sqlite3.Connection) -> None:
             completed_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS fov_status_cache (
+            fov_id INTEGER PRIMARY KEY REFERENCES fovs(id) ON DELETE CASCADE,
+            cell_count INTEGER NOT NULL DEFAULT 0,
+            seg_model TEXT DEFAULT '',
+            measured_channels TEXT DEFAULT '',
+            masked_channels TEXT DEFAULT '',
+            particle_channels TEXT DEFAULT '',
+            particle_count INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS fov_tags (
+            fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
+            tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            PRIMARY KEY (fov_id, tag_id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_particles_cell ON particles(cell_id);
         CREATE INDEX IF NOT EXISTS idx_particles_run ON particles(threshold_run_id);
-        CREATE INDEX IF NOT EXISTS idx_bio_reps_condition ON bio_reps(condition_id);
+        CREATE INDEX IF NOT EXISTS idx_fovs_condition ON fovs(condition_id);
         CREATE INDEX IF NOT EXISTS idx_fovs_bio_rep ON fovs(bio_rep_id);
+        CREATE INDEX IF NOT EXISTS idx_fov_tags_fov ON fov_tags(fov_id);
+        CREATE INDEX IF NOT EXISTS idx_fov_tags_tag ON fov_tags(tag_id);
     """)
 
 
@@ -376,7 +345,7 @@ def open_database(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
 
-    # Check schema version and auto-migrate if possible
+    # Check schema version — no migration from older versions (breaking change)
     row = conn.execute(
         "SELECT percell_version FROM experiments LIMIT 1"
     ).fetchone()
@@ -385,12 +354,8 @@ def open_database(db_path: Path) -> sqlite3.Connection:
         stored_parts = stored.split(".")[:2]
         expected_parts = EXPECTED_VERSION.split(".")[:2]
         if stored_parts != expected_parts:
-            # Try auto-migration
-            if stored_parts == ["3", "2"]:
-                _migrate_3_2_to_3_3(conn)
-            else:
-                conn.close()
-                raise SchemaVersionError(stored, EXPECTED_VERSION)
+            conn.close()
+            raise SchemaVersionError(stored, EXPECTED_VERSION)
 
     # Ensure all expected tables exist (handles partially migrated databases)
     _ensure_tables(conn)
