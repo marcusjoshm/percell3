@@ -952,7 +952,7 @@ def _measure_channels(state: MenuState) -> None:
     """Interactively measure cells — whole-cell or mask-based modes."""
     store = state.require_experiment()
 
-    # Prerequisites
+    # Prerequisites (run once)
     channels = store.get_channels()
     if not channels:
         console.print("[red]No channels found.[/red] Import images first.")
@@ -968,27 +968,31 @@ def _measure_channels(state: MenuState) -> None:
         console.print("[red]No cells found.[/red] Run segmentation first.")
         return
 
-    # Mode selection
-    console.print("\n[bold]Measurement mode:[/bold]")
-    modes = [
-        "Whole cell (all channels, all metrics)",
-        "Inside threshold mask",
-        "Outside threshold mask",
-        "Both inside + outside mask",
-    ]
-    mode = numbered_select_one(modes, "Mode")
+    while True:
+        # Mode selection
+        console.print("\n[bold]Measurement mode:[/bold]")
+        modes = [
+            "Whole cell (all channels, all metrics)",
+            "Inside threshold mask",
+            "Outside threshold mask",
+            "Both inside + outside mask",
+        ]
+        mode = numbered_select_one(modes, "Mode")
 
-    if mode.startswith("Whole"):
-        _measure_whole_cell(store, channels, all_fovs)
-    else:
-        # Determine scopes
-        if "Inside" in mode:
-            scopes = ["mask_inside"]
-        elif "Outside" in mode:
-            scopes = ["mask_outside"]
-        else:
-            scopes = ["mask_inside", "mask_outside"]
-        _measure_masked(store, channels, all_fovs, scopes)
+        try:
+            if mode.startswith("Whole"):
+                _measure_whole_cell(store, channels, all_fovs)
+            else:
+                # Determine scopes
+                if "Inside" in mode:
+                    scopes = ["mask_inside"]
+                elif "Outside" in mode:
+                    scopes = ["mask_outside"]
+                else:
+                    scopes = ["mask_inside", "mask_outside"]
+                _measure_masked(store, channels, all_fovs, scopes)
+        except _MenuCancel:
+            continue
 
 
 def _measure_whole_cell(store, channels, all_fovs) -> None:
@@ -1555,188 +1559,196 @@ def _query_experiment(state: MenuState) -> None:
 
     store = state.require_experiment()
 
-    console.print("\n[bold]Query[/bold]")
-    console.print("  \\[1] Channels")
-    console.print("  \\[2] FOVs")
-    console.print("  \\[3] Conditions")
-    console.print("  \\[4] Biological replicates")
-    console.print("  \\[5] Experiment summary")
+    while True:
+        console.print("\n[bold]Query[/bold]")
+        console.print("  \\[1] Channels")
+        console.print("  \\[2] FOVs")
+        console.print("  \\[3] Conditions")
+        console.print("  \\[4] Biological replicates")
+        console.print("  \\[5] Experiment summary")
 
-    choice = menu_prompt("Select", choices=["1", "2", "3", "4", "5"], default="1")
+        choice = menu_prompt("Select", choices=["1", "2", "3", "4", "5"], default="1")
 
-    if choice == "1":
-        ch_list = store.get_channels()
-        if not ch_list:
-            console.print("[dim]No channels found.[/dim]")
-            return
-        rows = [{"name": ch.name, "role": ch.role or "", "color": ch.color or ""}
-                for ch in ch_list]
-        format_output(rows, ["name", "role", "color"], "table", "Channels")
+        try:
+            if choice == "1":
+                ch_list = store.get_channels()
+                if not ch_list:
+                    console.print("[dim]No channels found.[/dim]")
+                    continue
+                rows = [{"name": ch.name, "role": ch.role or "", "color": ch.color or ""}
+                        for ch in ch_list]
+                format_output(rows, ["name", "role", "color"], "table", "Channels")
 
-    elif choice == "2":
-        fov_list = store.get_fovs()
-        if not fov_list:
-            console.print("[dim]No FOVs found.[/dim]")
-            return
-        rows = [
-            {
-                "name": f.display_name,
-                "condition": f.condition,
-                "bio_rep": f.bio_rep,
-                "size": f"{f.width}x{f.height}" if f.width else "",
-                "pixel_size_um": str(f.pixel_size_um) if f.pixel_size_um else "",
-            }
-            for f in fov_list
-        ]
-        format_output(
-            rows, ["name", "condition", "bio_rep", "size", "pixel_size_um"],
-            "table", "FOVs",
-        )
+            elif choice == "2":
+                fov_list = store.get_fovs()
+                if not fov_list:
+                    console.print("[dim]No FOVs found.[/dim]")
+                    continue
+                rows = [
+                    {
+                        "name": f.display_name,
+                        "condition": f.condition,
+                        "bio_rep": f.bio_rep,
+                        "size": f"{f.width}x{f.height}" if f.width else "",
+                        "pixel_size_um": str(f.pixel_size_um) if f.pixel_size_um else "",
+                    }
+                    for f in fov_list
+                ]
+                format_output(
+                    rows, ["name", "condition", "bio_rep", "size", "pixel_size_um"],
+                    "table", "FOVs",
+                )
 
-    elif choice == "3":
-        cond_list = store.get_conditions()
-        if not cond_list:
-            console.print("[dim]No conditions found.[/dim]")
-            return
-        rows = [{"name": c} for c in cond_list]
-        format_output(rows, ["name"], "table", "Conditions")
+            elif choice == "3":
+                cond_list = store.get_conditions()
+                if not cond_list:
+                    console.print("[dim]No conditions found.[/dim]")
+                    continue
+                rows = [{"name": c} for c in cond_list]
+                format_output(rows, ["name"], "table", "Conditions")
 
-    elif choice == "4":
-        # Optional condition filter for bio reps
-        cond_filter = None
-        cond_list = store.get_conditions()
-        if len(cond_list) > 1:
-            console.print("\n[bold]Conditions:[/bold]")
-            _print_numbered_list(cond_list)
-            cond_str = menu_prompt("Condition filter (number, or blank = all)", default="")
-            if cond_str:
-                try:
-                    idx = int(cond_str)
-                    if 1 <= idx <= len(cond_list):
-                        cond_filter = cond_list[idx - 1]
-                except ValueError:
-                    cond_filter = cond_str
+            elif choice == "4":
+                # Optional condition filter for bio reps
+                cond_filter = None
+                cond_list = store.get_conditions()
+                if len(cond_list) > 1:
+                    console.print("\n[bold]Conditions:[/bold]")
+                    _print_numbered_list(cond_list)
+                    cond_str = menu_prompt("Condition filter (number, or blank = all)", default="")
+                    if cond_str:
+                        try:
+                            idx = int(cond_str)
+                            if 1 <= idx <= len(cond_list):
+                                cond_filter = cond_list[idx - 1]
+                        except ValueError:
+                            cond_filter = cond_str
 
-        rep_list = store.get_bio_reps()
-        if not rep_list:
-            console.print("[dim]No biological replicates found.[/dim]")
-            return
-        rows = [{"name": r} for r in rep_list]
-        title = f"Biological Replicates ({cond_filter})" if cond_filter else "Biological Replicates"
-        format_output(rows, ["name"], "table", title)
+                rep_list = store.get_bio_reps()
+                if not rep_list:
+                    console.print("[dim]No biological replicates found.[/dim]")
+                    continue
+                rows = [{"name": r} for r in rep_list]
+                title = f"Biological Replicates ({cond_filter})" if cond_filter else "Biological Replicates"
+                format_output(rows, ["name"], "table", title)
 
-    elif choice == "5":
-        summary = store.get_experiment_summary()
-        if not summary:
-            console.print("[dim]No FOVs found.[/dim]")
-            return
+            elif choice == "5":
+                summary = store.get_experiment_summary()
+                if not summary:
+                    console.print("[dim]No FOVs found.[/dim]")
+                    continue
 
-        # Format particle column: "channel (count)" or "-"
-        rows = []
-        for s in summary:
-            p_ch = s["particle_channels"] or ""
-            p_count = s["particles"]
-            if p_ch and p_count:
-                particle_str = f"{p_ch} ({p_count})"
-            elif p_ch:
-                particle_str = p_ch
-            else:
-                particle_str = "-"
+                # Format particle column: "channel (count)" or "-"
+                rows = []
+                for s in summary:
+                    p_ch = s["particle_channels"] or ""
+                    p_count = s["particles"]
+                    if p_ch and p_count:
+                        particle_str = f"{p_ch} ({p_count})"
+                    elif p_ch:
+                        particle_str = p_ch
+                    else:
+                        particle_str = "-"
 
-            rows.append({
-                "condition": s["condition_name"],
-                "bio_rep": s["bio_rep_name"],
-                "fov": s["fov_name"],
-                "cells": str(s["cells"]),
-                "seg_model": s["seg_model"] or "-",
-                "measured": s["measured_channels"] or "-",
-                "masked": s["masked_channels"] or "-",
-                "particles": particle_str,
-            })
+                    rows.append({
+                        "condition": s["condition_name"],
+                        "bio_rep": s["bio_rep_name"],
+                        "fov": s["fov_name"],
+                        "cells": str(s["cells"]),
+                        "seg_model": s["seg_model"] or "-",
+                        "measured": s["measured_channels"] or "-",
+                        "masked": s["masked_channels"] or "-",
+                        "particles": particle_str,
+                    })
 
-        columns = [
-            "condition", "bio_rep", "fov", "cells", "seg_model",
-            "measured", "masked", "particles",
-        ]
-        format_output(rows, columns, "table", "Experiment Summary")
+                columns = [
+                    "condition", "bio_rep", "fov", "cells", "seg_model",
+                    "measured", "masked", "particles",
+                ]
+                format_output(rows, columns, "table", "Experiment Summary")
 
-        # Offer CSV export
-        console.print()
-        save = numbered_select_one(["No", "Yes"], "Save summary to CSV?")
-        if save == "Yes":
-            import pandas as pd
+                # Offer CSV export
+                console.print()
+                save = numbered_select_one(["No", "Yes"], "Save summary to CSV?")
+                if save == "Yes":
+                    import pandas as pd
 
-            out_str = menu_prompt("Output CSV path")
-            out_path = Path(out_str).expanduser()
-            pd.DataFrame(summary).to_csv(out_path, index=False)
-            console.print(f"[green]Saved to {out_path}[/green]")
+                    out_str = menu_prompt("Output CSV path")
+                    out_path = Path(out_str).expanduser()
+                    pd.DataFrame(summary).to_csv(out_path, index=False)
+                    console.print(f"[green]Saved to {out_path}[/green]")
+        except _MenuCancel:
+            continue
 
 
 def _edit_experiment(state: MenuState) -> None:
     """Sub-menu for renaming experiment entities."""
     store = state.require_experiment()
 
-    console.print("\n[bold]Edit[/bold]")
-    console.print("  \\[1] Rename experiment")
-    console.print("  \\[2] Rename condition")
-    console.print("  \\[3] Rename FOV")
-    console.print("  \\[4] Rename channel")
-    console.print("  \\[5] Rename bio-rep")
+    while True:
+        console.print("\n[bold]Edit[/bold]")
+        console.print("  \\[1] Rename experiment")
+        console.print("  \\[2] Rename condition")
+        console.print("  \\[3] Rename FOV")
+        console.print("  \\[4] Rename channel")
+        console.print("  \\[5] Rename bio-rep")
 
-    choice = menu_prompt("Select", choices=["1", "2", "3", "4", "5"])
+        choice = menu_prompt("Select", choices=["1", "2", "3", "4", "5"])
 
-    if choice == "1":
-        new_name = menu_prompt("New experiment name")
-        store.rename_experiment(new_name)
-        console.print(f"[green]Experiment renamed to '{new_name}'[/green]")
+        try:
+            if choice == "1":
+                new_name = menu_prompt("New experiment name")
+                store.rename_experiment(new_name)
+                console.print(f"[green]Experiment renamed to '{new_name}'[/green]")
 
-    elif choice == "2":
-        conditions = store.get_conditions()
-        if not conditions:
-            console.print("[dim]No conditions found.[/dim]")
-            return
-        console.print("\n[bold]Conditions:[/bold]")
-        old = numbered_select_one(conditions, "Condition to rename")
-        new_name = menu_prompt(f"New name for '{old}'")
-        store.rename_condition(old, new_name)
-        console.print(f"[green]Condition '{old}' → '{new_name}'[/green]")
+            elif choice == "2":
+                conditions = store.get_conditions()
+                if not conditions:
+                    console.print("[dim]No conditions found.[/dim]")
+                    continue
+                console.print("\n[bold]Conditions:[/bold]")
+                old = numbered_select_one(conditions, "Condition to rename")
+                new_name = menu_prompt(f"New name for '{old}'")
+                store.rename_condition(old, new_name)
+                console.print(f"[green]Condition '{old}' → '{new_name}'[/green]")
 
-    elif choice == "3":
-        # Select FOV to rename from full list
-        fovs = store.get_fovs()
-        if not fovs:
-            console.print("[dim]No FOVs found.[/dim]")
-            return
-        fov_names = [f.display_name for f in fovs]
-        console.print(f"\n[bold]FOVs ({len(fov_names)}):[/bold]")
-        old = numbered_select_one(fov_names, "FOV to rename")
-        fov_info = next(f for f in fovs if f.display_name == old)
-        new_name = menu_prompt(f"New name for '{old}'")
-        store.rename_fov(fov_info.id, new_name)
-        console.print(f"[green]FOV '{old}' → '{new_name}'[/green]")
+            elif choice == "3":
+                # Select FOV to rename from full list
+                fovs = store.get_fovs()
+                if not fovs:
+                    console.print("[dim]No FOVs found.[/dim]")
+                    continue
+                fov_names = [f.display_name for f in fovs]
+                console.print(f"\n[bold]FOVs ({len(fov_names)}):[/bold]")
+                old = numbered_select_one(fov_names, "FOV to rename")
+                fov_info = next(f for f in fovs if f.display_name == old)
+                new_name = menu_prompt(f"New name for '{old}'")
+                store.rename_fov(fov_info.id, new_name)
+                console.print(f"[green]FOV '{old}' → '{new_name}'[/green]")
 
-    elif choice == "4":
-        channels = [ch.name for ch in store.get_channels()]
-        if not channels:
-            console.print("[dim]No channels found.[/dim]")
-            return
-        console.print("\n[bold]Channels:[/bold]")
-        old = numbered_select_one(channels, "Channel to rename")
-        new_name = menu_prompt(f"New name for '{old}'")
-        store.rename_channel(old, new_name)
-        console.print(f"[green]Channel '{old}' → '{new_name}'[/green]")
+            elif choice == "4":
+                channels = [ch.name for ch in store.get_channels()]
+                if not channels:
+                    console.print("[dim]No channels found.[/dim]")
+                    continue
+                console.print("\n[bold]Channels:[/bold]")
+                old = numbered_select_one(channels, "Channel to rename")
+                new_name = menu_prompt(f"New name for '{old}'")
+                store.rename_channel(old, new_name)
+                console.print(f"[green]Channel '{old}' → '{new_name}'[/green]")
 
-    elif choice == "5":
-        # Bio reps are global in the flat model
-        reps = store.get_bio_reps()
-        if not reps:
-            console.print("[dim]No biological replicates found.[/dim]")
-            return
-        console.print("\n[bold]Biological replicates:[/bold]")
-        old = numbered_select_one(reps, "Bio-rep to rename")
-        new_name = menu_prompt(f"New name for '{old}'")
-        store.rename_bio_rep(old, new_name)
-        console.print(f"[green]Bio-rep '{old}' → '{new_name}'[/green]")
+            elif choice == "5":
+                # Bio reps are global in the flat model
+                reps = store.get_bio_reps()
+                if not reps:
+                    console.print("[dim]No biological replicates found.[/dim]")
+                    continue
+                console.print("\n[bold]Biological replicates:[/bold]")
+                old = numbered_select_one(reps, "Bio-rep to rename")
+                new_name = menu_prompt(f"New name for '{old}'")
+                store.rename_bio_rep(old, new_name)
+                console.print(f"[green]Bio-rep '{old}' → '{new_name}'[/green]")
+        except _MenuCancel:
+            continue
 
 
 def _export_csv(state: MenuState) -> None:
@@ -1866,23 +1878,24 @@ def _export_csv(state: MenuState) -> None:
 
 def _run_workflow(state: MenuState) -> None:
     """Interactively run a workflow."""
-    console.print("\n[bold]Available Workflows[/bold]")
-    console.print("  \\[1] complete — Import -> Segment -> Measure -> Export")
-    console.print("  \\[2] measure_only — Re-measure with different channels")
+    while True:
+        console.print("\n[bold]Available Workflows[/bold]")
+        console.print("  \\[1] complete — Import -> Segment -> Measure -> Export")
+        console.print("  \\[2] measure_only — Re-measure with different channels")
 
-    choice = menu_prompt("Select", choices=["1", "2"])
+        choice = menu_prompt("Select", choices=["1", "2"])
 
-    if choice == "1":
-        console.print(
-            "\n[yellow]The 'complete' workflow requires segment and measure "
-            "modules which are not yet available.[/yellow]"
-        )
-        console.print("Use individual commands (create, import, query) instead.\n")
-    elif choice == "2":
-        console.print(
-            "\n[yellow]The 'measure_only' workflow requires the measure "
-            "module which is not yet available.[/yellow]"
-        )
+        if choice == "1":
+            console.print(
+                "\n[yellow]The 'complete' workflow requires segment and measure "
+                "modules which are not yet available.[/yellow]"
+            )
+            console.print("Use individual commands (create, import, query) instead.\n")
+        elif choice == "2":
+            console.print(
+                "\n[yellow]The 'measure_only' workflow requires the measure "
+                "module which is not yet available.[/yellow]"
+            )
 
 
 def _show_help(state: MenuState) -> None:
