@@ -409,8 +409,10 @@ def _import_images(state: MenuState) -> None:
     # Scan source
     from percell3.io import FileScanner
     from percell3.cli.import_cmd import (
+        build_auto_assignments,
         build_file_groups,
         next_fov_number,
+        show_auto_preview,
         show_file_group_table,
         _run_import,
         _show_preview,
@@ -431,6 +433,33 @@ def _import_images(state: MenuState) -> None:
 
     _show_preview(scan_result, str(source))
     show_file_group_table(groups)
+
+    # 2b. Auto/manual import mode choice
+    import_mode = numbered_select_one(
+        ["Auto-import all groups", "Manual configuration"],
+        "Import mode",
+    )
+
+    if import_mode == "Auto-import all groups":
+        condition_map, fov_names, bio_rep_map, channel_maps = build_auto_assignments(
+            groups, store,
+        )
+        show_auto_preview(
+            groups, condition_map, fov_names, bio_rep_map, channel_maps, "mip",
+        )
+        if numbered_select_one(["Yes", "No"], "Proceed?") != "Yes":
+            console.print("[yellow]Import cancelled.[/yellow]")
+            return
+        default_condition = next(iter(condition_map.values()), "default")
+        default_bio_rep = next(iter(bio_rep_map.values()), "N1")
+        _run_import(
+            store, str(source), default_condition, channel_maps, "mip",
+            yes=True, bio_rep=default_bio_rep,
+            condition_map=condition_map, fov_names=fov_names,
+            bio_rep_map=bio_rep_map,
+            source_files=source_files, scan_result=scan_result,
+        )
+        return
 
     # 3. Channel mapping with auto-match
     channel_maps: tuple[str, ...] = ()

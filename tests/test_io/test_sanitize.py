@@ -43,4 +43,10 @@ class TestSanitizeName:
         assert sanitize_name("region-1.0") == "region-1.0"
 
     def test_mixed_valid_invalid(self):
-        assert sanitize_name("my (region) #1") == "my_region_1"
+        assert sanitize_name("my (region) #1") == "my_(region)_1"
+
+    def test_plus_preserved(self):
+        assert sanitize_name("HS_+_VCPi") == "HS_+_VCPi"
+
+    def test_parens_preserved(self):
+        assert sanitize_name("group(A)") == "group(A)"

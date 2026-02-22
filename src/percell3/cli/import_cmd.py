@@ -50,6 +50,10 @@ if TYPE_CHECKING:
     "--yes", "-y", is_flag=True,
     help="Skip confirmation prompt.",
 )
+@click.option(
+    "--auto", is_flag=True, default=False,
+    help="Auto-import: each FOV token becomes a condition. Cannot combine with --condition.",
+)
 @error_handler
 def import_cmd(
     source: str,
@@ -60,18 +64,82 @@ def import_cmd(
     z_projection: str,
     files: tuple[str, ...],
     yes: bool,
+    auto: bool,
 ) -> None:
     """Import TIFF images into an experiment."""
+    if auto and condition != "default":
+        console.print(
+            "[red]Error:[/red] --auto and --condition are mutually exclusive."
+        )
+        raise SystemExit(1)
+
     store = open_experiment(experiment)
     try:
         source_files: list[Path] | None = [Path(f) for f in files] if files else None
-        _run_import(
-            store, source, condition, channel_map, z_projection, yes,
-            bio_rep=bio_rep,
-            source_files=source_files,
-        )
+
+        if auto:
+            _run_auto_import(
+                store, source, channel_map, z_projection, yes,
+                bio_rep=bio_rep,
+                source_files=source_files,
+            )
+        else:
+            _run_import(
+                store, source, condition, channel_map, z_projection, yes,
+                bio_rep=bio_rep,
+                source_files=source_files,
+            )
     finally:
         store.close()
+
+
+def _run_auto_import(
+    store: ExperimentStore,
+    source: str,
+    channel_map: tuple[str, ...],
+    z_projection: str,
+    yes: bool,
+    bio_rep: str = "N1",
+    source_files: list[Path] | None = None,
+) -> None:
+    """Auto-import: each FOV token becomes a condition."""
+    from percell3.io import FileScanner
+
+    scanner = FileScanner()
+    scan_result = scanner.scan(Path(source), files=source_files)
+
+    groups = build_file_groups(scan_result)
+    if not groups:
+        console.print("[red]No file groups found.[/red]")
+        return
+
+    condition_map, fov_names, bio_rep_map, auto_channels = build_auto_assignments(
+        groups, store,
+    )
+
+    # Use user-supplied channel map if provided, otherwise auto-generated
+    effective_channel_map = channel_map if channel_map else auto_channels
+
+    # Show preview
+    show_auto_preview(
+        groups, condition_map, fov_names, bio_rep_map,
+        effective_channel_map, z_projection,
+    )
+
+    if not yes:
+        if not click.confirm("Proceed with auto-import?"):
+            console.print("[yellow]Import cancelled.[/yellow]")
+            return
+
+    default_condition = next(iter(condition_map.values()), "default")
+    default_bio_rep = next(iter(bio_rep_map.values()), "N1")
+    _run_import(
+        store, source, default_condition, effective_channel_map, z_projection,
+        yes=True, bio_rep=default_bio_rep,
+        condition_map=condition_map, fov_names=fov_names,
+        bio_rep_map=bio_rep_map,
+        source_files=source_files, scan_result=scan_result,
+    )
 
 
 def _run_import(
@@ -278,6 +346,81 @@ def next_fov_number(store: ExperimentStore, condition: str, bio_rep: str) -> int
     """
     existing = store.get_fovs(condition=condition, bio_rep=bio_rep)
     return len(existing) + 1
+
+
+def build_auto_assignments(
+    groups: list[FileGroup],
+    store: ExperimentStore,
+) -> tuple[dict[str, str], dict[str, str], dict[str, str], tuple[str, ...]]:
+    """Auto-assign condition, bio rep, FOV name, and channels for all groups.
+
+    Each group's token becomes a condition name (sanitized). Bio rep defaults
+    to "N1", FOV name to "FOV_001". Channels are auto-named ch00, ch01, etc.
+
+    Args:
+        groups: File groups from scanning.
+        store: The experiment store (checked for existing condition names).
+
+    Returns:
+        Tuple of (condition_map, fov_names, bio_rep_map, channel_maps).
+    """
+    from percell3.io._sanitize import sanitize_name
+
+    existing_conditions = set(store.get_conditions())
+    used_names: set[str] = set()
+
+    condition_map: dict[str, str] = {}
+    fov_names: dict[str, str] = {}
+    bio_rep_map: dict[str, str] = {}
+
+    for group in groups:
+        base = sanitize_name(group.token)
+
+        # Collision detection: check against store and already-assigned names
+        candidate = base
+        counter = 2
+        while candidate in existing_conditions or candidate in used_names:
+            candidate = f"{base}_{counter}"
+            counter += 1
+
+        condition_map[group.token] = candidate
+        fov_names[group.token] = "FOV_001"
+        bio_rep_map[group.token] = "N1"
+        used_names.add(candidate)
+
+    # Collect unique channel tokens across all groups, sorted
+    all_channels: set[str] = set()
+    for group in groups:
+        all_channels.update(group.channels)
+
+    channel_maps = tuple(
+        f"{ch}:ch{ch}" for ch in sorted(all_channels)
+    )
+
+    return condition_map, fov_names, bio_rep_map, channel_maps
+
+
+def show_auto_preview(
+    groups: list[FileGroup],
+    condition_map: dict[str, str],
+    fov_names: dict[str, str],
+    bio_rep_map: dict[str, str],
+    channel_maps: tuple[str, ...],
+    z_method: str = "mip",
+) -> None:
+    """Display a preview of auto-import assignments."""
+    assignments = {
+        g.token: (condition_map[g.token], bio_rep_map[g.token], fov_names[g.token])
+        for g in groups
+        if g.token in condition_map
+    }
+    show_file_group_table(groups, assignments=assignments)
+
+    console.print(f"\n[bold]Auto-import settings:[/bold]")
+    console.print(f"  Channels:     {', '.join(channel_maps)}")
+    console.print(f"  Z-projection: {z_method}")
+    console.print(f"  Bio rep:      N1")
+    console.print()
 
 
 def _parse_channel_maps(maps: tuple[str, ...]) -> list[ChannelMapping]:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-_INVALID_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]")
+_INVALID_CHARS_RE = re.compile(r"[^A-Za-z0-9._+()-]")
 
 
 def sanitize_name(value: str, fallback: str = "unnamed") -> str:
@@ -25,7 +25,7 @@ def sanitize_name(value: str, fallback: str = "unnamed") -> str:
     result = _INVALID_CHARS_RE.sub("", result)
 
     # Strip leading non-alphanumeric characters
-    result = result.lstrip("._-")
+    result = result.lstrip("._-+()")
 
     if not result:
         result = fallback

@@ -93,6 +93,50 @@ class TestImportCommand:
         assert "Invalid channel map" in result.output
 
 
+class TestAutoFlag:
+    def test_auto_imports_all_groups(
+        self, runner: CliRunner, experiment_path: Path,
+        multi_condition_tiff_dir: Path,
+    ):
+        """--auto --yes with multi-FOV dir imports all groups."""
+        result = runner.invoke(
+            cli,
+            ["import", str(multi_condition_tiff_dir), "-e", str(experiment_path),
+             "--auto", "--yes"],
+        )
+        assert result.exit_code == 0
+        assert "Import complete" in result.output
+
+    def test_auto_with_channel_map_override(
+        self, runner: CliRunner, experiment_path: Path,
+        multi_condition_tiff_dir: Path,
+    ):
+        """--auto --yes --channel-map overrides auto-generated channel names."""
+        result = runner.invoke(
+            cli,
+            ["import", str(multi_condition_tiff_dir), "-e", str(experiment_path),
+             "--auto", "--yes", "--channel-map", "00:DAPI"],
+        )
+        assert result.exit_code == 0
+        assert "Import complete" in result.output
+
+    def test_auto_and_condition_mutually_exclusive(
+        self, runner: CliRunner, experiment_path: Path, tiff_dir: Path,
+    ):
+        """--auto and --condition together produce an error."""
+        result = runner.invoke(
+            cli,
+            ["import", str(tiff_dir), "-e", str(experiment_path),
+             "--auto", "--condition", "ctrl", "--yes"],
+        )
+        assert result.exit_code == 1
+        assert "mutually exclusive" in result.output
+
+    def test_auto_help_shows_flag(self, runner: CliRunner):
+        result = runner.invoke(cli, ["import", "--help"])
+        assert "--auto" in result.output
+
+
 class TestFilesFlag:
     def test_import_specific_files(
         self, runner: CliRunner, experiment_path: Path, tiff_dir: Path,
