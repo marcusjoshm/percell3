@@ -147,10 +147,16 @@ def launch_threshold_viewer(
     # Add image layer
     viewer.add_image(group_image, name="group_image", colormap="gray")
 
-    # Add threshold preview (labels layer)
+    # Add threshold preview (yellow colormap)
+    from napari.utils.colormaps import DirectLabelColormap
+
     preview = (group_image > initial_threshold) & cell_mask
+    yellow_cmap = DirectLabelColormap(
+        color_dict={0: "transparent", 1: "yellow", None: "transparent"},
+    )
     preview_layer = viewer.add_labels(
         preview.astype(np.int32), name="threshold_preview", opacity=0.4,
+        colormap=yellow_cmap,
     )
 
     # Add shapes layer for ROI drawing
