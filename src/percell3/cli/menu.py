@@ -2,24 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
+from percell3.cli.menu_system import Menu, MenuItem
 from percell3.cli.utils import console, make_progress, open_experiment
 
 if TYPE_CHECKING:
     from percell3.core import ExperimentStore
-
-
-@dataclass(frozen=True)
-class MenuItem:
-    """A single entry in the interactive menu."""
-
-    key: str
-    label: str
-    handler: Callable[[MenuState], None] | None
-    enabled: bool
 
 
 class MenuState:
@@ -211,74 +201,84 @@ def run_interactive_menu() -> None:
     # Auto-load last-used experiment
     _try_auto_load(state)
 
-    menu_items: list[MenuItem] = [
-        MenuItem("1", "Create experiment", _create_experiment, enabled=True),
-        MenuItem("2", "Import images", _import_images, enabled=True),
-        MenuItem("3", "Segment cells", _segment_cells, enabled=True),
-        MenuItem("4", "View in napari", _view_napari, enabled=True),
-        MenuItem("5", "Measure channels", _measure_channels, enabled=True),
-        MenuItem("6", "Apply threshold", _apply_threshold, enabled=True),
-        MenuItem("7", "Query experiment", _query_experiment, enabled=True),
-        MenuItem("8", "Edit experiment", _edit_experiment, enabled=True),
-        MenuItem("9", "Export to CSV", _export_csv, enabled=True),
-        MenuItem("w", "Run workflow", _run_workflow, enabled=True),
-        MenuItem("0", "Plugin manager", None, enabled=False),
-        MenuItem("e", "Select experiment", _select_experiment, enabled=True),
-        MenuItem("?", "Help", _show_help, enabled=True),
-        MenuItem("q", "Quit", None, enabled=True),
-    ]
-
-    valid_keys = [item.key for item in menu_items]
-
     try:
-        while state.running:
-            _show_header(state)
-            _show_menu(menu_items)
-
-            try:
-                choice = console.input("\nSelect an option: ").strip()
-            except EOFError:
-                break
-
-            if not choice:
-                choice = "q"
-            if choice == "q":
-                break
-
-            # Find matching menu item
-            handler = None
-            for item in menu_items:
-                if item.key == choice:
-                    if not item.enabled:
-                        console.print(
-                            f"\n[yellow]{item.label} is not yet available.[/yellow]"
-                        )
-                        console.print(
-                            "[dim]This feature is under development.[/dim]\n"
-                        )
-                    elif item.handler is not None:
-                        handler = item.handler
-                    break
-            else:
-                console.print(f"[red]Invalid option: {choice}[/red]")
-                continue
-
-            if handler:
-                from percell3.core.exceptions import ExperimentError
-
-                try:
-                    handler(state)
-                except _MenuHome:
-                    # Return to top of the main menu loop.
-                    continue
-                except _MenuCancel:
-                    console.print("[dim]Cancelled.[/dim]")
-                except ExperimentError as e:
-                    console.print(f"[red]Error:[/red] {e}")
-                except Exception as e:
-                    console.print(f"[red]Internal error:[/red] {e}")
+        Menu("MAIN MENU", [
+            MenuItem("1", "Setup", "Create and select experiments", _setup_menu),
+            MenuItem("2", "Import", "Import LIF, TIFF, or CZI images", _import_menu),
+            MenuItem("3", "Segment", "Single-cell segmentation with Cellpose", _segment_menu),
+            MenuItem("4", "Analyze", "Measure, threshold, and analyze cells", _analyze_menu),
+            MenuItem("5", "View", "View images and masks in napari", _view_menu),
+            MenuItem("6", "Data", "Query, edit, and export experiment data", _data_menu),
+            MenuItem("7", "Workflows", "Run automated analysis pipelines", _workflows_menu),
+            MenuItem("8", "Plugins", "Extend functionality with plugins", None, enabled=False),
+        ], state, show_banner=True).run()
+    except KeyboardInterrupt:
+        pass
     finally:
         state.close()
+
+
+# ---------------------------------------------------------------------------
+# Category sub-menus
+# ---------------------------------------------------------------------------
+
+
+def _setup_menu(state: MenuState) -> None:
+    Menu("SETUP", [
+        MenuItem("1", "Create experiment", "Create a new .percell experiment", _create_experiment),
+        MenuItem("2", "Select experiment", "Open an existing experiment", _select_experiment),
+        MenuItem("3", "Back", "", None),
+    ], state).run()
+
+
+def _import_menu(state: MenuState) -> None:
+    Menu("IMPORT", [
+        MenuItem("1", "Import images", "Load LIF, TIFF, or CZI files", _import_images),
+        MenuItem("2", "Back", "", None),
+    ], state).run()
+
+
+def _segment_menu(state: MenuState) -> None:
+    Menu("SEGMENT", [
+        MenuItem("1", "Segment cells", "Run Cellpose segmentation", _segment_cells),
+        MenuItem("2", "Back", "", None),
+    ], state).run()
+
+
+def _analyze_menu(state: MenuState) -> None:
+    Menu("ANALYZE", [
+        MenuItem("1", "Measure channels", "Measure fluorescence intensities per cell", _measure_channels),
+        MenuItem("2", "Apply threshold", "Otsu thresholding and particle detection", _apply_threshold),
+        MenuItem("3", "Back", "", None),
+    ], state).run()
+
+
+def _view_menu(state: MenuState) -> None:
+    Menu("VIEW", [
+        MenuItem("1", "View in napari", "Open images and masks in napari viewer", _view_napari),
+        MenuItem("2", "Back", "", None),
+    ], state).run()
+
+
+def _data_menu(state: MenuState) -> None:
+    Menu("DATA", [
+        MenuItem("1", "Query experiment", "Inspect experiment data", _query_menu),
+        MenuItem("2", "Edit experiment", "Rename conditions, FOVs, channels, bio-reps", _edit_menu),
+        MenuItem("3", "Export to CSV", "Export measurements and particle data", _export_csv),
+        MenuItem("4", "Back", "", None),
+    ], state).run()
+
+
+def _workflows_menu(state: MenuState) -> None:
+    Menu("WORKFLOWS", [
+        MenuItem("1", "Run workflow", "Run automated analysis pipelines", _run_workflow_stub, enabled=False),
+        MenuItem("2", "Back", "", None),
+    ], state).run()
+
+
+def _run_workflow_stub(state: MenuState) -> None:
+    console.print("\n[yellow]Workflows are not yet available.[/yellow]")
+    console.print("Use individual commands (create, import, query) instead.")
 
 
 _BANNER_LINES = [
@@ -322,15 +322,6 @@ def _show_header(state: MenuState) -> None:
         console.print(f"  Experiment: [cyan]{label}[/cyan]\n")
     else:
         console.print("  Experiment: [dim]None selected[/dim]\n")
-
-
-def _show_menu(items: list[MenuItem]) -> None:
-    """Render the menu items."""
-    for item in items:
-        if item.enabled:
-            console.print(f"  \\[{item.key}] {item.label}")
-        else:
-            console.print(f"  \\[{item.key}] {item.label}  [dim](coming soon)[/dim]")
 
 
 # --- Menu handlers ---
@@ -706,9 +697,9 @@ def _show_fov_status_table(
 
     table = Table(show_header=True, title="FOVs in experiment")
     table.add_column("#", style="bold", width=4)
-    table.add_column("FOV")
-    table.add_column("Condition")
-    table.add_column("Bio Rep")
+    table.add_column("FOV", max_width=25, overflow="ellipsis")
+    table.add_column("Condition", max_width=20, overflow="ellipsis")
+    table.add_column("Bio Rep", max_width=15, overflow="ellipsis")
     table.add_column("Shape")
     table.add_column("Cells", justify="right")
     table.add_column("Model")
@@ -1553,202 +1544,215 @@ def _prompt_source_path() -> tuple[str | None, list[Path] | None]:
     return (path_str, None) if path_str else (None, None)
 
 
-def _query_experiment(state: MenuState) -> None:
-    """Interactively query the experiment."""
+def _query_menu(state: MenuState) -> None:
+    """Query experiment data via a sub-menu."""
+    Menu("QUERY", [
+        MenuItem("1", "Experiment summary", "Per-FOV overview of cells and measurements", _query_summary),
+        MenuItem("2", "Channels", "List channels in the experiment", _query_channels),
+        MenuItem("3", "FOVs", "List fields of view", _query_fovs),
+        MenuItem("4", "Conditions", "List experimental conditions", _query_conditions),
+        MenuItem("5", "Biological replicates", "List biological replicates", _query_bio_reps),
+        MenuItem("6", "Back", "", None),
+    ], state).run()
+
+
+def _query_channels(state: MenuState) -> None:
     from percell3.cli.query import format_output
 
     store = state.require_experiment()
-
-    while True:
-        console.print("\n[bold]Query[/bold]")
-        console.print("  \\[1] Channels")
-        console.print("  \\[2] FOVs")
-        console.print("  \\[3] Conditions")
-        console.print("  \\[4] Biological replicates")
-        console.print("  \\[5] Experiment summary")
-
-        choice = menu_prompt("Select", choices=["1", "2", "3", "4", "5"], default="1")
-
-        try:
-            if choice == "1":
-                ch_list = store.get_channels()
-                if not ch_list:
-                    console.print("[dim]No channels found.[/dim]")
-                    continue
-                rows = [{"name": ch.name, "role": ch.role or "", "color": ch.color or ""}
-                        for ch in ch_list]
-                format_output(rows, ["name", "role", "color"], "table", "Channels")
-
-            elif choice == "2":
-                fov_list = store.get_fovs()
-                if not fov_list:
-                    console.print("[dim]No FOVs found.[/dim]")
-                    continue
-                rows = [
-                    {
-                        "name": f.display_name,
-                        "condition": f.condition,
-                        "bio_rep": f.bio_rep,
-                        "size": f"{f.width}x{f.height}" if f.width else "",
-                        "pixel_size_um": str(f.pixel_size_um) if f.pixel_size_um else "",
-                    }
-                    for f in fov_list
-                ]
-                format_output(
-                    rows, ["name", "condition", "bio_rep", "size", "pixel_size_um"],
-                    "table", "FOVs",
-                )
-
-            elif choice == "3":
-                cond_list = store.get_conditions()
-                if not cond_list:
-                    console.print("[dim]No conditions found.[/dim]")
-                    continue
-                rows = [{"name": c} for c in cond_list]
-                format_output(rows, ["name"], "table", "Conditions")
-
-            elif choice == "4":
-                # Optional condition filter for bio reps
-                cond_filter = None
-                cond_list = store.get_conditions()
-                if len(cond_list) > 1:
-                    console.print("\n[bold]Conditions:[/bold]")
-                    _print_numbered_list(cond_list)
-                    cond_str = menu_prompt("Condition filter (number, or blank = all)", default="")
-                    if cond_str:
-                        try:
-                            idx = int(cond_str)
-                            if 1 <= idx <= len(cond_list):
-                                cond_filter = cond_list[idx - 1]
-                        except ValueError:
-                            cond_filter = cond_str
-
-                rep_list = store.get_bio_reps()
-                if not rep_list:
-                    console.print("[dim]No biological replicates found.[/dim]")
-                    continue
-                rows = [{"name": r} for r in rep_list]
-                title = f"Biological Replicates ({cond_filter})" if cond_filter else "Biological Replicates"
-                format_output(rows, ["name"], "table", title)
-
-            elif choice == "5":
-                summary = store.get_experiment_summary()
-                if not summary:
-                    console.print("[dim]No FOVs found.[/dim]")
-                    continue
-
-                # Format particle column: "channel (count)" or "-"
-                rows = []
-                for s in summary:
-                    p_ch = s["particle_channels"] or ""
-                    p_count = s["particles"]
-                    if p_ch and p_count:
-                        particle_str = f"{p_ch} ({p_count})"
-                    elif p_ch:
-                        particle_str = p_ch
-                    else:
-                        particle_str = "-"
-
-                    rows.append({
-                        "condition": s["condition_name"],
-                        "bio_rep": s["bio_rep_name"],
-                        "fov": s["fov_name"],
-                        "cells": str(s["cells"]),
-                        "seg_model": s["seg_model"] or "-",
-                        "measured": s["measured_channels"] or "-",
-                        "masked": s["masked_channels"] or "-",
-                        "particles": particle_str,
-                    })
-
-                columns = [
-                    "condition", "bio_rep", "fov", "cells", "seg_model",
-                    "measured", "masked", "particles",
-                ]
-                format_output(rows, columns, "table", "Experiment Summary")
-
-                # Offer CSV export
-                console.print()
-                save = numbered_select_one(["No", "Yes"], "Save summary to CSV?")
-                if save == "Yes":
-                    import pandas as pd
-
-                    out_str = menu_prompt("Output CSV path")
-                    out_path = Path(out_str).expanduser()
-                    pd.DataFrame(summary).to_csv(out_path, index=False)
-                    console.print(f"[green]Saved to {out_path}[/green]")
-        except _MenuCancel:
-            continue
+    ch_list = store.get_channels()
+    if not ch_list:
+        console.print("[dim]No channels found.[/dim]")
+        return
+    rows = [{"name": ch.name, "role": ch.role or "", "color": ch.color or ""}
+            for ch in ch_list]
+    format_output(rows, ["name", "role", "color"], "table", "Channels")
 
 
-def _edit_experiment(state: MenuState) -> None:
-    """Sub-menu for renaming experiment entities."""
+def _query_fovs(state: MenuState) -> None:
+    from percell3.cli.query import format_output
+
     store = state.require_experiment()
+    fov_list = store.get_fovs()
+    if not fov_list:
+        console.print("[dim]No FOVs found.[/dim]")
+        return
+    rows = [
+        {
+            "name": f.display_name,
+            "condition": f.condition,
+            "bio_rep": f.bio_rep,
+            "size": f"{f.width}x{f.height}" if f.width else "",
+            "pixel_size_um": str(f.pixel_size_um) if f.pixel_size_um else "",
+        }
+        for f in fov_list
+    ]
+    format_output(
+        rows, ["name", "condition", "bio_rep", "size", "pixel_size_um"],
+        "table", "FOVs",
+    )
 
-    while True:
-        console.print("\n[bold]Edit[/bold]")
-        console.print("  \\[1] Rename experiment")
-        console.print("  \\[2] Rename condition")
-        console.print("  \\[3] Rename FOV")
-        console.print("  \\[4] Rename channel")
-        console.print("  \\[5] Rename bio-rep")
 
-        choice = menu_prompt("Select", choices=["1", "2", "3", "4", "5"])
+def _query_conditions(state: MenuState) -> None:
+    from percell3.cli.query import format_output
 
-        try:
-            if choice == "1":
-                new_name = menu_prompt("New experiment name")
-                store.rename_experiment(new_name)
-                console.print(f"[green]Experiment renamed to '{new_name}'[/green]")
+    store = state.require_experiment()
+    cond_list = store.get_conditions()
+    if not cond_list:
+        console.print("[dim]No conditions found.[/dim]")
+        return
+    rows = [{"name": c} for c in cond_list]
+    format_output(rows, ["name"], "table", "Conditions")
 
-            elif choice == "2":
-                conditions = store.get_conditions()
-                if not conditions:
-                    console.print("[dim]No conditions found.[/dim]")
-                    continue
-                console.print("\n[bold]Conditions:[/bold]")
-                old = numbered_select_one(conditions, "Condition to rename")
-                new_name = menu_prompt(f"New name for '{old}'")
-                store.rename_condition(old, new_name)
-                console.print(f"[green]Condition '{old}' → '{new_name}'[/green]")
 
-            elif choice == "3":
-                # Select FOV to rename from full list
-                fovs = store.get_fovs()
-                if not fovs:
-                    console.print("[dim]No FOVs found.[/dim]")
-                    continue
-                fov_names = [f.display_name for f in fovs]
-                console.print(f"\n[bold]FOVs ({len(fov_names)}):[/bold]")
-                old = numbered_select_one(fov_names, "FOV to rename")
-                fov_info = next(f for f in fovs if f.display_name == old)
-                new_name = menu_prompt(f"New name for '{old}'")
-                store.rename_fov(fov_info.id, new_name)
-                console.print(f"[green]FOV '{old}' → '{new_name}'[/green]")
+def _query_bio_reps(state: MenuState) -> None:
+    from percell3.cli.query import format_output
 
-            elif choice == "4":
-                channels = [ch.name for ch in store.get_channels()]
-                if not channels:
-                    console.print("[dim]No channels found.[/dim]")
-                    continue
-                console.print("\n[bold]Channels:[/bold]")
-                old = numbered_select_one(channels, "Channel to rename")
-                new_name = menu_prompt(f"New name for '{old}'")
-                store.rename_channel(old, new_name)
-                console.print(f"[green]Channel '{old}' → '{new_name}'[/green]")
+    store = state.require_experiment()
+    cond_filter = None
+    cond_list = store.get_conditions()
+    if len(cond_list) > 1:
+        console.print("\n[bold]Conditions:[/bold]")
+        _print_numbered_list(cond_list)
+        cond_str = menu_prompt("Condition filter (number, or blank = all)", default="")
+        if cond_str:
+            try:
+                idx = int(cond_str)
+                if 1 <= idx <= len(cond_list):
+                    cond_filter = cond_list[idx - 1]
+            except ValueError:
+                cond_filter = cond_str
 
-            elif choice == "5":
-                # Bio reps are global in the flat model
-                reps = store.get_bio_reps()
-                if not reps:
-                    console.print("[dim]No biological replicates found.[/dim]")
-                    continue
-                console.print("\n[bold]Biological replicates:[/bold]")
-                old = numbered_select_one(reps, "Bio-rep to rename")
-                new_name = menu_prompt(f"New name for '{old}'")
-                store.rename_bio_rep(old, new_name)
-                console.print(f"[green]Bio-rep '{old}' → '{new_name}'[/green]")
-        except _MenuCancel:
-            continue
+    rep_list = store.get_bio_reps()
+    if not rep_list:
+        console.print("[dim]No biological replicates found.[/dim]")
+        return
+    rows = [{"name": r} for r in rep_list]
+    title = f"Biological Replicates ({cond_filter})" if cond_filter else "Biological Replicates"
+    format_output(rows, ["name"], "table", title)
+
+
+def _query_summary(state: MenuState) -> None:
+    from percell3.cli.query import format_output
+
+    store = state.require_experiment()
+    summary = store.get_experiment_summary()
+    if not summary:
+        console.print("[dim]No FOVs found.[/dim]")
+        return
+
+    # Format particle column: "channel (count)" or "-"
+    rows = []
+    for s in summary:
+        p_ch = s["particle_channels"] or ""
+        p_count = s["particles"]
+        if p_ch and p_count:
+            particle_str = f"{p_ch} ({p_count})"
+        elif p_ch:
+            particle_str = p_ch
+        else:
+            particle_str = "-"
+
+        rows.append({
+            "condition": s["condition_name"],
+            "bio_rep": s["bio_rep_name"],
+            "fov": s["fov_name"],
+            "cells": str(s["cells"]),
+            "seg_model": s["seg_model"] or "-",
+            "measured": s["measured_channels"] or "-",
+            "masked": s["masked_channels"] or "-",
+            "particles": particle_str,
+        })
+
+    columns = [
+        "condition", "bio_rep", "fov", "cells", "seg_model",
+        "measured", "masked", "particles",
+    ]
+    format_output(rows, columns, "table", "Experiment Summary")
+
+    # Offer CSV export
+    console.print()
+    save = numbered_select_one(["No", "Yes"], "Save summary to CSV?")
+    if save == "Yes":
+        import pandas as pd
+
+        out_str = menu_prompt("Output CSV path")
+        out_path = Path(out_str).expanduser()
+        pd.DataFrame(summary).to_csv(out_path, index=False)
+        console.print(f"[green]Saved to {out_path}[/green]")
+
+
+def _edit_menu(state: MenuState) -> None:
+    """Edit experiment entities via a sub-menu."""
+    Menu("EDIT", [
+        MenuItem("1", "Rename experiment", "Change the experiment name", _rename_experiment),
+        MenuItem("2", "Rename condition", "Rename a condition", _rename_condition),
+        MenuItem("3", "Rename FOV", "Rename a field of view", _rename_fov),
+        MenuItem("4", "Rename channel", "Rename a channel", _rename_channel),
+        MenuItem("5", "Rename bio-rep", "Rename a biological replicate", _rename_bio_rep),
+        MenuItem("6", "Back", "", None),
+    ], state).run()
+
+
+def _rename_experiment(state: MenuState) -> None:
+    store = state.require_experiment()
+    new_name = menu_prompt("New experiment name")
+    store.rename_experiment(new_name)
+    console.print(f"[green]Experiment renamed to '{new_name}'[/green]")
+
+
+def _rename_condition(state: MenuState) -> None:
+    store = state.require_experiment()
+    conditions = store.get_conditions()
+    if not conditions:
+        console.print("[dim]No conditions found.[/dim]")
+        return
+    console.print("\n[bold]Conditions:[/bold]")
+    old = numbered_select_one(conditions, "Condition to rename")
+    new_name = menu_prompt(f"New name for '{old}'")
+    store.rename_condition(old, new_name)
+    console.print(f"[green]Condition '{old}' → '{new_name}'[/green]")
+
+
+def _rename_fov(state: MenuState) -> None:
+    store = state.require_experiment()
+    fovs = store.get_fovs()
+    if not fovs:
+        console.print("[dim]No FOVs found.[/dim]")
+        return
+    fov_names = [f.display_name for f in fovs]
+    console.print(f"\n[bold]FOVs ({len(fov_names)}):[/bold]")
+    old = numbered_select_one(fov_names, "FOV to rename")
+    fov_info = next(f for f in fovs if f.display_name == old)
+    new_name = menu_prompt(f"New name for '{old}'")
+    store.rename_fov(fov_info.id, new_name)
+    console.print(f"[green]FOV '{old}' → '{new_name}'[/green]")
+
+
+def _rename_channel(state: MenuState) -> None:
+    store = state.require_experiment()
+    channels = [ch.name for ch in store.get_channels()]
+    if not channels:
+        console.print("[dim]No channels found.[/dim]")
+        return
+    console.print("\n[bold]Channels:[/bold]")
+    old = numbered_select_one(channels, "Channel to rename")
+    new_name = menu_prompt(f"New name for '{old}'")
+    store.rename_channel(old, new_name)
+    console.print(f"[green]Channel '{old}' → '{new_name}'[/green]")
+
+
+def _rename_bio_rep(state: MenuState) -> None:
+    store = state.require_experiment()
+    reps = store.get_bio_reps()
+    if not reps:
+        console.print("[dim]No biological replicates found.[/dim]")
+        return
+    console.print("\n[bold]Biological replicates:[/bold]")
+    old = numbered_select_one(reps, "Bio-rep to rename")
+    new_name = menu_prompt(f"New name for '{old}'")
+    store.rename_bio_rep(old, new_name)
+    console.print(f"[green]Bio-rep '{old}' → '{new_name}'[/green]")
 
 
 def _export_csv(state: MenuState) -> None:
@@ -1877,25 +1881,9 @@ def _export_csv(state: MenuState) -> None:
 
 
 def _run_workflow(state: MenuState) -> None:
-    """Interactively run a workflow."""
-    while True:
-        console.print("\n[bold]Available Workflows[/bold]")
-        console.print("  \\[1] complete — Import -> Segment -> Measure -> Export")
-        console.print("  \\[2] measure_only — Re-measure with different channels")
-
-        choice = menu_prompt("Select", choices=["1", "2"])
-
-        if choice == "1":
-            console.print(
-                "\n[yellow]The 'complete' workflow requires segment and measure "
-                "modules which are not yet available.[/yellow]"
-            )
-            console.print("Use individual commands (create, import, query) instead.\n")
-        elif choice == "2":
-            console.print(
-                "\n[yellow]The 'measure_only' workflow requires the measure "
-                "module which is not yet available.[/yellow]"
-            )
+    """Legacy workflow handler — kept for backwards compatibility."""
+    console.print("\n[yellow]Workflows are not yet available.[/yellow]")
+    console.print("Use individual commands (create, import, query) instead.")
 
 
 def _show_help(state: MenuState) -> None:

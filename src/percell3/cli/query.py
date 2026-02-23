@@ -31,12 +31,16 @@ def format_output(
         table = Table(show_header=True, title=title)
         for col in columns:
             if col == columns[0]:
-                table.add_column(col, style="bold")
+                table.add_column(col, style="bold", max_width=25, overflow="ellipsis")
             else:
-                table.add_column(col)
+                table.add_column(col, max_width=20, overflow="ellipsis")
         for row in rows:
             table.add_row(*(str(row.get(c, "")) for c in columns))
-        console.print(table)
+        if len(rows) >= 30 and console.is_terminal:
+            with console.pager(styles=True):
+                console.print(table)
+        else:
+            console.print(table)
     elif fmt == "csv":
         buf = io.StringIO()
         writer = csv.writer(buf)

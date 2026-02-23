@@ -14,7 +14,6 @@ from percell3.cli.menu import (
     _MenuHome,
     _print_numbered_list,
     _show_header,
-    _show_menu,
     menu_prompt,
     numbered_select_many,
     numbered_select_one,
@@ -40,28 +39,29 @@ def _invoke_menu(runner: CliRunner, args=None, **kwargs):
 
 class TestMenuLaunch:
     def test_no_args_launches_menu(self, runner: CliRunner):
-        # Menu prompts for input; send 'q' to quit immediately
+        # Main menu shows categories; send 'q' to quit immediately
         result = _invoke_menu(runner, input="q\n")
         assert result.exit_code == 0
         assert "PerCell 3" in result.output
-        assert "Create experiment" in result.output
+        assert "Setup" in result.output
         assert "coming soon" in result.output
 
-    def test_menu_shows_disabled_items(self, runner: CliRunner):
+    def test_menu_shows_categories(self, runner: CliRunner):
         result = _invoke_menu(runner, input="q\n")
-        assert "Segment cells" in result.output
+        assert "Setup" in result.output
+        assert "Import" in result.output
+        assert "Segment" in result.output
+        assert "Analyze" in result.output
+        assert "View" in result.output
+        assert "Data" in result.output
+        assert "Workflows" in result.output
+        assert "Plugins" in result.output
         assert "coming soon" in result.output
 
     def test_disabled_item_shows_message(self, runner: CliRunner):
-        # Select disabled item "0" (Plugin manager), then quit
-        result = _invoke_menu(runner, input="0\nq\n")
+        # Select disabled item "8" (Plugins), press Enter to continue, then quit
+        result = _invoke_menu(runner, input="8\n\nq\n")
         assert "not yet available" in result.output
-
-    def test_help_shows_commands(self, runner: CliRunner):
-        # Help is now '?' instead of 'h'
-        result = _invoke_menu(runner, input="?\nq\n")
-        assert "percell3 create" in result.output
-        assert "percell3 import" in result.output
 
     def test_invalid_option_shows_error(self, runner: CliRunner):
         result = _invoke_menu(runner, input="z\nq\n")
@@ -98,9 +98,10 @@ class TestMenuState:
 class TestMenuCreateExperiment:
     def test_create_via_menu(self, runner: CliRunner, tmp_path: Path):
         exp_path = tmp_path / "menu_exp.percell"
+        # Main→Setup(1)→Create(1)→path→name→desc→Enter gate→Back(3)→quit
         result = _invoke_menu(
             runner,
-            input=f"1\n{exp_path}\nMyExp\nA test\nq\n",
+            input=f"1\n1\n{exp_path}\nMyExp\nA test\n\n3\nq\n",
         )
         assert result.exit_code == 0
         assert "Created experiment" in result.output
@@ -111,17 +112,19 @@ class TestMenuSelectExperiment:
     def test_select_experiment_via_menu(
         self, runner: CliRunner, experiment_path: Path,
     ):
+        # Main→Setup(1)→Select(2)→path→Enter gate→Back(3)→quit
         result = _invoke_menu(
             runner,
-            input=f"e\n{experiment_path}\nq\n",
+            input=f"1\n2\n{experiment_path}\n\n3\nq\n",
         )
         assert result.exit_code == 0
         assert "Opened experiment" in result.output
 
     def test_select_nonexistent_path(self, runner: CliRunner):
+        # Main→Setup(1)→Select(2)→path→Enter gate→Back(3)→quit
         result = _invoke_menu(
             runner,
-            input="e\n/nonexistent/path.percell\nq\n",
+            input="1\n2\n/nonexistent/path.percell\n\n3\nq\n",
         )
         assert "does not exist" in result.output
 
@@ -179,15 +182,52 @@ class TestMenuPrompt:
 class TestHomeNavigation:
     """Test that 'h' from nested menus returns to home."""
 
-    def test_h_from_query_returns_to_home(self, runner: CliRunner, experiment_path: Path):
-        # Open experiment, enter query, press h, then q
+    def test_h_from_data_query_returns_to_home(self, runner: CliRunner, experiment_path: Path):
+        # Main→Setup(1)→Select(2)→path→Enter→Back(3)
+        # →Data(6)→Query(1)→press h→back at main→quit
         result = _invoke_menu(
             runner,
-            input=f"e\n{experiment_path}\n7\nh\nq\n",
+            input=f"1\n2\n{experiment_path}\n\n3\n6\n1\nh\nq\n",
         )
         assert result.exit_code == 0
-        # Should see the menu header twice (once before query, once after h returns home)
+        # Should see PerCell 3 multiple times (main menu redraws)
         assert result.output.count("PerCell 3") >= 2
+
+    def test_b_from_sub_menu_returns_to_parent(self, runner: CliRunner):
+        # Main→Setup(1)→Back(3)→quit
+        result = _invoke_menu(runner, input="1\n3\nq\n")
+        assert result.exit_code == 0
+
+    def test_b_key_from_sub_menu_returns_to_parent(self, runner: CliRunner):
+        # Main→Setup(1)→press b→quit
+        result = _invoke_menu(runner, input="1\nb\nq\n")
+        assert result.exit_code == 0
+
+
+class TestSubMenuNavigation:
+    """Test two-tier navigation structure."""
+
+    def test_setup_sub_menu(self, runner: CliRunner):
+        # Main→Setup(1) should show Create/Select/Back, then Back(3)→quit
+        result = _invoke_menu(runner, input="1\n3\nq\n")
+        assert result.exit_code == 0
+        assert "Create experiment" in result.output
+        assert "Select experiment" in result.output
+
+    def test_data_sub_menu(self, runner: CliRunner):
+        # Main→Data(6) should show Query/Edit/Export/Back, then Back(4)→quit
+        result = _invoke_menu(runner, input="6\n4\nq\n")
+        assert result.exit_code == 0
+        assert "Query experiment" in result.output
+        assert "Edit experiment" in result.output
+        assert "Export to CSV" in result.output
+
+    def test_analyze_sub_menu(self, runner: CliRunner):
+        # Main→Analyze(4) should show Measure/Threshold/Back, then Back(3)→quit
+        result = _invoke_menu(runner, input="4\n3\nq\n")
+        assert result.exit_code == 0
+        assert "Measure channels" in result.output
+        assert "Apply threshold" in result.output
 
 
 # ---------------------------------------------------------------------------

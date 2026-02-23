@@ -302,15 +302,15 @@ def show_file_group_table(
     """
     table = Table(show_header=True, title="File Groups")
     table.add_column("#", style="bold", width=4)
-    table.add_column("File group")
+    table.add_column("File group", max_width=25, overflow="ellipsis")
     table.add_column("Ch", justify="right")
     table.add_column("Z", justify="right")
     table.add_column("Files", justify="right")
     table.add_column("Shape")
     if assignments:
-        table.add_column("Condition", style="cyan")
-        table.add_column("Bio Rep", style="green")
-        table.add_column("FOV", style="yellow")
+        table.add_column("Condition", style="cyan", max_width=20, overflow="ellipsis")
+        table.add_column("Bio Rep", style="green", max_width=15, overflow="ellipsis")
+        table.add_column("FOV", style="yellow", max_width=20, overflow="ellipsis")
 
     for i, g in enumerate(groups, 1):
         shape_str = f"{g.shape[0]} x {g.shape[1]}" if len(g.shape) >= 2 else str(g.shape)
