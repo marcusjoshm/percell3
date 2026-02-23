@@ -828,20 +828,30 @@ class ExperimentStore:
         """
         import csv as csv_mod
 
-        from percell3.measure.particle_analyzer import PARTICLE_SUMMARY_METRICS
+        from percell3.measure.particle_analyzer import (
+            PARTICLE_AGGREGATE_METRICS,
+            PARTICLE_SUMMARY_METRICS,
+        )
 
         particle_metric_set = set(PARTICLE_SUMMARY_METRICS)
+        aggregate_metric_set = set(PARTICLE_AGGREGATE_METRICS)
+
+        # Separate aggregate metric names from per-cell metric names
+        want_aggregates = not metrics or bool(aggregate_metric_set & set(metrics))
+        per_cell_metrics = (
+            [m for m in metrics if m not in aggregate_metric_set]
+            if metrics
+            else None
+        )
 
         # Get measurements filtered by channels and scope
         df = self.get_measurements(channels=channels, scope=scope)
-        if df.empty:
+        if df.empty and not want_aggregates:
             return {"files_written": 0, "channels_exported": 0}
 
-        # Filter by metrics if specified
-        if metrics:
-            df = df[df["metric"].isin(metrics)]
-        if df.empty:
-            return {"files_written": 0, "channels_exported": 0}
+        # Filter by per-cell metrics if specified (empty list = no per-cell metrics)
+        if per_cell_metrics is not None:
+            df = df[df["metric"].isin(per_cell_metrics)]
 
         # Get valid cells with condition/bio_rep context
         cells_df = self.get_cells(is_valid=True)
@@ -851,9 +861,8 @@ class ExperimentStore:
         cell_context = cells_df[["id", "condition_name", "bio_rep_name"]].rename(
             columns={"id": "cell_id"}
         )
-        df = df.merge(cell_context, on="cell_id", how="inner")
-        if df.empty:
-            return {"files_written": 0, "channels_exported": 0}
+        if not df.empty:
+            df = df.merge(cell_context, on="cell_id", how="inner")
 
         # Scope suffix for filenames (particle metrics never get suffix)
         scope_suffix = "" if scope == "whole_cell" else f"_{scope}"
@@ -896,6 +905,44 @@ class ExperimentStore:
 
             files_written += 1
             channels_exported.add(str(channel))
+
+        # --- Aggregate metrics (one value per group, not per cell) ---
+        # Compute pct_cells_with_particles from particle_count data.
+        if want_aggregates:
+            # particle_count may already be in df, or we need to fetch it
+            pc_df = df[df["metric"] == "particle_count"] if not df.empty else df
+            if pc_df.empty:
+                # particle_count was filtered out or df was empty — re-query it
+                pc_raw = self.get_measurements(channels=channels, scope="whole_cell")
+                pc_raw = pc_raw[pc_raw["metric"] == "particle_count"]
+                if not pc_raw.empty:
+                    pc_df = pc_raw.merge(cell_context, on="cell_id", how="inner")
+
+            if not pc_df.empty:
+                for channel, ch_group in pc_df.groupby("channel"):
+                    column_data_agg: dict[str, list[float]] = {}
+                    for (cond, bio_rep), sub in ch_group.groupby(
+                        ["condition_name", "bio_rep_name"]
+                    ):
+                        col_name = f"{cond}_{bio_rep}"
+                        total = len(sub)
+                        with_particles = int((sub["value"] > 0).sum())
+                        pct = (with_particles / total * 100) if total > 0 else 0.0
+                        column_data_agg[col_name] = [round(pct, 2)]
+
+                    if column_data_agg:
+                        sorted_cols = sorted(column_data_agg.keys())
+                        ch_dir = output_dir / str(channel)
+                        ch_dir.mkdir(parents=True, exist_ok=True)
+                        csv_path = ch_dir / "pct_cells_with_particles.csv"
+                        with open(csv_path, "w", newline="") as f:
+                            writer = csv_mod.writer(f)
+                            writer.writerow(sorted_cols)
+                            writer.writerow(
+                                [column_data_agg[c][0] for c in sorted_cols]
+                            )
+                        files_written += 1
+                        channels_exported.add(str(channel))
 
         return {
             "files_written": files_written,

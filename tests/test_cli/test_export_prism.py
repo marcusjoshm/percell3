@@ -85,10 +85,13 @@ def prism_experiment(tmp_path: Path) -> ExperimentStore:
                         ))
                 store.add_measurements(measurements)
 
-    # Add particle summary metrics for GFP on Control_N1 cells
-    control_n1_ids = all_cell_ids["Control_N1"]
+    # Add particle summary metrics for GFP across all groups.
+    # Control_N1: all 6 cells have particles (particle_count=2) → pct = 100%
+    # Control_N2: 3 of 6 cells have particles → pct = 50%
+    # HS_N1: 0 of 4 cells have particles → pct = 0%
+    # HS_N2: 2 of 4 cells have particles → pct = 50%
     particle_summaries = []
-    for cid in control_n1_ids:
+    for cid in all_cell_ids["Control_N1"]:
         particle_summaries.append(MeasurementRecord(
             cell_id=cid, channel_id=gfp_ch.id,
             metric="particle_count", value=2.0,
@@ -96,6 +99,21 @@ def prism_experiment(tmp_path: Path) -> ExperimentStore:
         particle_summaries.append(MeasurementRecord(
             cell_id=cid, channel_id=gfp_ch.id,
             metric="mean_particle_area", value=40.0,
+        ))
+    for i, cid in enumerate(all_cell_ids["Control_N2"]):
+        particle_summaries.append(MeasurementRecord(
+            cell_id=cid, channel_id=gfp_ch.id,
+            metric="particle_count", value=1.0 if i < 3 else 0.0,
+        ))
+    for cid in all_cell_ids["HS_N1"]:
+        particle_summaries.append(MeasurementRecord(
+            cell_id=cid, channel_id=gfp_ch.id,
+            metric="particle_count", value=0.0,
+        ))
+    for i, cid in enumerate(all_cell_ids["HS_N2"]):
+        particle_summaries.append(MeasurementRecord(
+            cell_id=cid, channel_id=gfp_ch.id,
+            metric="particle_count", value=3.0 if i < 2 else 0.0,
         ))
     store.add_measurements(particle_summaries)
 
@@ -274,6 +292,78 @@ class TestPrismExportCore:
 
         # Total cells = 20 (various per condition_biorep) minus 2 invalid
         assert len(all_values) == 18
+
+
+    def test_pct_cells_with_particles_file_created(
+        self, prism_experiment: ExperimentStore, tmp_path: Path,
+    ):
+        """Aggregate pct_cells_with_particles.csv is written for channels with particle data."""
+        out_dir = tmp_path / "prism_out"
+        prism_experiment.export_prism_csv(out_dir)
+
+        # GFP has particle_count data → aggregate file written
+        assert (out_dir / "GFP" / "pct_cells_with_particles.csv").is_file()
+        # DAPI has no particle_count data → no aggregate file
+        assert not (out_dir / "DAPI" / "pct_cells_with_particles.csv").exists()
+
+    def test_pct_cells_with_particles_values(
+        self, prism_experiment: ExperimentStore, tmp_path: Path,
+    ):
+        """Aggregate percentages are correct per (condition, bio_rep) group."""
+        out_dir = tmp_path / "prism_out"
+        prism_experiment.export_prism_csv(out_dir)
+
+        with open(out_dir / "GFP" / "pct_cells_with_particles.csv") as f:
+            reader = csv.reader(f)
+            headers = next(reader)
+            values = next(reader)
+
+        assert headers == ["Control_N1", "Control_N2", "HS_N1", "HS_N2"]
+        pct = {h: float(v) for h, v in zip(headers, values)}
+
+        # Control_N1: 6/6 = 100%, Control_N2: 3/6 = 50%
+        # HS_N1: 0/4 = 0%, HS_N2: 2/4 = 50%
+        assert pct["Control_N1"] == 100.0
+        assert pct["Control_N2"] == 50.0
+        assert pct["HS_N1"] == 0.0
+        assert pct["HS_N2"] == 50.0
+
+    def test_pct_cells_with_particles_single_row(
+        self, prism_experiment: ExperimentStore, tmp_path: Path,
+    ):
+        """Aggregate CSV has exactly one data row (one value per group)."""
+        out_dir = tmp_path / "prism_out"
+        prism_experiment.export_prism_csv(out_dir)
+
+        with open(out_dir / "GFP" / "pct_cells_with_particles.csv") as f:
+            reader = csv.reader(f)
+            next(reader)  # header
+            rows = list(reader)
+
+        assert len(rows) == 1
+
+    def test_pct_excluded_by_metric_filter(
+        self, prism_experiment: ExperimentStore, tmp_path: Path,
+    ):
+        """Metric filter that doesn't include pct_cells_with_particles excludes it."""
+        out_dir = tmp_path / "prism_out"
+        prism_experiment.export_prism_csv(out_dir, metrics=["mean_intensity"])
+
+        assert not (out_dir / "GFP" / "pct_cells_with_particles.csv").exists()
+
+    def test_pct_requestable_by_metric_filter(
+        self, prism_experiment: ExperimentStore, tmp_path: Path,
+    ):
+        """Can request only pct_cells_with_particles via metric filter."""
+        out_dir = tmp_path / "prism_out"
+        prism_experiment.export_prism_csv(
+            out_dir, metrics=["pct_cells_with_particles"],
+        )
+
+        # Aggregate file is written
+        assert (out_dir / "GFP" / "pct_cells_with_particles.csv").is_file()
+        # Per-cell metrics are NOT written
+        assert not (out_dir / "GFP" / "mean_intensity.csv").exists()
 
 
 class TestPrismExportCLI:

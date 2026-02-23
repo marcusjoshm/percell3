@@ -26,6 +26,13 @@ PARTICLE_SUMMARY_METRICS = [
     "total_particle_integrated_intensity",
 ]
 
+# Aggregate metrics computed per (channel, condition, bio_rep) group during
+# Prism export.  These are derived from per-cell particle_count data — they
+# are NOT stored in the database.
+PARTICLE_AGGREGATE_METRICS = [
+    "pct_cells_with_particles",
+]
+
 
 @dataclass(frozen=True)
 class ParticleAnalysisResult:
