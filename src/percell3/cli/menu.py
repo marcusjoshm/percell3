@@ -1768,6 +1768,17 @@ def _export_csv(state: MenuState) -> None:
     """Interactively export measurements to CSV."""
     store = state.require_experiment()
 
+    # Format selection
+    console.print("\n[bold]Export format:[/bold]")
+    fmt = numbered_select_one(
+        ["Wide format (single CSV, one row per cell)",
+         "Prism format (directory of CSVs, one per metric)"],
+        "Format",
+    )
+    if "Prism" in fmt:
+        _export_prism(state)
+        return
+
     output_str = menu_prompt("Output CSV path")
 
     out_path = Path(output_str).expanduser()
@@ -1885,6 +1896,46 @@ def _export_csv(state: MenuState) -> None:
                     particle_path, channels=ch_list, metrics=particle_metrics,
                 )
             console.print(f"[green]Exported particle data to {particle_path}[/green]")
+    except OSError as exc:
+        console.print(f"[red]Export failed:[/red] {exc}")
+
+
+def _export_prism(state: MenuState) -> None:
+    """Interactively export measurements in Prism-friendly format."""
+    store = state.require_experiment()
+
+    output_str = menu_prompt("Output directory path")
+    out_dir = Path(output_str).expanduser()
+
+    # Auto-correct: if user enters a .csv path, use its parent directory
+    if out_dir.suffix.lower() == ".csv":
+        out_dir = out_dir.parent / out_dir.stem
+        console.print(f"[yellow]Using directory: {out_dir}[/yellow]")
+
+    # Check parent directory exists
+    if not out_dir.parent.exists():
+        console.print(f"[red]Parent directory does not exist: {out_dir.parent}[/red]")
+        return
+
+    # Check overwrite if directory exists and is non-empty
+    if out_dir.exists() and any(out_dir.iterdir()):
+        if numbered_select_one(["No", "Yes"], "Directory is not empty. Overwrite?") != "Yes":
+            console.print("[yellow]Export cancelled.[/yellow]")
+            return
+
+    try:
+        with console.status("[bold blue]Exporting Prism-format CSVs..."):
+            result = store.export_prism_csv(out_dir)
+
+        if result["files_written"] == 0:
+            console.print("[yellow]No measurements found to export.[/yellow]")
+        else:
+            console.print(
+                f"[green]Prism export complete![/green]\n"
+                f"  Directory: {out_dir}\n"
+                f"  Channels: {result['channels_exported']}\n"
+                f"  Files written: {result['files_written']}"
+            )
     except OSError as exc:
         console.print(f"[red]Export failed:[/red] {exc}")
 

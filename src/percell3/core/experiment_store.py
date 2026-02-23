@@ -804,6 +804,104 @@ class ExperimentStore:
         )
         pivot.to_csv(path, index=False)
 
+    def export_prism_csv(
+        self,
+        output_dir: Path,
+        channels: list[str] | None = None,
+        metrics: list[str] | None = None,
+        scope: str = "whole_cell",
+    ) -> dict[str, int]:
+        """Export measurements in Prism-friendly format.
+
+        Creates a directory tree with one CSV per (channel, metric).
+        Each CSV has columns = {condition}_{biorep} and rows = cell values.
+        FOVs from the same (condition, bio_rep) are pooled.
+
+        Args:
+            output_dir: Root output directory (created if it doesn't exist).
+            channels: Optional list of channels to include.
+            metrics: Optional list of metrics to include.
+            scope: Measurement scope ('whole_cell', 'mask_inside', 'mask_outside').
+
+        Returns:
+            Dict with 'files_written' and 'channels_exported' counts.
+        """
+        import csv as csv_mod
+
+        from percell3.measure.particle_analyzer import PARTICLE_SUMMARY_METRICS
+
+        particle_metric_set = set(PARTICLE_SUMMARY_METRICS)
+
+        # Get measurements filtered by channels and scope
+        df = self.get_measurements(channels=channels, scope=scope)
+        if df.empty:
+            return {"files_written": 0, "channels_exported": 0}
+
+        # Filter by metrics if specified
+        if metrics:
+            df = df[df["metric"].isin(metrics)]
+        if df.empty:
+            return {"files_written": 0, "channels_exported": 0}
+
+        # Get valid cells with condition/bio_rep context
+        cells_df = self.get_cells(is_valid=True)
+        if cells_df.empty:
+            return {"files_written": 0, "channels_exported": 0}
+
+        cell_context = cells_df[["id", "condition_name", "bio_rep_name"]].rename(
+            columns={"id": "cell_id"}
+        )
+        df = df.merge(cell_context, on="cell_id", how="inner")
+        if df.empty:
+            return {"files_written": 0, "channels_exported": 0}
+
+        # Scope suffix for filenames (particle metrics never get suffix)
+        scope_suffix = "" if scope == "whole_cell" else f"_{scope}"
+
+        files_written = 0
+        channels_exported: set[str] = set()
+
+        for (channel, metric), group in df.groupby(["channel", "metric"]):
+            # Build ragged columns grouped by (condition, bio_rep)
+            column_data: dict[str, list[float]] = {}
+            for (cond, bio_rep), sub in group.groupby(
+                ["condition_name", "bio_rep_name"]
+            ):
+                col_name = f"{cond}_{bio_rep}"
+                column_data[col_name] = sub["value"].tolist()
+
+            if not column_data:
+                continue
+
+            sorted_cols = sorted(column_data.keys())
+            max_rows = max(len(column_data[c]) for c in sorted_cols)
+
+            # Create channel subdirectory
+            ch_dir = output_dir / str(channel)
+            ch_dir.mkdir(parents=True, exist_ok=True)
+
+            # Particle metrics never get scope suffix
+            suffix = "" if metric in particle_metric_set else scope_suffix
+            csv_path = ch_dir / f"{metric}{suffix}.csv"
+
+            with open(csv_path, "w", newline="") as f:
+                writer = csv_mod.writer(f)
+                writer.writerow(sorted_cols)
+                for i in range(max_rows):
+                    row = []
+                    for col in sorted_cols:
+                        values = column_data[col]
+                        row.append(values[i] if i < len(values) else "")
+                    writer.writerow(row)
+
+            files_written += 1
+            channels_exported.add(str(channel))
+
+        return {
+            "files_written": files_written,
+            "channels_exported": len(channels_exported),
+        }
+
     # Intensity field names that become per-channel when channels are specified
     _PARTICLE_INTENSITY_FIELDS = {
         "mean_intensity", "max_intensity", "integrated_intensity",

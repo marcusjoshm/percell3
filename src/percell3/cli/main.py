@@ -35,6 +35,7 @@ def _register_commands() -> None:
     """Register all subcommands — imports deferred to avoid loading heavy deps at startup."""
     from percell3.cli.create import create
     from percell3.cli.export import export
+    from percell3.cli.export_prism import export_prism
     from percell3.cli.import_cmd import import_cmd
     from percell3.cli.query import query
     from percell3.cli.segment import segment
@@ -44,6 +45,7 @@ def _register_commands() -> None:
 
     cli.add_command(create)
     cli.add_command(export)
+    cli.add_command(export_prism)
     cli.add_command(import_cmd)
     cli.add_command(measure)
     cli.add_command(query)
