@@ -82,10 +82,11 @@ class Menu:
                 # "Back" item
                 return
 
+            show_gate = True
             try:
                 item.handler(self.state)
             except _MenuCancel:
-                pass  # action cancelled, stay in this menu
+                show_gate = False  # cancelled — nothing to show
             except _MenuHome:
                 if self.show_banner:
                     continue  # main menu: restart loop
@@ -100,7 +101,8 @@ class Menu:
                 else:
                     console.print(f"[red]Internal error:[/red] {e}")
 
-            self._wait_for_enter()
+            if show_gate:
+                self._wait_for_enter()
 
     def _clear_screen(self) -> None:
         if console.is_terminal:

@@ -229,6 +229,7 @@ def _setup_menu(state: MenuState) -> None:
         MenuItem("2", "Select experiment", "Open an existing experiment", _select_experiment),
         MenuItem("3", "Back", "", None),
     ], state).run()
+    raise _MenuCancel()
 
 
 def _import_menu(state: MenuState) -> None:
@@ -236,6 +237,7 @@ def _import_menu(state: MenuState) -> None:
         MenuItem("1", "Import images", "Load LIF, TIFF, or CZI files", _import_images),
         MenuItem("2", "Back", "", None),
     ], state).run()
+    raise _MenuCancel()
 
 
 def _segment_menu(state: MenuState) -> None:
@@ -243,6 +245,7 @@ def _segment_menu(state: MenuState) -> None:
         MenuItem("1", "Segment cells", "Run Cellpose segmentation", _segment_cells),
         MenuItem("2", "Back", "", None),
     ], state).run()
+    raise _MenuCancel()
 
 
 def _analyze_menu(state: MenuState) -> None:
@@ -251,6 +254,7 @@ def _analyze_menu(state: MenuState) -> None:
         MenuItem("2", "Apply threshold", "Otsu thresholding and particle detection", _apply_threshold),
         MenuItem("3", "Back", "", None),
     ], state).run()
+    raise _MenuCancel()
 
 
 def _view_menu(state: MenuState) -> None:
@@ -258,6 +262,7 @@ def _view_menu(state: MenuState) -> None:
         MenuItem("1", "View in napari", "Open images and masks in napari viewer", _view_napari),
         MenuItem("2", "Back", "", None),
     ], state).run()
+    raise _MenuCancel()
 
 
 def _data_menu(state: MenuState) -> None:
@@ -267,6 +272,7 @@ def _data_menu(state: MenuState) -> None:
         MenuItem("3", "Export to CSV", "Export measurements and particle data", _export_csv),
         MenuItem("4", "Back", "", None),
     ], state).run()
+    raise _MenuCancel()
 
 
 def _workflows_menu(state: MenuState) -> None:
@@ -274,6 +280,7 @@ def _workflows_menu(state: MenuState) -> None:
         MenuItem("1", "Run workflow", "Run automated analysis pipelines", _run_workflow_stub, enabled=False),
         MenuItem("2", "Back", "", None),
     ], state).run()
+    raise _MenuCancel()
 
 
 def _run_workflow_stub(state: MenuState) -> None:
@@ -697,9 +704,9 @@ def _show_fov_status_table(
 
     table = Table(show_header=True, title="FOVs in experiment")
     table.add_column("#", style="bold", width=4)
-    table.add_column("FOV", max_width=25, overflow="ellipsis")
-    table.add_column("Condition", max_width=20, overflow="ellipsis")
-    table.add_column("Bio Rep", max_width=15, overflow="ellipsis")
+    table.add_column("FOV")
+    table.add_column("Condition")
+    table.add_column("Bio Rep")
     table.add_column("Shape")
     table.add_column("Cells", justify="right")
     table.add_column("Model")
@@ -1554,6 +1561,7 @@ def _query_menu(state: MenuState) -> None:
         MenuItem("5", "Biological replicates", "List biological replicates", _query_bio_reps),
         MenuItem("6", "Back", "", None),
     ], state).run()
+    raise _MenuCancel()
 
 
 def _query_channels(state: MenuState) -> None:
@@ -1692,6 +1700,7 @@ def _edit_menu(state: MenuState) -> None:
         MenuItem("5", "Rename bio-rep", "Rename a biological replicate", _rename_bio_rep),
         MenuItem("6", "Back", "", None),
     ], state).run()
+    raise _MenuCancel()
 
 
 def _rename_experiment(state: MenuState) -> None:

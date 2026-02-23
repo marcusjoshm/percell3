@@ -31,9 +31,9 @@ def format_output(
         table = Table(show_header=True, title=title)
         for col in columns:
             if col == columns[0]:
-                table.add_column(col, style="bold", max_width=25, overflow="ellipsis")
+                table.add_column(col, style="bold")
             else:
-                table.add_column(col, max_width=20, overflow="ellipsis")
+                table.add_column(col)
         for row in rows:
             table.add_row(*(str(row.get(c, "")) for c in columns))
         if len(rows) >= 30 and console.is_terminal:
