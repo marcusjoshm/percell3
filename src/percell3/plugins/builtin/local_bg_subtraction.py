@@ -5,12 +5,15 @@ and subtract the local background from measurement channel intensities.
 
 This is the PerCell 3 port of the m7G Cap Enrichment Analysis algorithm,
 made channel-agnostic and universal.
+
+Output is per-particle CSV files, one per condition.
 """
 
 from __future__ import annotations
 
 import csv
 import logging
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -24,15 +27,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Metrics written to the measurements table (cell-level aggregates)
-BG_SUB_METRICS = [
-    "bg_sub_mean_intensity",
-    "bg_sub_integrated_intensity",
-    "bg_estimate",
-    "bg_sub_particle_count",
-]
-
-# CSV export column order
+# CSV export column order (norm_mean_intensity appended when normalization_channel is set)
 CSV_COLUMNS = [
     "particle_id",
     "cell_id",
@@ -47,6 +42,7 @@ CSV_COLUMNS = [
     "bg_ring_pixels",
     "bg_sub_mean_intensity",
     "bg_sub_integrated_intensity",
+    "norm_mean_intensity",
 ]
 
 
@@ -111,6 +107,11 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
                     "description": "Upper bound on background estimate",
                     "default": None,
                 },
+                "normalization_channel": {
+                    "type": ["string", "null"],
+                    "description": "Optional channel whose mean intensity inside each particle is reported for normalization",
+                    "default": None,
+                },
                 "export_csv": {
                     "type": "boolean",
                     "description": "Export per-particle CSV",
@@ -129,6 +130,9 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
     ) -> PluginResult:
         """Execute background subtraction across FOVs.
 
+        Output is per-particle: one CSV per condition with a row for each
+        particle.  No cell-level aggregation is written to the database.
+
         Parameters dict keys:
             measurement_channel: Channel name for intensity measurement.
             particle_channel: Channel whose particle labels to use.
@@ -137,19 +141,16 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
             max_background: Upper bound on BG estimate (default None).
             export_csv: Whether to export per-particle CSV (default True).
         """
-        from percell3.core.models import MeasurementRecord
         from percell3.plugins.builtin.bg_subtraction_core import process_particles_for_cell
 
         params = parameters or {}
         meas_channel = params["measurement_channel"]
         particle_channel = params["particle_channel"]
         exclusion_channel = params.get("exclusion_channel")
+        normalization_channel = params.get("normalization_channel")
         dilation_pixels = params.get("dilation_pixels", 5)
         max_background = params.get("max_background")
         do_export_csv = params.get("export_csv", True)
-
-        # Resolve channel IDs
-        meas_ch_info = store.get_channel(meas_channel)
 
         # Find the most recent threshold run for the particle channel
         threshold_runs = store.get_threshold_runs()
@@ -161,7 +162,6 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
                 f"No threshold run found for channel '{particle_channel}'. "
                 "Run 'Apply threshold' first to generate particle masks."
             )
-        threshold_run_id = particle_runs[-1]["id"]  # most recent
 
         # Determine FOVs to process
         if cell_ids is not None:
@@ -173,9 +173,9 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
             fovs = store.get_fovs()
             fov_ids = [f.id for f in fovs]
 
-        # Collect per-particle rows for CSV export
-        csv_rows: list[dict] = []
-        all_measurements: list[MeasurementRecord] = []
+        # Collect per-particle rows grouped by condition
+        rows_by_condition: dict[str, list[dict]] = defaultdict(list)
+        particles_processed = 0
         cells_processed = 0
         warnings: list[str] = []
 
@@ -194,6 +194,21 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
                 )
                 warnings.append(f"Skipped FOV {fov_info.display_name}: {exc}")
                 continue
+
+            # Read normalization channel image if specified
+            norm_image = None
+            if normalization_channel:
+                try:
+                    norm_image = store.read_image_numpy(fov_id, normalization_channel)
+                except Exception as exc:
+                    logger.warning(
+                        "FOV %s: failed to read normalization channel '%s': %s",
+                        fov_info.display_name, normalization_channel, exc,
+                    )
+                    warnings.append(
+                        f"FOV {fov_info.display_name}: normalization channel "
+                        f"'{normalization_channel}' unavailable: {exc}"
+                    )
 
             # Read exclusion mask if specified
             exclusion_mask = None
@@ -250,70 +265,31 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
                 if not results:
                     continue
 
-                # Aggregate per-cell: weighted by particle area
-                valid_results = [r for r in results if not np.isnan(r.bg_estimate)]
+                cells_processed += 1
 
-                if valid_results:
-                    total_area = sum(r.area_pixels for r in valid_results)
-                    if total_area > 0:
-                        cell_bg_estimate = sum(
-                            r.bg_estimate * r.area_pixels for r in valid_results
-                        ) / total_area
-                        cell_bg_sub_mean = sum(
-                            r.bg_sub_mean_intensity * r.area_pixels for r in valid_results
-                        ) / total_area
-                    else:
-                        cell_bg_estimate = 0.0
-                        cell_bg_sub_mean = 0.0
-                    cell_bg_sub_integrated = sum(
-                        r.bg_sub_integrated_intensity for r in valid_results
-                    )
-                    cell_particle_count = float(len(valid_results))
-                else:
-                    cell_bg_estimate = float("nan")
-                    cell_bg_sub_mean = float("nan")
-                    cell_bg_sub_integrated = float("nan")
-                    cell_particle_count = 0.0
+                # Crop normalization image to cell bbox if available
+                norm_crop = None
+                if norm_image is not None:
+                    norm_crop = norm_image[by:by + bh, bx:bx + bw]
 
-                all_measurements.extend([
-                    MeasurementRecord(
-                        cell_id=cell_id,
-                        channel_id=meas_ch_info.id,
-                        metric="bg_sub_mean_intensity",
-                        value=cell_bg_sub_mean,
-                        scope="whole_cell",
-                    ),
-                    MeasurementRecord(
-                        cell_id=cell_id,
-                        channel_id=meas_ch_info.id,
-                        metric="bg_sub_integrated_intensity",
-                        value=cell_bg_sub_integrated,
-                        scope="whole_cell",
-                    ),
-                    MeasurementRecord(
-                        cell_id=cell_id,
-                        channel_id=meas_ch_info.id,
-                        metric="bg_estimate",
-                        value=cell_bg_estimate,
-                        scope="whole_cell",
-                    ),
-                    MeasurementRecord(
-                        cell_id=cell_id,
-                        channel_id=meas_ch_info.id,
-                        metric="bg_sub_particle_count",
-                        value=cell_particle_count,
-                        scope="whole_cell",
-                    ),
-                ])
-
-                # Collect per-particle CSV rows
+                # Collect per-particle rows
+                condition = fov_info.condition or "uncategorized"
                 for r in results:
-                    csv_rows.append({
+                    # Measure normalization channel mean inside this particle
+                    norm_mean = ""
+                    if norm_crop is not None:
+                        p_mask = (particle_crop == r.particle_label) & cell_mask
+                        if np.any(p_mask):
+                            norm_mean = float(np.mean(
+                                norm_crop[p_mask].astype(np.float64)
+                            ))
+
+                    rows_by_condition[condition].append({
                         "particle_id": r.particle_label,
                         "cell_id": r.cell_id,
                         "fov_id": fov_id,
                         "fov_name": fov_info.display_name,
-                        "condition": fov_info.condition,
+                        "condition": condition,
                         "bio_rep": fov_info.bio_rep,
                         "area_pixels": r.area_pixels,
                         "raw_mean_intensity": r.raw_mean_intensity,
@@ -322,51 +298,61 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
                         "bg_ring_pixels": r.bg_ring_pixels,
                         "bg_sub_mean_intensity": r.bg_sub_mean_intensity,
                         "bg_sub_integrated_intensity": r.bg_sub_integrated_intensity,
+                        "norm_mean_intensity": norm_mean,
                     })
-
-                cells_processed += 1
+                    particles_processed += 1
 
             if progress_callback:
                 progress_callback(fov_idx + 1, len(fov_ids), fov_info.display_name)
 
-        # Write cell-level measurements to store
-        if all_measurements:
-            store.add_measurements(all_measurements)
-
-        # Export per-particle CSV
+        # Export per-condition CSVs
         custom_outputs: dict[str, str] = {}
-        if do_export_csv and csv_rows:
-            csv_path = self._export_csv(store, csv_rows, meas_channel)
-            custom_outputs["csv"] = str(csv_path)
+        if do_export_csv and rows_by_condition:
+            csv_paths = self._export_csvs(store, rows_by_condition, meas_channel)
+            for condition, path in csv_paths.items():
+                custom_outputs[f"csv_{condition}"] = str(path)
 
-        if not csv_rows:
+        if particles_processed == 0:
             warnings.append("No particles found with valid background rings.")
 
         return PluginResult(
-            measurements_written=len(all_measurements),
+            measurements_written=particles_processed,
             cells_processed=cells_processed,
             custom_outputs=custom_outputs,
             warnings=warnings,
         )
 
-    def _export_csv(
+    def _export_csvs(
         self,
         store: ExperimentStore,
-        rows: list[dict],
+        rows_by_condition: dict[str, list[dict]],
         meas_channel: str,
-    ) -> Path:
-        """Write per-particle results to CSV in the experiment's exports directory."""
+    ) -> dict[str, Path]:
+        """Write per-particle results to one CSV per condition.
+
+        Returns:
+            Mapping of condition name to the CSV path written.
+        """
         exports_dir = Path(store.path) / "exports"
         exports_dir.mkdir(exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"bg_subtraction_{meas_channel}_{timestamp}.csv"
-        csv_path = exports_dir / filename
+        paths: dict[str, Path] = {}
 
-        with open(csv_path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
-            writer.writeheader()
-            writer.writerows(rows)
+        for condition, rows in sorted(rows_by_condition.items()):
+            safe_condition = condition.replace(" ", "_").replace("/", "_")
+            filename = f"bg_subtraction_{meas_channel}_{safe_condition}_{timestamp}.csv"
+            csv_path = exports_dir / filename
 
-        logger.info("Exported per-particle CSV to %s (%d rows)", csv_path, len(rows))
-        return csv_path
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            logger.info(
+                "Exported per-particle CSV for condition '%s' to %s (%d rows)",
+                condition, csv_path, len(rows),
+            )
+            paths[condition] = csv_path
+
+        return paths

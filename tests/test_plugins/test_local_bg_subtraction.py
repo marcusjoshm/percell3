@@ -11,7 +11,6 @@ import pytest
 from percell3.core import ExperimentStore
 from percell3.core.models import CellRecord
 from percell3.plugins.builtin.local_bg_subtraction import (
-    BG_SUB_METRICS,
     CSV_COLUMNS,
     LocalBGSubtractionPlugin,
 )
@@ -176,7 +175,7 @@ class TestLocalBGSubtractionRun:
     """Tests for run() method with synthetic data."""
 
     def test_run_basic(self, tmp_path: Path) -> None:
-        """Plugin should produce measurements for all cells."""
+        """Plugin should produce per-particle output for all cells."""
         store = _create_bg_sub_experiment(tmp_path)
         plugin = LocalBGSubtractionPlugin()
 
@@ -187,11 +186,12 @@ class TestLocalBGSubtractionRun:
         })
 
         assert result.cells_processed == 2
-        assert result.measurements_written > 0
+        # measurements_written now counts particles, not DB records
+        assert result.measurements_written == 2  # 1 particle per cell
         store.close()
 
-    def test_run_writes_correct_metrics(self, tmp_path: Path) -> None:
-        """All expected BG-sub metrics should be in the measurements table."""
+    def test_run_no_db_measurements(self, tmp_path: Path) -> None:
+        """Plugin should NOT write cell-level aggregates to the measurements table."""
         store = _create_bg_sub_experiment(tmp_path)
         plugin = LocalBGSubtractionPlugin()
 
@@ -201,39 +201,12 @@ class TestLocalBGSubtractionRun:
             "dilation_pixels": 5,
         })
 
-        # Check measurements in the store
         measurements = store.get_measurements()
-        written_metrics = set(measurements["metric"].unique())
-        for metric in BG_SUB_METRICS:
-            assert metric in written_metrics, f"Missing metric: {metric}"
+        assert len(measurements) == 0
         store.close()
 
     def test_run_bg_subtraction_reduces_intensity(self, tmp_path: Path) -> None:
-        """BG-subtracted mean should be less than raw particle intensity."""
-        store = _create_bg_sub_experiment(tmp_path)
-        plugin = LocalBGSubtractionPlugin()
-
-        plugin.run(store, parameters={
-            "measurement_channel": "GFP",
-            "particle_channel": "GFP",
-            "dilation_pixels": 5,
-        })
-
-        measurements = store.get_measurements()
-        bg_sub_means = measurements[measurements["metric"] == "bg_sub_mean_intensity"]
-        bg_estimates = measurements[measurements["metric"] == "bg_estimate"]
-
-        for _, row in bg_sub_means.iterrows():
-            # bg_sub should be positive (bright particles on dim background)
-            assert row["value"] > 0
-
-        for _, row in bg_estimates.iterrows():
-            # Background estimate should be close to the actual background (~30)
-            assert 10 <= row["value"] <= 60
-        store.close()
-
-    def test_run_exports_csv(self, tmp_path: Path) -> None:
-        """Per-particle CSV should be exported."""
+        """BG-subtracted mean should be less than raw particle intensity in CSV."""
         store = _create_bg_sub_experiment(tmp_path)
         plugin = LocalBGSubtractionPlugin()
 
@@ -244,9 +217,39 @@ class TestLocalBGSubtractionRun:
             "export_csv": True,
         })
 
-        assert "csv" in result.custom_outputs
-        csv_path = Path(result.custom_outputs["csv"])
+        # Read back the CSV to verify values
+        import csv as csv_mod
+        csv_key = [k for k in result.custom_outputs if k.startswith("csv_")][0]
+        csv_path = Path(result.custom_outputs[csv_key])
+        with open(csv_path) as f:
+            rows = list(csv_mod.DictReader(f))
+
+        for row in rows:
+            bg_sub_mean = float(row["bg_sub_mean_intensity"])
+            bg_estimate = float(row["bg_estimate"])
+            # bg_sub should be positive (bright particles on dim background)
+            assert bg_sub_mean > 0
+            # Background estimate should be close to the actual background (~30)
+            assert 10 <= bg_estimate <= 60
+        store.close()
+
+    def test_run_exports_csv_per_condition(self, tmp_path: Path) -> None:
+        """Per-particle CSV should be exported, one per condition."""
+        store = _create_bg_sub_experiment(tmp_path)
+        plugin = LocalBGSubtractionPlugin()
+
+        result = plugin.run(store, parameters={
+            "measurement_channel": "GFP",
+            "particle_channel": "GFP",
+            "dilation_pixels": 5,
+            "export_csv": True,
+        })
+
+        # Should have one CSV for the "control" condition
+        assert "csv_control" in result.custom_outputs
+        csv_path = Path(result.custom_outputs["csv_control"])
         assert csv_path.exists()
+        assert "control" in csv_path.name
 
         # Check CSV has the right columns
         import csv
@@ -270,7 +273,8 @@ class TestLocalBGSubtractionRun:
             "export_csv": False,
         })
 
-        assert "csv" not in result.custom_outputs
+        csv_keys = [k for k in result.custom_outputs if k.startswith("csv_")]
+        assert len(csv_keys) == 0
         store.close()
 
     def test_run_with_exclusion_mask(self, tmp_path: Path) -> None:
@@ -323,8 +327,8 @@ class TestLocalBGSubtractionRun:
             })
         store.close()
 
-    def test_run_rerun_overwrites(self, tmp_path: Path) -> None:
-        """Running twice should overwrite measurements (INSERT OR REPLACE)."""
+    def test_run_rerun_produces_new_csvs(self, tmp_path: Path) -> None:
+        """Running twice should produce separate timestamped CSV files."""
         store = _create_bg_sub_experiment(tmp_path)
         plugin = LocalBGSubtractionPlugin()
 
@@ -340,10 +344,8 @@ class TestLocalBGSubtractionRun:
         # Both should succeed
         assert result1.cells_processed == 2
         assert result2.cells_processed == 2
-
-        # Measurements should not be doubled — same count after re-run
-        measurements = store.get_measurements(metrics=["bg_sub_mean_intensity"])
-        assert len(measurements) == 2  # 2 cells, not 4
+        assert result1.measurements_written == 2
+        assert result2.measurements_written == 2
         store.close()
 
     def test_run_with_cell_ids_filter(self, tmp_path: Path) -> None:
@@ -364,4 +366,55 @@ class TestLocalBGSubtractionRun:
         )
 
         assert result.cells_processed == 1
+        store.close()
+
+    def test_run_with_normalization_channel(self, tmp_path: Path) -> None:
+        """Normalization channel mean intensity should appear in CSV."""
+        store = _create_bg_sub_experiment(tmp_path)
+        plugin = LocalBGSubtractionPlugin()
+
+        result = plugin.run(store, parameters={
+            "measurement_channel": "GFP",
+            "particle_channel": "GFP",
+            "normalization_channel": "DAPI",
+            "dilation_pixels": 5,
+            "export_csv": True,
+        })
+
+        assert result.cells_processed == 2
+
+        import csv as csv_mod
+        csv_key = [k for k in result.custom_outputs if k.startswith("csv_")][0]
+        csv_path = Path(result.custom_outputs[csv_key])
+        with open(csv_path) as f:
+            rows = list(csv_mod.DictReader(f))
+
+        assert len(rows) == 2
+        for row in rows:
+            assert "norm_mean_intensity" in row
+            # DAPI is uniform 50 in the test fixture, particles overlap it
+            norm_val = float(row["norm_mean_intensity"])
+            assert norm_val == pytest.approx(50.0, abs=1.0)
+        store.close()
+
+    def test_run_without_normalization_channel(self, tmp_path: Path) -> None:
+        """Without normalization channel, norm_mean_intensity column should be empty."""
+        store = _create_bg_sub_experiment(tmp_path)
+        plugin = LocalBGSubtractionPlugin()
+
+        result = plugin.run(store, parameters={
+            "measurement_channel": "GFP",
+            "particle_channel": "GFP",
+            "dilation_pixels": 5,
+            "export_csv": True,
+        })
+
+        import csv as csv_mod
+        csv_key = [k for k in result.custom_outputs if k.startswith("csv_")][0]
+        csv_path = Path(result.custom_outputs[csv_key])
+        with open(csv_path) as f:
+            rows = list(csv_mod.DictReader(f))
+
+        for row in rows:
+            assert row["norm_mean_intensity"] == ""
         store.close()

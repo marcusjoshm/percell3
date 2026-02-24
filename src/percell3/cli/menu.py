@@ -395,8 +395,17 @@ def _run_bg_subtraction(state: MenuState, registry) -> None:
         console.print("\n[bold]Step 3: Exclusion Mask[/bold]")
         console.print("  [dim]No other particle masks available — skipping.[/dim]")
 
-    # Step 4: Dilation
-    console.print("\n[bold]Step 4: Ring Dilation[/bold]")
+    # Step 4: Normalization channel (optional)
+    normalization_channel = None
+    console.print("\n[bold]Step 4: Normalization Channel (optional)[/bold]")
+    console.print("  [dim]Report mean intensity from another channel inside each particle.[/dim]\n")
+    norm_choices = ["(none)"] + ch_names
+    norm_choice = numbered_select_one(norm_choices, "Normalization channel")
+    if norm_choice != "(none)":
+        normalization_channel = norm_choice
+
+    # Step 5: Dilation
+    console.print("\n[bold]Step 5: Ring Dilation[/bold]")
     dilation_str = menu_prompt("Dilation pixels", default="5")
     try:
         dilation_pixels = int(dilation_str)
@@ -404,8 +413,8 @@ def _run_bg_subtraction(state: MenuState, registry) -> None:
         console.print("[yellow]Invalid number, using default of 5.[/yellow]")
         dilation_pixels = 5
 
-    # Step 5: FOV selection
-    console.print("\n[bold]Step 5: Select FOVs[/bold]")
+    # Step 6: FOV selection
+    console.print("\n[bold]Step 6: Select FOVs[/bold]")
     all_fovs = store.get_fovs()
     seg_summary = store.get_fov_segmentation_summary()
     fovs_with_cells = [f for f in all_fovs if seg_summary.get(f.id, (0, None))[0] > 0]
@@ -426,23 +435,25 @@ def _run_bg_subtraction(state: MenuState, registry) -> None:
         cells_df = store.get_cells(fov_id=fov.id)
         cell_ids.extend(cells_df["id"].tolist())
 
-    # Step 6: Confirmation
+    # Step 7: Confirmation
     console.print(f"\n[bold]Background subtraction settings:[/bold]")
-    console.print(f"  Measurement:   {meas_channel}")
-    console.print(f"  Particle mask: {particle_channel}")
-    console.print(f"  Exclusion:     {exclusion_channel or '(none)'}")
-    console.print(f"  Dilation:      {dilation_pixels} px")
-    console.print(f"  FOVs:          {len(selected_fovs)} selected")
+    console.print(f"  Measurement:     {meas_channel}")
+    console.print(f"  Particle mask:   {particle_channel}")
+    console.print(f"  Exclusion:       {exclusion_channel or '(none)'}")
+    console.print(f"  Normalization:   {normalization_channel or '(none)'}")
+    console.print(f"  Dilation:        {dilation_pixels} px")
+    console.print(f"  FOVs:            {len(selected_fovs)} selected")
 
     if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
         console.print("[yellow]Background subtraction cancelled.[/yellow]")
         return
 
-    # Step 7: Run with progress
+    # Step 8: Run with progress
     parameters = {
         "measurement_channel": meas_channel,
         "particle_channel": particle_channel,
         "exclusion_channel": exclusion_channel,
+        "normalization_channel": normalization_channel,
         "dilation_pixels": dilation_pixels,
     }
 
@@ -459,12 +470,18 @@ def _run_bg_subtraction(state: MenuState, registry) -> None:
             progress_callback=on_progress,
         )
 
-    # Step 8: Summary
+    # Step 9: Summary
     console.print(f"\n[green]Background subtraction complete[/green]")
     console.print(f"  Cells processed: {result.cells_processed}")
-    console.print(f"  Measurements written: {result.measurements_written}")
-    if result.custom_outputs.get("csv"):
-        console.print(f"  CSV exported: {result.custom_outputs['csv']}")
+    console.print(f"  Particles measured: {result.measurements_written}")
+    csv_outputs = {
+        k: v for k, v in result.custom_outputs.items() if k.startswith("csv_")
+    }
+    if csv_outputs:
+        console.print(f"  CSV files exported:")
+        for key, path in csv_outputs.items():
+            condition = key.removeprefix("csv_")
+            console.print(f"    {condition}: {path}")
     for w in result.warnings:
         console.print(f"  [yellow]Warning: {w}[/yellow]")
     console.print()
@@ -1489,9 +1506,11 @@ def _threshold_fov(
             last_run_id,
         )
 
-    # Particle analysis for accepted groups
+    # Particle analysis for accepted groups — accumulate into one label image
     if accepted_groups:
         console.print(f"\n  [bold]Particle analysis...[/bold]")
+        combined_particle_labels = np.zeros(labels.shape, dtype=np.int32)
+        next_label_offset = 0
 
         for tag_name, group_cell_ids, thr_run_id in accepted_groups:
             pa_result = analyzer.analyze_fov(
@@ -1506,16 +1525,28 @@ def _threshold_fov(
                 store.add_particles(pa_result.particles)
             if pa_result.summary_measurements:
                 store.add_measurements(pa_result.summary_measurements)
-            store.write_particle_labels(
-                fov_id, threshold_channel,
-                pa_result.particle_label_image,
-            )
+
+            # Merge this group's particle labels into the combined image,
+            # renumbering to avoid collisions with earlier groups.
+            group_labels = pa_result.particle_label_image
+            if pa_result.total_particles > 0:
+                group_mask = group_labels > 0
+                combined_particle_labels[group_mask] = (
+                    group_labels[group_mask] + next_label_offset
+                )
+                next_label_offset += pa_result.total_particles
 
             console.print(
                 f"    {tag_name}: {pa_result.total_particles} particles "
                 f"in {pa_result.cells_analyzed} cells"
             )
             total_particles += pa_result.total_particles
+
+        # Write the combined particle label image once
+        store.write_particle_labels(
+            fov_id, threshold_channel,
+            combined_particle_labels,
+        )
     else:
         console.print(f"  [dim]No groups accepted — skipping particle analysis.[/dim]")
 

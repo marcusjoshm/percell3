@@ -98,7 +98,7 @@ class TestBGSubtractionIntegration:
         assert "local_bg_subtraction" in names
 
     def test_full_pipeline(self, tmp_path: Path) -> None:
-        """Run BG subtraction via PluginRegistry and verify measurements."""
+        """Run BG subtraction via PluginRegistry and verify per-particle output."""
         store = _build_synthetic_experiment(tmp_path)
         registry = PluginRegistry()
         registry.discover()
@@ -114,33 +114,32 @@ class TestBGSubtractionIntegration:
 
         # All 4 cells processed (2 FOVs x 2 cells)
         assert result.cells_processed == 4
-        assert result.measurements_written == 16  # 4 metrics x 4 cells
+        # 4 particles total (1 per cell)
+        assert result.measurements_written == 4
 
-        # Check measurements stored correctly
+        # No cell-level DB measurements written
         measurements = store.get_measurements()
-        bg_sub_means = measurements[measurements["metric"] == "bg_sub_mean_intensity"]
-        bg_estimates = measurements[measurements["metric"] == "bg_estimate"]
-        particle_counts = measurements[measurements["metric"] == "bg_sub_particle_count"]
+        assert len(measurements) == 0
 
-        # 4 cells should have bg_sub_mean_intensity
-        assert len(bg_sub_means) == 4
-
-        # BG estimate should be close to 40 (the true background)
-        for _, row in bg_estimates.iterrows():
-            assert 20 <= row["value"] <= 70, f"BG estimate {row['value']} out of range"
-
-        # BG-subtracted mean should be > 100 (particles ~300, bg ~40)
-        for _, row in bg_sub_means.iterrows():
-            assert row["value"] > 50, f"BG-sub mean {row['value']} too low"
-
-        # Each cell should have 1 particle
-        for _, row in particle_counts.iterrows():
-            assert row["value"] == 1.0
-
-        # CSV should be exported
-        assert "csv" in result.custom_outputs
-        csv_path = Path(result.custom_outputs["csv"])
+        # Per-condition CSV should be exported (all FOVs are "control")
+        assert "csv_control" in result.custom_outputs
+        csv_path = Path(result.custom_outputs["csv_control"])
         assert csv_path.exists()
+
+        # Read CSV and verify per-particle values
+        import csv
+        with open(csv_path) as f:
+            rows = list(csv.DictReader(f))
+
+        assert len(rows) == 4  # 4 particles total
+
+        for row in rows:
+            bg_estimate = float(row["bg_estimate"])
+            bg_sub_mean = float(row["bg_sub_mean_intensity"])
+            # BG estimate should be close to 40 (the true background)
+            assert 20 <= bg_estimate <= 70, f"BG estimate {bg_estimate} out of range"
+            # BG-subtracted mean should be > 50 (particles ~300, bg ~40)
+            assert bg_sub_mean > 50, f"BG-sub mean {bg_sub_mean} too low"
 
         store.close()
 
