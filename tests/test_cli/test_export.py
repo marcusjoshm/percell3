@@ -150,8 +150,10 @@ class TestParticleExport:
         assert "GFP_mean_particle_integrated_intensity" in headers
         assert "GFP_total_particle_integrated_intensity" in headers
         # Verify values: cell 1 has 2 particles, cell 3 has 0
+        # Area metrics are converted from pixels to um2 at export time
+        # (pixel_size_um=0.65 → factor = 0.65² = 0.4225)
         cell1 = next(r for r in rows if float(r["GFP_particle_count"]) == 2.0)
-        assert float(cell1["GFP_total_particle_area"]) == 80.0
+        assert float(cell1["GFP_total_particle_area"]) == pytest.approx(80.0 * 0.4225)
         cell3 = next(r for r in rows if float(r["GFP_particle_count"]) == 0.0)
         assert float(cell3["GFP_total_particle_area"]) == 0.0
 

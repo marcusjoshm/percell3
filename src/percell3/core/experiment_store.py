@@ -480,9 +480,20 @@ class ExperimentStore:
         scope: str | None = None,
         include_cell_info: bool = True,
     ) -> pd.DataFrame:
+        from percell3.measure.particle_analyzer import PARTICLE_AREA_METRICS
+
         df = self.get_measurements(channels=channels, metrics=metrics, scope=scope)
         if df.empty:
             return df
+
+        # Convert particle area metrics from pixels to um2
+        area_mask = df["metric"].isin(PARTICLE_AREA_METRICS)
+        if area_mask.any():
+            cells_ps = self.get_cells(is_valid=False)
+            if not cells_ps.empty and "pixel_size_um" in cells_ps.columns:
+                ps_map = cells_ps.set_index("id")["pixel_size_um"]
+                ps = df.loc[area_mask, "cell_id"].map(ps_map)
+                df.loc[area_mask, "value"] = df.loc[area_mask, "value"] * ps * ps
 
         # Build pivot column name: channel_metric for whole_cell,
         # channel_metric_scope for mask scopes
@@ -830,11 +841,13 @@ class ExperimentStore:
 
         from percell3.measure.particle_analyzer import (
             PARTICLE_AGGREGATE_METRICS,
+            PARTICLE_AREA_METRICS,
             PARTICLE_SUMMARY_METRICS,
         )
 
         particle_metric_set = set(PARTICLE_SUMMARY_METRICS)
         aggregate_metric_set = set(PARTICLE_AGGREGATE_METRICS)
+        area_metric_set = set(PARTICLE_AREA_METRICS)
 
         # Separate aggregate metric names from per-cell metric names
         want_aggregates = not metrics or bool(aggregate_metric_set & set(metrics))
@@ -858,9 +871,9 @@ class ExperimentStore:
         if cells_df.empty:
             return {"files_written": 0, "channels_exported": 0}
 
-        cell_context = cells_df[["id", "condition_name", "bio_rep_name"]].rename(
-            columns={"id": "cell_id"}
-        )
+        ctx_cols = ["id", "condition_name", "bio_rep_name", "pixel_size_um"]
+        ctx_cols = [c for c in ctx_cols if c in cells_df.columns]
+        cell_context = cells_df[ctx_cols].rename(columns={"id": "cell_id"})
         if not df.empty:
             df = df.merge(cell_context, on="cell_id", how="inner")
 
@@ -871,6 +884,12 @@ class ExperimentStore:
         channels_exported: set[str] = set()
 
         for (channel, metric), group in df.groupby(["channel", "metric"]):
+            # Convert particle area metrics from pixels to um2
+            if metric in area_metric_set and "pixel_size_um" in group.columns:
+                group = group.copy()
+                ps = group["pixel_size_um"]
+                group["value"] = group["value"] * ps * ps
+
             # Build ragged columns grouped by (condition, bio_rep)
             column_data: dict[str, list[float]] = {}
             for (cond, bio_rep), sub in group.groupby(

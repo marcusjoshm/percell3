@@ -26,6 +26,13 @@ PARTICLE_SUMMARY_METRICS = [
     "total_particle_integrated_intensity",
 ]
 
+# Particle area metrics stored in pixels, converted to um2 at export time.
+PARTICLE_AREA_METRICS = [
+    "total_particle_area",
+    "mean_particle_area",
+    "max_particle_area",
+]
+
 # Aggregate metrics computed per (channel, condition, bio_rep) group during
 # Prism export.  These are derived from per-cell particle_count data — they
 # are NOT stored in the database.
@@ -253,14 +260,10 @@ class ParticleAnalyzer:
         if not particles:
             return self._zero_summaries(cell_id, channel_id)
 
-        # Use um2 areas when pixel size is known, otherwise fall back to pixels
-        has_um2 = all(p.area_um2 is not None for p in particles)
-        areas = [p.area_um2 for p in particles] if has_um2 else [p.area_pixels for p in particles]
+        # Store areas in pixels (converted to um2 at export time)
+        areas = [p.area_pixels for p in particles]
         total_area = sum(areas)
-        # Coverage fraction: pixel areas for both numerator and denominator
-        # (dimensionless ratio — same value regardless of unit)
-        coverage_area = sum(p.area_pixels for p in particles)
-        coverage = coverage_area / cell_area if cell_area > 0 else 0.0
+        coverage = total_area / cell_area if cell_area > 0 else 0.0
 
         intensities_mean = [p.mean_intensity for p in particles if p.mean_intensity is not None]
         intensities_integ = [p.integrated_intensity for p in particles if p.integrated_intensity is not None]

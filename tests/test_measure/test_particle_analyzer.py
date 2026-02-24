@@ -215,7 +215,7 @@ class TestParticleAnalyzer:
         assert len(cell2_particles) == 1
 
     def test_coverage_fraction(self, particle_experiment: ExperimentStore):
-        """particle_coverage_fraction should be total_particle_area_px / cell_area_px."""
+        """particle_coverage_fraction should be total_particle_area / cell_area."""
         store = particle_experiment
         fov_id = store._test_fov_id
         cell_ids = store._test_cell_ids
@@ -225,17 +225,15 @@ class TestParticleAnalyzer:
             threshold_run_id=store._test_thr_id, cell_ids=cell_ids,
         )
 
-        # Cell 1: area=400 px (20x20), 2 blobs of ~36 pixels each → ~72/400
+        # Cell 1: area=400 (20x20), 2 blobs of ~36 pixels each
         cell1_id = cell_ids[0]
         cell1_summaries = {
             m.metric: m.value
             for m in result.summary_measurements if m.cell_id == cell1_id
         }
+        total_area = cell1_summaries["total_particle_area"]
         coverage = cell1_summaries["particle_coverage_fraction"]
-        # Coverage is computed from pixel areas (dimensionless ratio)
-        cell1_particles = [p for p in result.particles if p.cell_id == cell1_id]
-        total_px = sum(p.area_pixels for p in cell1_particles)
-        assert coverage == pytest.approx(total_px / 400.0, rel=0.01)
+        assert coverage == pytest.approx(total_area / 400.0, rel=0.01)
 
     def test_morphometrics(self, particle_experiment: ExperimentStore):
         """Particles should have morphometric measurements."""
