@@ -327,11 +327,10 @@ class TestWorkflowMenu:
     def test_workflow_no_channels_early_exit(self, runner: CliRunner, experiment: ExperimentStore):
         """Workflow should exit early with message when no channels exist."""
         exp_path = str(experiment.path)
-        # Main menu → 7 (Workflows) → 1 → select experiment path → expect "No channels"
-        # Setup → Select → path → Enter → back to main → Workflows → Particle analysis
+        # Setup → Select → path → (auto-return home) → Workflows → Particle analysis
         result = _invoke_menu(
             runner,
-            input=f"1\n2\n{exp_path}\n\nb\n7\n1\n\nb\nq\n",
+            input=f"1\n2\n{exp_path}\n7\n1\n\nb\nq\n",
         )
         assert "No channels found" in result.output
 
@@ -341,9 +340,10 @@ class TestWorkflowMenu:
         """Workflow should exit early when experiment has channels but no FOVs."""
         experiment.add_channel("DAPI")
         exp_path = str(experiment.path)
+        # Setup → Select → path → (auto-return home) → Workflows → Particle analysis
         result = _invoke_menu(
             runner,
-            input=f"1\n2\n{exp_path}\n\nb\n7\n1\n\nb\nq\n",
+            input=f"1\n2\n{exp_path}\n7\n1\n\nb\nq\n",
         )
         assert "No FOVs found" in result.output
 

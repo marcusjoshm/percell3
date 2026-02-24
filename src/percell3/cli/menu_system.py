@@ -30,6 +30,8 @@ class Menu:
         items: Menu items including a Back item (handler=None) for sub-menus.
         state: Shared session state.
         show_banner: If True, show full ASCII banner (main menu only).
+        return_home: If True, return to home menu after a handler completes
+            successfully (instead of looping back to this sub-menu).
     """
 
     def __init__(
@@ -38,11 +40,13 @@ class Menu:
         items: list[MenuItem],
         state: MenuState,
         show_banner: bool = False,
+        return_home: bool = False,
     ) -> None:
         self.title = title
         self.items = items
         self.state = state
         self.show_banner = show_banner
+        self.return_home = return_home
 
     def run(self) -> None:
         """Render-prompt-dispatch loop.
@@ -103,6 +107,8 @@ class Menu:
 
             if show_gate:
                 self._wait_for_enter()
+                if self.return_home:
+                    raise _MenuHome()
 
     def _clear_screen(self) -> None:
         if console.is_terminal:

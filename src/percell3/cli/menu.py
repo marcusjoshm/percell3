@@ -228,7 +228,7 @@ def _setup_menu(state: MenuState) -> None:
         MenuItem("1", "Create experiment", "Create a new .percell experiment", _create_experiment),
         MenuItem("2", "Select experiment", "Open an existing experiment", _select_experiment),
         MenuItem("3", "Back", "", None),
-    ], state).run()
+    ], state, return_home=True).run()
     raise _MenuCancel()
 
 
@@ -236,7 +236,7 @@ def _import_menu(state: MenuState) -> None:
     Menu("IMPORT", [
         MenuItem("1", "Import images", "Load LIF, TIFF, or CZI files", _import_images),
         MenuItem("2", "Back", "", None),
-    ], state).run()
+    ], state, return_home=True).run()
     raise _MenuCancel()
 
 
