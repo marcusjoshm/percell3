@@ -1001,9 +1001,15 @@ class ExperimentStore:
             df.to_csv(path, index=False)
             return
 
-        # Compute multi-channel intensities (needs threshold_run_id still)
-        if channels:
-            df = self._add_particle_channel_intensities(df, channels)
+        # Always expand intensity columns to per-channel format.
+        # The bare "mean_intensity" stored in particles is from the threshold
+        # channel only — replacing it with {channel}_mean_intensity for each
+        # channel makes the output unambiguous.
+        effective_channels = channels if channels else [
+            ch.name for ch in self.get_channels()
+        ]
+        if effective_channels:
+            df = self._add_particle_channel_intensities(df, effective_channels)
             df = df.drop(
                 columns=list(self._PARTICLE_INTENSITY_FIELDS),
                 errors="ignore",
@@ -1020,8 +1026,8 @@ class ExperimentStore:
         if metrics:
             keep = [c for c in context_cols if c in df.columns]
             for m in metrics:
-                if m in self._PARTICLE_INTENSITY_FIELDS and channels:
-                    for ch in channels:
+                if m in self._PARTICLE_INTENSITY_FIELDS and effective_channels:
+                    for ch in effective_channels:
                         col = f"{ch}_{m}"
                         if col in df.columns:
                             keep.append(col)

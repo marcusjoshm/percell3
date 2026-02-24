@@ -229,10 +229,14 @@ class TestParticleExport:
         assert "condition_name" in headers
         assert "fov_name" in headers
         assert "bio_rep_name" in headers
-        # Particle data columns
+        # Particle data columns — intensity is always per-channel
         assert "area_pixels" in headers
-        assert "mean_intensity" in headers
-        assert "integrated_intensity" in headers
+        assert "GFP_mean_intensity" in headers
+        assert "DAPI_mean_intensity" in headers
+        assert "GFP_integrated_intensity" in headers
+        # Bare intensity columns should not appear
+        assert "mean_intensity" not in headers
+        assert "integrated_intensity" not in headers
         # Internal IDs should be dropped
         assert "id" not in headers
         assert "threshold_run_id" not in headers
@@ -357,11 +361,13 @@ class TestMultiChannelParticleExport:
             rows = list(reader)
 
         headers = set(rows[0].keys())
-        # Filtered metrics + context columns
-        assert "mean_intensity" in headers
+        # Filtered metrics + context columns — mean_intensity expands per channel
+        assert "DAPI_mean_intensity" in headers
+        assert "GFP_mean_intensity" in headers
         assert "area_pixels" in headers
         # Other metrics should be excluded
         assert "max_intensity" not in headers
+        assert "DAPI_max_intensity" not in headers
         assert "perimeter" not in headers
 
     def test_export_particles_channels_and_metrics(
