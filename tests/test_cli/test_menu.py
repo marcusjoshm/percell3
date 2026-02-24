@@ -12,8 +12,10 @@ from percell3.cli.menu import (
     MenuState,
     _MenuCancel,
     _MenuHome,
+    _particle_workflow,
     _print_numbered_list,
     _show_header,
+    _threshold_fov,
     menu_prompt,
     numbered_select_many,
     numbered_select_one,
@@ -306,3 +308,59 @@ class TestPrintNumberedList:
         items = [f"item_{i}" for i in range(25)]
         _print_numbered_list(items, page_size=20)
         # capsys won't capture rich console output, but at least ensure no crash
+
+
+class TestWorkflowMenu:
+    def test_workflows_menu_shows_particle_analysis(self, runner: CliRunner):
+        """Workflows sub-menu should list 'Particle analysis' as an enabled item."""
+        # Main menu → 7 (Workflows) → b (back) → q (quit)
+        result = _invoke_menu(runner, input="7\nb\nq\n")
+        assert result.exit_code == 0
+        assert "Particle analysis" in result.output
+
+    def test_workflow_requires_experiment(self, runner: CliRunner):
+        """Workflow should prompt for experiment when none is loaded."""
+        # Main menu → 7 (Workflows) → 1 (Particle analysis) → expect experiment prompt
+        # Since no experiment is loaded and we don't provide a path, it should cancel
+        result = _invoke_menu(runner, input="7\n1\nb\nb\nq\n")
+        assert result.exit_code == 0
+        assert "No experiment selected" in result.output
+
+    def test_workflow_no_channels_early_exit(self, runner: CliRunner, experiment: ExperimentStore):
+        """Workflow should exit early with message when no channels exist."""
+        exp_path = str(experiment.path)
+        # Main menu → 7 (Workflows) → 1 → select experiment path → expect "No channels"
+        # Setup → Select → path → Enter → back to main → Workflows → Particle analysis
+        result = _invoke_menu(
+            runner,
+            input=f"1\n2\n{exp_path}\n\nb\n7\n1\n\nb\nq\n",
+        )
+        assert "No channels found" in result.output
+
+    def test_workflow_no_fovs_early_exit(
+        self, runner: CliRunner, experiment: ExperimentStore,
+    ):
+        """Workflow should exit early when experiment has channels but no FOVs."""
+        experiment.add_channel("DAPI")
+        exp_path = str(experiment.path)
+        result = _invoke_menu(
+            runner,
+            input=f"1\n2\n{exp_path}\n\nb\n7\n1\n\nb\nq\n",
+        )
+        assert "No FOVs found" in result.output
+
+
+class TestThresholdFov:
+    def test_threshold_fov_skips_on_no_measurements(
+        self, experiment_with_data: ExperimentStore,
+    ):
+        """_threshold_fov returns (0, 0) when grouping metric has no measurements."""
+        store = experiment_with_data
+        fovs = store.get_fovs()
+        fov_info = fovs[0]
+        # No cells exist yet, so CellGrouper should raise ValueError
+        processed, particles = _threshold_fov(
+            store, fov_info, "GFP", "GFP", "mean_intensity",
+        )
+        assert processed == 0
+        assert particles == 0
