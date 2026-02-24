@@ -277,15 +277,10 @@ def _data_menu(state: MenuState) -> None:
 
 def _workflows_menu(state: MenuState) -> None:
     Menu("WORKFLOWS", [
-        MenuItem("1", "Run workflow", "Run automated analysis pipelines", _run_workflow_stub, enabled=False),
+        MenuItem("1", "Particle analysis", "Segment → measure → threshold → export", _particle_workflow),
         MenuItem("2", "Back", "", None),
     ], state).run()
     raise _MenuCancel()
-
-
-def _run_workflow_stub(state: MenuState) -> None:
-    console.print("\n[yellow]Workflows are not yet available.[/yellow]")
-    console.print("Use individual commands (create, import, query) instead.")
 
 
 _BANNER_LINES = [
@@ -1968,10 +1963,241 @@ def _export_prism(state: MenuState) -> None:
         console.print(f"[red]Export failed:[/red] {exc}")
 
 
+def _particle_workflow(state: MenuState) -> None:
+    """Particle analysis workflow: segment → measure → threshold → export."""
+    store = state.require_experiment()
+
+    # --- Prerequisites ---
+    channels = store.get_channels()
+    if not channels:
+        console.print("[red]No channels found.[/red] Import images first.")
+        return
+
+    all_fovs = store.get_fovs()
+    if not all_fovs:
+        console.print("[red]No FOVs found.[/red] Import images first.")
+        return
+
+    ch_names = [ch.name for ch in channels]
+
+    # --- Step 1: FOV selection ---
+    console.print("\n[bold]Step 1: Select FOVs[/bold]")
+    seg_summary = store.get_fov_segmentation_summary()
+    _show_fov_status_table(all_fovs, seg_summary)
+
+    if len(all_fovs) == 1:
+        console.print(f"  [dim](auto-selected: {all_fovs[0].display_name})[/dim]")
+        selected_fovs = all_fovs
+    else:
+        selected_fovs = _select_fovs_from_table(all_fovs)
+
+    # --- Step 2: Segmentation channel + model ---
+    console.print("\n[bold]Step 2: Segmentation[/bold]")
+    console.print("\n[bold]Channel to segment:[/bold]")
+    seg_channel = numbered_select_one(ch_names, "Segmentation channel")
+
+    models = _build_model_list()
+    console.print("\n[bold]Segmentation model:[/bold]")
+    model = numbered_select_one(models, "Model")
+
+    diam_str = menu_prompt("Cell diameter in pixels (blank = auto-detect)", default="")
+    diameter: float | None = None
+    if diam_str:
+        try:
+            diameter = float(diam_str)
+            if diameter <= 0:
+                console.print("[red]Diameter must be positive.[/red]")
+                return
+        except ValueError:
+            console.print(f"[red]Invalid diameter: {diam_str}[/red]")
+            return
+
+    # --- Step 3: Threshold channels (multi-select) ---
+    console.print("\n[bold]Step 3: Threshold Channels[/bold]")
+    console.print("\n[bold]Channels to threshold:[/bold]")
+    threshold_channels = numbered_select_many(ch_names, "Threshold channels (numbers, 'all')")
+
+    # --- Step 4: Grouping channel + metric ---
+    console.print("\n[bold]Step 4: Grouping[/bold]")
+    console.print("\n[bold]Channel for grouping metric:[/bold]")
+    grouping_channel = numbered_select_one(ch_names, "Grouping channel")
+
+    metrics = ["mean_intensity", "median_intensity", "integrated_intensity", "area_um2"]
+    console.print("\n[bold]Metric for grouping:[/bold]")
+    grouping_metric = numbered_select_one(metrics, "Grouping metric")
+
+    # --- Step 5: Export directory ---
+    console.print("\n[bold]Step 5: Export[/bold]")
+    output_str = menu_prompt("Output directory for Prism export")
+    out_dir = Path(output_str).expanduser()
+    if out_dir.suffix.lower() == ".csv":
+        out_dir = out_dir.parent / out_dir.stem
+        console.print(f"[yellow]Using directory: {out_dir}[/yellow]")
+
+    if not out_dir.parent.exists():
+        console.print(f"[red]Parent directory does not exist: {out_dir.parent}[/red]")
+        return
+
+    if out_dir.exists() and any(out_dir.iterdir()):
+        if numbered_select_one(["No", "Yes"], "Directory is not empty. Overwrite?") != "Yes":
+            console.print("[yellow]Workflow cancelled.[/yellow]")
+            return
+
+    # --- Confirmation ---
+    # Check for re-segmentation
+    reseg_fovs = [
+        f for f in selected_fovs
+        if seg_summary.get(f.id, (0, None))[0] > 0
+    ]
+
+    console.print(f"\n[bold]Workflow settings:[/bold]")
+    console.print(f"  FOVs:           {len(selected_fovs)} selected")
+    console.print(f"  Segmentation:   {seg_channel} / {model} / {diameter or 'auto-detect'}")
+    console.print(f"  Threshold:      {', '.join(threshold_channels)} (Otsu)")
+    console.print(f"  Grouping:       {grouping_channel} / {grouping_metric}")
+    console.print(f"  Measurement:    all channels")
+    console.print(f"  Export:         {out_dir} (Prism format)")
+
+    if reseg_fovs:
+        console.print(
+            f"  [yellow]Re-segment:[/yellow] {len(reseg_fovs)} FOV(s) "
+            "with existing cells will be replaced"
+        )
+
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
+        console.print("[yellow]Workflow cancelled.[/yellow]")
+        return
+
+    # =================================================================
+    # Stage 1: Segmentation
+    # =================================================================
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print(f"[bold]Stage 1: Segmentation[/bold]")
+
+    from percell3.segment import SegmentationEngine
+
+    engine = SegmentationEngine()
+    fov_names = [f.display_name for f in selected_fovs]
+
+    with make_progress() as progress:
+        task = progress.add_task("Segmenting...", total=None)
+
+        def on_seg_progress(current: int, total: int, fov_name: str) -> None:
+            progress.update(
+                task, total=total, completed=current,
+                description=f"Segmenting {fov_name}",
+            )
+
+        seg_result = engine.run(
+            store,
+            channel=seg_channel,
+            model=model,
+            diameter=diameter,
+            fovs=fov_names,
+            progress_callback=on_seg_progress,
+        )
+
+    console.print(f"\n[green]Segmentation complete[/green]")
+    console.print(f"  FOVs processed: {seg_result.fovs_processed}")
+    console.print(f"  Total cells: {seg_result.cell_count}")
+    console.print(f"  Elapsed: {seg_result.elapsed_seconds:.1f}s")
+
+    if seg_result.warnings:
+        console.print(f"\n[yellow]Warnings ({len(seg_result.warnings)}):[/yellow]")
+        for w in seg_result.warnings:
+            console.print(f"  [dim]- {w}[/dim]")
+
+    if seg_result.cell_count == 0:
+        console.print("[red]No cells found. Workflow cannot continue.[/red]")
+        return
+
+    # =================================================================
+    # Stage 2: Measurement (all channels, whole-cell)
+    # =================================================================
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print(f"[bold]Stage 2: Measuring all channels[/bold]")
+
+    from percell3.measure.measurer import Measurer
+
+    measurer = Measurer()
+    total_measurements = 0
+
+    with make_progress() as progress:
+        task = progress.add_task("Measuring...", total=len(selected_fovs))
+        for i, fov_info in enumerate(selected_fovs):
+            count = measurer.measure_fov(
+                store, fov_id=fov_info.id, channels=ch_names,
+            )
+            total_measurements += count
+            progress.update(
+                task, completed=i + 1,
+                description=f"Measuring {fov_info.display_name}",
+            )
+
+    console.print(f"\n[green]Measurement complete[/green]")
+    console.print(f"  FOVs: {len(selected_fovs)}")
+    console.print(f"  Channels: {len(ch_names)}")
+    console.print(f"  Measurements: {total_measurements}")
+
+    # =================================================================
+    # Stage 3: Thresholding + particle analysis (interactive per FOV)
+    # =================================================================
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print(f"[bold]Stage 3: Thresholding + particle analysis[/bold]")
+
+    total_particles = 0
+    fovs_thresholded = 0
+
+    for thr_channel in threshold_channels:
+        console.print(f"\n[bold]--- Threshold channel: {thr_channel} ---[/bold]")
+        for fov_info in selected_fovs:
+            processed, particles = _threshold_fov(
+                store, fov_info, thr_channel, grouping_channel, grouping_metric,
+            )
+            fovs_thresholded += processed
+            total_particles += particles
+
+    console.print(f"\n[green]Thresholding complete[/green]")
+    console.print(f"  FOVs processed: {fovs_thresholded}")
+    console.print(f"  Total particles: {total_particles}")
+
+    # =================================================================
+    # Stage 4: Prism CSV export
+    # =================================================================
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print(f"[bold]Stage 4: Prism CSV export[/bold]")
+
+    try:
+        with console.status("[bold blue]Exporting Prism-format CSVs..."):
+            result = store.export_prism_csv(out_dir)
+
+        if result["files_written"] == 0:
+            console.print("[yellow]No measurements found to export.[/yellow]")
+        else:
+            console.print(
+                f"[green]Prism export complete![/green]\n"
+                f"  Directory: {out_dir}\n"
+                f"  Channels: {result['channels_exported']}\n"
+                f"  Files written: {result['files_written']}"
+            )
+    except OSError as exc:
+        console.print(f"[red]Export failed:[/red] {exc}")
+
+    # =================================================================
+    # Final summary
+    # =================================================================
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print(f"[bold green]Workflow complete![/bold green]")
+    console.print(f"  Cells segmented:   {seg_result.cell_count}")
+    console.print(f"  Measurements:      {total_measurements}")
+    console.print(f"  Particles found:   {total_particles}")
+    console.print(f"  Export directory:   {out_dir}")
+    console.print()
+
+
 def _run_workflow(state: MenuState) -> None:
     """Legacy workflow handler — kept for backwards compatibility."""
-    console.print("\n[yellow]Workflows are not yet available.[/yellow]")
-    console.print("Use individual commands (create, import, query) instead.")
+    _particle_workflow(state)
 
 
 def _show_help(state: MenuState) -> None:
