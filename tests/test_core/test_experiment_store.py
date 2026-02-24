@@ -840,6 +840,35 @@ class TestRenameChannel:
         assert "Hoechst" in ch_names
         assert "DAPI" not in ch_names
 
+    def test_rename_channel_updates_particle_labels(self, experiment):
+        """rename_channel should rename particles_ zarr groups alongside threshold_ groups."""
+        experiment.add_channel("ch00")
+        experiment.add_condition("ctrl")
+        fov_id = experiment.add_fov("ctrl", width=64, height=64)
+
+        # Write a mask and particle labels under the old channel name
+        mask = np.zeros((64, 64), dtype=np.int32)
+        mask[10:20, 10:20] = 1
+        thr_id = experiment.add_threshold_run("ch00", method="otsu")
+        experiment.write_mask(fov_id, "ch00", mask, threshold_run_id=thr_id)
+
+        plabels = np.zeros((64, 64), dtype=np.int32)
+        plabels[12:18, 12:18] = 1
+        experiment.write_particle_labels(fov_id, "ch00", plabels)
+
+        # Rename the channel
+        experiment.rename_channel("ch00", "GFP")
+
+        # Particle labels should be readable under the new name
+        result = experiment.read_particle_labels(fov_id, "GFP")
+        assert result.shape == (64, 64)
+        assert result[15, 15] == 1
+
+        # Mask should also be readable under the new name
+        mask_result = experiment.read_mask(fov_id, "GFP")
+        assert mask_result.shape == (64, 64)
+        assert mask_result[15, 15] > 0
+
 
 class TestRenameBioRep:
     def test_rename_bio_rep(self, experiment):

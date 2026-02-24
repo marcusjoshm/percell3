@@ -47,20 +47,23 @@ def _rename_mask_groups(
     old_channel: str,
     new_channel: str,
 ) -> None:
-    """Rename threshold_<old> groups to threshold_<new> in the masks store."""
+    """Rename threshold_<old> and particles_<old> groups in the masks store."""
     import zarr
 
     if not masks_path.exists():
         return
     root = zarr.open_group(str(masks_path), mode="r+")
-    old_suffix = f"threshold_{old_channel}"
-    new_suffix = f"threshold_{new_channel}"
+
+    renames = {
+        f"threshold_{old_channel}": f"threshold_{new_channel}",
+        f"particles_{old_channel}": f"particles_{new_channel}",
+    }
 
     def _walk_and_rename(group: zarr.Group) -> None:
         for key in list(group.keys()):
             child = group[key]
-            if key == old_suffix:
-                group.move(key, new_suffix)
+            if key in renames:
+                group.move(key, renames[key])
             elif hasattr(child, "keys"):
                 _walk_and_rename(child)
 

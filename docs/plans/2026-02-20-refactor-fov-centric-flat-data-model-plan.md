@@ -170,9 +170,9 @@ class FovInfo:
 Key change: `display_name` replaces `name`. The `condition` and `bio_rep` fields remain as read-only denormalized values populated by queries.
 
 #### Verification
-- [ ] `pytest tests/test_core/test_schema.py -v` — schema creates cleanly
-- [ ] New tables appear in `EXPECTED_TABLES`
-- [ ] New indexes appear in `EXPECTED_INDEXES`
+- [x] `pytest tests/test_core/test_schema.py -v` — schema creates cleanly
+- [x] New tables appear in `EXPECTED_TABLES`
+- [x] New indexes appear in `EXPECTED_INDEXES`
 
 ---
 
@@ -209,7 +209,7 @@ Remove `_fov_group_path()` private helper (absorbed into the public functions).
 All downstream read/write functions (`write_image_channel`, `read_image_channel`, etc.) receive `group_path` strings, so they need no changes.
 
 #### Verification
-- [ ] `pytest tests/test_core/test_zarr_io.py -v` — all path assertions updated
+- [x] `pytest tests/test_core/test_zarr_io.py -v` — all path assertions updated
 
 ---
 
@@ -287,7 +287,7 @@ def generate_display_name(conn, condition_name, bio_rep_name, base_name="FOV"):
 ```
 
 #### Verification
-- [ ] `pytest tests/test_core/test_queries.py -v` — all query tests updated and passing
+- [x] `pytest tests/test_core/test_queries.py -v` — all query tests updated and passing
 
 ---
 
@@ -394,7 +394,7 @@ After these operations, call `update_fov_status_cache(fov_id)`:
 - `delete_particles_for_fov()`
 
 #### Verification
-- [ ] `pytest tests/test_core/test_experiment_store.py -v` — all store tests updated and passing
+- [x] `pytest tests/test_core/test_experiment_store.py -v` — all store tests updated and passing
 
 ---
 
@@ -430,7 +430,7 @@ store.write_image(fov_id, "DAPI", data)
 - `TestFlatBioReps` — verify bio_reps are experiment-global
 
 #### Verification
-- [ ] `pytest tests/test_core/ -v` — all core tests pass
+- [x] `pytest tests/test_core/ -v` — all core tests pass
 
 ---
 
@@ -461,7 +461,7 @@ All methods switch from `(fov, condition, bio_rep)` to `fov_id`. Key changes:
 - All store calls use `self._fov_id`.
 
 #### Verification
-- [ ] `pytest tests/test_segment/ -v` — all segment tests pass
+- [x] `pytest tests/test_segment/ -v` — all segment tests pass
 
 ---
 
@@ -488,7 +488,7 @@ Same pattern — all methods switch from `(fov, condition, bio_rep)` to `fov_id`
 | `ParticleAnalyzer.analyze_fov()` | `(store, fov_id, channel, ...)` |
 
 #### Verification
-- [ ] `pytest tests/test_measure/ -v` — all measure tests pass
+- [x] `pytest tests/test_measure/ -v` — all measure tests pass
 
 ---
 
@@ -509,7 +509,7 @@ Keep `condition` and `bio_rep` fields — these are metadata to store on the FOV
 - FOV numbering: generate sequential display names globally per `(condition, bio_rep)` prefix
 
 #### Verification
-- [ ] `pytest tests/test_io/ -v` — all IO tests pass
+- [x] `pytest tests/test_io/ -v` — all IO tests pass
 
 ---
 
@@ -543,7 +543,7 @@ Read from `fov_status_cache` instead of computing status via JOINs. Faster displ
 **napari viewer flow:** Change from condition→bio_rep→FOV drill-down to flat FOV table selection (same table used by segmentation/measurement).
 
 #### Verification
-- [ ] `pytest tests/test_cli/ -v` — all CLI tests pass
+- [x] `pytest tests/test_cli/ -v` — all CLI tests pass
 
 ---
 
@@ -557,7 +557,7 @@ Read from `fov_status_cache` instead of computing status via JOINs. Faster displ
 Update all shared fixtures to use new API pattern. Ensure all 769+ tests pass.
 
 #### Verification
-- [ ] `pytest tests/ -v` — full test suite passes
+- [x] `pytest tests/ -v` — full test suite passes
 
 ---
 
@@ -612,31 +612,31 @@ From `docs/solutions/design-gaps/import-flow-table-first-ui-and-heuristics.md`:
 ## Acceptance Criteria
 
 ### Functional
-- [ ] FOVs have globally unique integer IDs used by all API methods
-- [ ] FOVs have auto-generated display_names that are unique and editable
-- [ ] Bio_reps are experiment-global (not scoped to conditions)
-- [ ] Zarr images stored at `fov_{id}/` path
+- [x] FOVs have globally unique integer IDs used by all API methods
+- [x] FOVs have auto-generated display_names that are unique and editable
+- [x] Bio_reps are experiment-global (not scoped to conditions)
+- [x] Zarr images stored at `fov_{id}/` path
 - [ ] Status cache table updated after segmentation, measurement, thresholding
 - [ ] FOV tags can be created, applied, removed, and filtered
-- [ ] All CLI handlers use fov_id for store/module calls
-- [ ] napari viewer uses flat FOV selection (no hierarchical drill-down)
-- [ ] Renaming a condition or bio_rep is a DB-only operation (no zarr moves)
-- [ ] Export CSV still includes condition_name, bio_rep_name columns
+- [x] All CLI handlers use fov_id for store/module calls
+- [x] napari viewer uses flat FOV selection (no hierarchical drill-down)
+- [x] Renaming a condition or bio_rep is a DB-only operation (no zarr moves)
+- [x] Export CSV still includes condition_name, bio_rep_name columns
 
 ### Quality
-- [ ] All 769+ existing tests pass (rewritten for new API)
+- [x] All 769+ existing tests pass (rewritten for new API — now 773 tests)
 - [ ] New tests for: fov_status_cache, fov_tags, display_name generation, flat bio_reps
-- [ ] No module imports `queries` or `zarr_io` from outside `core/`
-- [ ] `pytest tests/ -v` — zero failures
+- [x] No module imports `queries` or `zarr_io` from outside `core/`
+- [x] `pytest tests/ -v` — zero failures
 
 ## Verification
 
-- [ ] `pytest tests/test_core/ -v` — core module tests
-- [ ] `pytest tests/test_segment/ -v` — segmentation tests
-- [ ] `pytest tests/test_measure/ -v` — measurement tests
-- [ ] `pytest tests/test_io/ -v` — IO tests
-- [ ] `pytest tests/test_cli/ -v` — CLI tests
-- [ ] `pytest tests/ -v` — full suite
-- [ ] Manual: `percell3` shows FOV table with display_name, condition, bio_rep columns
-- [ ] Manual: Segmentation, measurement, thresholding work with fov_id-based API
-- [ ] Manual: napari viewer launches with flat FOV selection
+- [x] `pytest tests/test_core/ -v` — core module tests
+- [x] `pytest tests/test_segment/ -v` — segmentation tests
+- [x] `pytest tests/test_measure/ -v` — measurement tests
+- [x] `pytest tests/test_io/ -v` — IO tests
+- [x] `pytest tests/test_cli/ -v` — CLI tests
+- [x] `pytest tests/ -v` — full suite
+- [ ] Manual: `percell3` shows FOV table with display_name, condition, bio_rep columns (user testing)
+- [ ] Manual: Segmentation, measurement, thresholding work with fov_id-based API (user testing)
+- [ ] Manual: napari viewer launches with flat FOV selection (user testing)
