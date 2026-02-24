@@ -46,7 +46,6 @@ class TestMenuLaunch:
         assert result.exit_code == 0
         assert "PerCell 3" in result.output
         assert "Setup" in result.output
-        assert "coming soon" in result.output
 
     def test_menu_shows_categories(self, runner: CliRunner):
         result = _invoke_menu(runner, input="q\n")
@@ -58,12 +57,11 @@ class TestMenuLaunch:
         assert "Data" in result.output
         assert "Workflows" in result.output
         assert "Plugins" in result.output
-        assert "coming soon" in result.output
 
-    def test_disabled_item_shows_message(self, runner: CliRunner):
-        # Select disabled item "8" (Plugins), press Enter to continue, then quit
+    def test_plugins_menu_requires_experiment(self, runner: CliRunner):
+        # Selecting Plugins (8) without an experiment should show error
         result = _invoke_menu(runner, input="8\n\nq\n")
-        assert "not yet available" in result.output
+        assert "No experiment" in result.output
 
     def test_invalid_option_shows_error(self, runner: CliRunner):
         result = _invoke_menu(runner, input="z\nq\n")

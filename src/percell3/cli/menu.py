@@ -210,7 +210,7 @@ def run_interactive_menu() -> None:
             MenuItem("5", "View", "View images and masks in napari", _view_menu),
             MenuItem("6", "Data", "Query, edit, and export experiment data", _data_menu),
             MenuItem("7", "Workflows", "Run automated analysis pipelines", _workflows_menu),
-            MenuItem("8", "Plugins", "Extend functionality with plugins", None, enabled=False),
+            MenuItem("8", "Plugins", "Extend functionality with plugins", _plugins_menu),
         ], state, show_banner=True).run()
     except KeyboardInterrupt:
         pass
@@ -281,6 +281,193 @@ def _workflows_menu(state: MenuState) -> None:
         MenuItem("2", "Back", "", None),
     ], state).run()
     raise _MenuCancel()
+
+
+def _plugins_menu(state: MenuState) -> None:
+    """Plugin manager — discover and run analysis plugins."""
+    from percell3.plugins.registry import PluginRegistry
+
+    store = state.require_experiment()
+    registry = PluginRegistry()
+    registry.discover()
+    plugins = registry.list_plugins()
+
+    if not plugins:
+        console.print("\n[yellow]No plugins available.[/yellow]")
+        return
+
+    # Build menu items for each discovered plugin
+    items: list[MenuItem] = []
+    for i, info in enumerate(plugins, 1):
+        items.append(MenuItem(str(i), info.name, info.description, _make_plugin_runner(registry, info.name)))
+    items.append(MenuItem(str(len(plugins) + 1), "Back", "", None))
+
+    Menu("PLUGINS", items, state).run()
+    raise _MenuCancel()
+
+
+def _make_plugin_runner(registry, plugin_name: str):
+    """Create a handler function for a specific plugin."""
+    def handler(state: MenuState) -> None:
+        if plugin_name == "local_bg_subtraction":
+            _run_bg_subtraction(state, registry)
+        else:
+            # Generic plugin runner for future plugins
+            _run_generic_plugin(state, registry, plugin_name)
+    return handler
+
+
+def _run_generic_plugin(state: MenuState, registry, plugin_name: str) -> None:
+    """Generic plugin runner — validates and runs without custom UI."""
+    store = state.require_experiment()
+
+    # Validate
+    plugin = registry.get_plugin(plugin_name)
+    errors = plugin.validate(store)
+    if errors:
+        console.print(f"\n[red]Plugin validation failed:[/red]")
+        for e in errors:
+            console.print(f"  - {e}")
+        return
+
+    # Run
+    with make_progress() as progress:
+        task = progress.add_task(f"Running {plugin_name}...", total=None)
+
+        def on_progress(current, total, fov_name):
+            progress.update(task, total=total, completed=current,
+                            description=f"Processing {fov_name}")
+
+        result = registry.run_plugin(plugin_name, store, progress_callback=on_progress)
+
+    console.print(f"\n[green]Plugin complete[/green]")
+    console.print(f"  Cells processed: {result.cells_processed}")
+    console.print(f"  Measurements written: {result.measurements_written}")
+    for w in result.warnings:
+        console.print(f"  [yellow]Warning: {w}[/yellow]")
+
+
+def _run_bg_subtraction(state: MenuState, registry) -> None:
+    """Interactive handler for local background subtraction plugin."""
+    store = state.require_experiment()
+
+    # Validate prerequisites
+    plugin = registry.get_plugin("local_bg_subtraction")
+    errors = plugin.validate(store)
+    if errors:
+        console.print(f"\n[red]Cannot run background subtraction:[/red]")
+        for e in errors:
+            console.print(f"  - {e}")
+        return
+
+    channels = store.get_channels()
+    ch_names = [ch.name for ch in channels]
+
+    # Step 1: Measurement channel
+    console.print("\n[bold]Step 1: Measurement Channel[/bold]")
+    console.print("  [dim]Select the channel to measure intensities from.[/dim]\n")
+    meas_channel = numbered_select_one(ch_names, "Measurement channel")
+
+    # Step 2: Particle mask channel
+    # Find channels with threshold runs (i.e., particle masks exist)
+    threshold_runs = store.get_threshold_runs()
+    particle_channels = sorted({tr["channel"] for tr in threshold_runs})
+    if not particle_channels:
+        console.print("\n[red]No particle masks found.[/red]")
+        console.print("[dim]Run 'Apply threshold' first to generate particle masks.[/dim]")
+        return
+
+    console.print("\n[bold]Step 2: Particle Mask[/bold]")
+    console.print("  [dim]Select the thresholded particle mask to dilate and measure.[/dim]\n")
+    particle_channel = numbered_select_one(particle_channels, "Particle mask")
+
+    # Step 3: Exclusion mask (optional)
+    other_particle_channels = [c for c in particle_channels if c != particle_channel]
+    exclusion_channel = None
+    if other_particle_channels:
+        console.print("\n[bold]Step 3: Exclusion Mask (optional)[/bold]")
+        console.print("  [dim]Exclude another mask's particles from the background ring.[/dim]\n")
+        choices = ["(none)"] + other_particle_channels
+        choice = numbered_select_one(choices, "Exclusion mask")
+        if choice != "(none)":
+            exclusion_channel = choice
+    else:
+        console.print("\n[bold]Step 3: Exclusion Mask[/bold]")
+        console.print("  [dim]No other particle masks available — skipping.[/dim]")
+
+    # Step 4: Dilation
+    console.print("\n[bold]Step 4: Ring Dilation[/bold]")
+    dilation_str = menu_prompt("Dilation pixels", default="5")
+    try:
+        dilation_pixels = int(dilation_str)
+    except ValueError:
+        console.print("[yellow]Invalid number, using default of 5.[/yellow]")
+        dilation_pixels = 5
+
+    # Step 5: FOV selection
+    console.print("\n[bold]Step 5: Select FOVs[/bold]")
+    all_fovs = store.get_fovs()
+    seg_summary = store.get_fov_segmentation_summary()
+    fovs_with_cells = [f for f in all_fovs if seg_summary.get(f.id, (0, None))[0] > 0]
+    if not fovs_with_cells:
+        console.print("[red]No FOVs with segmented cells.[/red]")
+        return
+
+    _show_fov_status_table(fovs_with_cells, seg_summary)
+    if len(fovs_with_cells) == 1:
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].display_name})[/dim]")
+        selected_fovs = fovs_with_cells
+    else:
+        selected_fovs = _select_fovs_from_table(fovs_with_cells)
+
+    # Collect cell_ids from selected FOVs
+    cell_ids = []
+    for fov in selected_fovs:
+        cells_df = store.get_cells(fov_id=fov.id)
+        cell_ids.extend(cells_df["id"].tolist())
+
+    # Step 6: Confirmation
+    console.print(f"\n[bold]Background subtraction settings:[/bold]")
+    console.print(f"  Measurement:   {meas_channel}")
+    console.print(f"  Particle mask: {particle_channel}")
+    console.print(f"  Exclusion:     {exclusion_channel or '(none)'}")
+    console.print(f"  Dilation:      {dilation_pixels} px")
+    console.print(f"  FOVs:          {len(selected_fovs)} selected")
+
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
+        console.print("[yellow]Background subtraction cancelled.[/yellow]")
+        return
+
+    # Step 7: Run with progress
+    parameters = {
+        "measurement_channel": meas_channel,
+        "particle_channel": particle_channel,
+        "exclusion_channel": exclusion_channel,
+        "dilation_pixels": dilation_pixels,
+    }
+
+    with make_progress() as progress:
+        task = progress.add_task("Background subtraction...", total=len(selected_fovs))
+
+        def on_progress(current, total, fov_name):
+            progress.update(task, total=total, completed=current,
+                            description=f"Processing {fov_name}")
+
+        result = registry.run_plugin(
+            "local_bg_subtraction", store,
+            cell_ids=cell_ids, parameters=parameters,
+            progress_callback=on_progress,
+        )
+
+    # Step 8: Summary
+    console.print(f"\n[green]Background subtraction complete[/green]")
+    console.print(f"  Cells processed: {result.cells_processed}")
+    console.print(f"  Measurements written: {result.measurements_written}")
+    if result.custom_outputs.get("csv"):
+        console.print(f"  CSV exported: {result.custom_outputs['csv']}")
+    for w in result.warnings:
+        console.print(f"  [yellow]Warning: {w}[/yellow]")
+    console.print()
 
 
 _BANNER_LINES = [
