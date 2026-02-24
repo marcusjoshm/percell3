@@ -81,6 +81,24 @@ class SegmentationResult:
     fov_stats: list[dict[str, object]] = field(default_factory=list)
 
 
+def detect_gpu() -> str:
+    """Detect available GPU backend for Cellpose.
+
+    Returns:
+        Human-readable string: "GPU: CUDA", "GPU: MPS", or "CPU only".
+    """
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "GPU: CUDA"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "GPU: MPS"
+    except ImportError:
+        pass
+    return "CPU only"
+
+
 class BaseSegmenter(ABC):
     """Abstract interface for segmentation backends.
 

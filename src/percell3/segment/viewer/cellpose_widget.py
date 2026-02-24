@@ -21,16 +21,9 @@ def _detect_gpu() -> str:
     Returns:
         Human-readable string: "GPU: CUDA", "GPU: MPS", or "CPU only".
     """
-    try:
-        import torch
+    from percell3.segment.base_segmenter import detect_gpu
 
-        if torch.cuda.is_available():
-            return "GPU: CUDA"
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "GPU: MPS"
-    except ImportError:
-        pass
-    return "CPU only"
+    return detect_gpu()
 
 
 def _gpu_available() -> bool:

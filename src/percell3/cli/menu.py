@@ -827,10 +827,13 @@ def _segment_cells(state: MenuState) -> None:
         return
 
     # 7. Run segmentation
-    from percell3.segment import SegmentationEngine
+    from percell3.segment import SegmentationEngine, detect_gpu
 
     engine = SegmentationEngine()
     fov_names = [f.display_name for f in selected_fovs]
+
+    device = detect_gpu()
+    console.print(f"  Device: [bold]{device}[/bold]")
 
     with make_progress() as progress:
         task = progress.add_task("Segmenting...", total=None)
@@ -2074,10 +2077,13 @@ def _particle_workflow(state: MenuState) -> None:
     console.print(f"\n[bold]{'='*60}[/bold]")
     console.print(f"[bold]Stage 1: Segmentation[/bold]")
 
-    from percell3.segment import SegmentationEngine
+    from percell3.segment import SegmentationEngine, detect_gpu
 
     engine = SegmentationEngine()
     fov_names = [f.display_name for f in selected_fovs]
+
+    device = detect_gpu()
+    console.print(f"  Device: [bold]{device}[/bold]")
 
     with make_progress() as progress:
         task = progress.add_task("Segmenting...", total=None)

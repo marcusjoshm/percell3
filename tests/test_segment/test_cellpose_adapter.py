@@ -189,9 +189,26 @@ class TestCellposeAdapterUnit:
 
         assert result.max() == 0
 
-    def test_default_channels_grayscale(self) -> None:
-        """When channels_cellpose is None, should pass [0, 0] to Cellpose."""
+    def test_default_channels_not_passed_on_v4(self) -> None:
+        """Cellpose 4.x: channels param should NOT be passed (deprecated)."""
         adapter = CellposeAdapter()
+        adapter._cellpose_major = 4
+        fake_masks = np.zeros((10, 10), dtype=np.int32)
+
+        mock_model = MagicMock()
+        mock_model.eval.return_value = (fake_masks, None, None, None)
+
+        with patch.object(adapter, "_get_model", return_value=mock_model):
+            params = SegmentationParams(channel="DAPI", gpu=False, channels_cellpose=None)
+            adapter.segment(np.zeros((10, 10), dtype=np.uint16), params)
+
+        call_kwargs = mock_model.eval.call_args
+        assert "channels" not in call_kwargs[1]
+
+    def test_channels_passed_on_v3(self) -> None:
+        """Cellpose 3.x: channels param should be passed as [0, 0]."""
+        adapter = CellposeAdapter()
+        adapter._cellpose_major = 3
         fake_masks = np.zeros((10, 10), dtype=np.int32)
 
         mock_model = MagicMock()
@@ -204,9 +221,10 @@ class TestCellposeAdapterUnit:
         call_kwargs = mock_model.eval.call_args
         assert call_kwargs[1]["channels"] == [0, 0]
 
-    def test_custom_channels_passed_through(self) -> None:
-        """Custom channels_cellpose should be passed to Cellpose."""
+    def test_custom_channels_passed_on_v3(self) -> None:
+        """Cellpose 3.x: custom channels_cellpose should be passed through."""
         adapter = CellposeAdapter()
+        adapter._cellpose_major = 3
         fake_masks = np.zeros((10, 10), dtype=np.int32)
 
         mock_model = MagicMock()

@@ -56,11 +56,14 @@ def segment(
     bio_rep: str | None,
 ) -> None:
     """Run cell segmentation on experiment FOVs."""
-    from percell3.segment import SegmentationEngine
+    from percell3.segment import SegmentationEngine, detect_gpu
 
     store = open_experiment(experiment)
     try:
         engine = SegmentationEngine()
+
+        device = detect_gpu()
+        console.print(f"  Device: [bold]{device}[/bold]")
 
         fov_list: list[str] | None = None
         if fovs is not None:

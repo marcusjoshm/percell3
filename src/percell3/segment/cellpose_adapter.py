@@ -95,15 +95,17 @@ class CellposeAdapter(BaseSegmenter):
             Label image (Y, X) as int32 where pixel value = cell ID, 0 = background.
         """
         model = self._get_model(params.model_name, params.gpu)
-        results = model.eval(
-            image,
-            diameter=params.diameter,
-            flow_threshold=params.flow_threshold,
-            cellprob_threshold=params.cellprob_threshold,
-            min_size=params.min_size,
-            normalize=params.normalize,
-            channels=params.channels_cellpose or [0, 0],
-        )
+        eval_kwargs: dict[str, object] = {
+            "diameter": params.diameter,
+            "flow_threshold": params.flow_threshold,
+            "cellprob_threshold": params.cellprob_threshold,
+            "min_size": params.min_size,
+            "normalize": params.normalize,
+        }
+        # Cellpose 4.x deprecated the channels parameter; only pass it on 3.x
+        if self._cellpose_major is not None and self._cellpose_major < 4:
+            eval_kwargs["channels"] = params.channels_cellpose or [0, 0]
+        results = model.eval(image, **eval_kwargs)
         # Cellpose 3.x returns 4 values, 4.x returns 3
         masks = results[0]
         return np.asarray(masks, dtype=np.int32)

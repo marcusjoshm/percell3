@@ -4,6 +4,7 @@ from percell3.segment.base_segmenter import (
     BaseSegmenter,
     SegmentationParams,
     SegmentationResult,
+    detect_gpu,
 )
 from percell3.segment._engine import SegmentationEngine
 from percell3.segment.label_processor import LabelProcessor, extract_cells
@@ -12,6 +13,7 @@ from percell3.segment.roi_import import RoiImporter, store_labels_and_cells
 __all__ = [
     "BaseSegmenter",
     "CellposeAdapter",
+    "detect_gpu",
     "extract_cells",
     "KNOWN_CELLPOSE_MODELS",
     "LabelProcessor",
