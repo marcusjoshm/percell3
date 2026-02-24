@@ -1177,7 +1177,7 @@ def _apply_threshold(state: MenuState) -> None:
     console.print("\n[bold]Channel for grouping metric:[/bold]")
     grouping_channel = numbered_select_one(ch_names, "Grouping channel")
 
-    metrics = ["mean_intensity", "median_intensity", "integrated_intensity", "area_pixels"]
+    metrics = ["mean_intensity", "median_intensity", "integrated_intensity", "area_um2"]
     console.print("\n[bold]Metric for grouping:[/bold]")
     grouping_metric = numbered_select_one(metrics, "Grouping metric")
 
@@ -1868,7 +1868,7 @@ def _export_csv(state: MenuState) -> None:
     if include_particles:
         # Optional particle metric filter
         particle_metric_options = [
-            "area_pixels", "area_um2", "perimeter", "circularity",
+            "area_um2", "perimeter", "circularity",
             "mean_intensity", "max_intensity", "integrated_intensity",
         ]
         console.print("\n[bold]Particle metric filter:[/bold]")

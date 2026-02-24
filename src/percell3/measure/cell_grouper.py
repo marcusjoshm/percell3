@@ -115,7 +115,11 @@ class CellGrouper:
         """Get metric values for cells, from measurements table or cells table."""
         cell_ids = cells_df["id"].tolist()
 
-        # Special case: area_pixels comes from cells table
+        # Special case: area comes from cells table (prefer um2 over pixels)
+        if metric == "area_um2":
+            if "area_um2" in cells_df.columns and cells_df["area_um2"].notna().all():
+                return cells_df["area_um2"].to_numpy(dtype=np.float64)
+            return cells_df["area_pixels"].to_numpy(dtype=np.float64)
         if metric == "area_pixels":
             return cells_df["area_pixels"].to_numpy(dtype=np.float64)
 

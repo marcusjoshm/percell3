@@ -508,7 +508,7 @@ class ExperimentStore:
             if not cells_df.empty:
                 # Merge cell info
                 cell_cols = ["id", "fov_name", "condition_name", "bio_rep_name",
-                             "area_pixels", "centroid_x", "centroid_y"]
+                             "area_um2", "centroid_x", "centroid_y"]
                 available = [c for c in cell_cols if c in cells_df.columns]
                 if available:
                     merge_df = cells_df[available].rename(columns={"id": "cell_id"})
