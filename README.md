@@ -1,5 +1,9 @@
 # PerCell 3
 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/marcusjoshm/percell3/)
+[![License: MIT](https://img.shields.io/github/license/marcusjoshm/percell3)](https://github.com/marcusjoshm/percell3/blob/main/LICENSE)
+
 <img src="docs/art/percell3_menu.png" width="900" title="PerCell 3 Interactive Menu" alt="PerCell 3 Interactive Menu">
 
 Single-cell microscopy analysis platform built on OME-Zarr and SQLite.
@@ -324,16 +328,14 @@ pytest -m "not slow"                 # Skip slow tests (Cellpose model downloads
 
 ## Technology Stack
 
-- Python 3.10+
-- zarr + ome-zarr (OME-NGFF 0.4)
-- SQLite (stdlib sqlite3, WAL mode)
-- dask.array for lazy/chunked image access
-- cellpose (3.x/4.x) for segmentation
-- scikit-image + scipy for image processing
-- scikit-learn for GMM cell grouping
-- click + rich for CLI
-- pandas for data export
-- napari for visualization (optional)
+- **Python 3.10+** with scientific libraries (NumPy, SciPy, pandas)
+- **Image Storage**: zarr + ome-zarr (OME-NGFF 0.4), dask.array for lazy/chunked access
+- **Database**: SQLite (stdlib sqlite3, WAL mode)
+- **Segmentation**: Cellpose (3.x/4.x)
+- **Image Processing**: scikit-image, scipy, scikit-learn (GMM cell grouping)
+- **Visualization**: napari (optional) with custom dock widgets
+- **CLI**: click + rich for interactive terminal menus
+- **Architecture**: Hexagonal design with plugin system and dependency injection
 
 ## License
 
