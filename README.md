@@ -1,5 +1,7 @@
 # PerCell 3
 
+<img src="docs/art/percell3_menu.png" width="900" title="PerCell 3 Interactive Menu" alt="PerCell 3 Interactive Menu">
+
 Single-cell microscopy analysis platform built on OME-Zarr and SQLite.
 
 PerCell 3 replaces PerCell 2's filesystem-based data model with a proper experiment database. It provides a complete pipeline from image import through segmentation, measurement, thresholding, particle analysis, and data export.
@@ -9,7 +11,7 @@ PerCell 3 replaces PerCell 2's filesystem-based data model with a proper experim
 - **ExperimentStore** — Central hub. OME-Zarr for pixel data, SQLite for metadata and measurements.
 - **Hexagonal design** — Domain logic has no framework dependencies. External tools (Cellpose, napari) accessed through adapter interfaces.
 - **Channels are first-class** — Segment on DAPI, measure on GFP/RFP. Any operation can target any channel.
-- **Plugin system** — Analysis routines read from ExperimentStore and write results back.
+- **Plugin system** — Analysis plugins read from ExperimentStore and write results back. Visualization plugins launch interactive viewers.
 
 ## Modules
 
@@ -19,7 +21,7 @@ PerCell 3 replaces PerCell 2's filesystem-based data model with a proper experim
 | `io` | Format readers (TIFF, LIF, CZI) with auto-grouping scanner |
 | `segment` | Cellpose segmentation engine + napari viewer |
 | `measure` | Per-cell metrics, cell grouping (GMM), thresholding, particle analysis |
-| `plugins` | Plugin system + built-ins (colocalization, intensity grouping) |
+| `plugins` | Plugin system (AnalysisPlugin + VisualizationPlugin ABCs), local BG subtraction, 3D surface plot |
 | `workflow` | DAG-based workflow engine with preset pipelines |
 | `cli` | Click CLI with interactive menu |
 
@@ -56,19 +58,16 @@ percell3 export results.csv -e ./my_experiment.percell
 
 Running `percell3` without arguments launches the interactive menu with an ASCII art banner. The menu auto-loads your most recent experiment on startup.
 
-| Key | Action | Description |
-|-----|--------|-------------|
-| `1` | Create experiment | Create a new `.percell` experiment directory |
-| `2` | Import images | Table-first TIFF import with auto or manual assignment |
-| `3` | Segment cells | Cellpose segmentation with model/diameter selection |
-| `4` | View in napari | Open FOV in napari with channels, labels, and masks |
-| `5` | Measure channels | Whole-cell or mask-based measurement |
-| `6` | Apply threshold | Cell grouping + Otsu threshold QC + particle analysis |
-| `7` | Query experiment | View channels, FOVs, conditions, bio reps, summary |
-| `8` | Edit experiment | Rename experiments, conditions, FOVs, channels, bio reps |
-| `9` | Export to CSV | Export cell measurements and/or particle data |
-| `w` | Run workflow | Run preset workflow pipelines |
-| `e` | Select experiment | Switch between experiments (with recent history) |
+| Key | Menu | Sub-items |
+|-----|------|-----------|
+| `1` | Setup | Create experiment, Select experiment |
+| `2` | Import | Import LIF, TIFF, or CZI images |
+| `3` | Segment | Cellpose segmentation with model/diameter selection |
+| `4` | Analyze | Measure channels, Apply threshold + particle analysis |
+| `5` | View | View images and masks in napari |
+| `6` | Data | Query experiment, Edit experiment, Export to CSV |
+| `7` | Workflows | Run automated analysis pipelines |
+| `8` | Plugins | Local BG subtraction, 3D Surface Plot |
 | `?` | Help | Show CLI command reference |
 | `q` | Quit | Exit the menu |
 
@@ -79,7 +78,7 @@ Running `percell3` without arguments launches the interactive menu with an ASCII
 
 Sub-menus (Edit, Query, Measure, Workflow) loop after completing an action so you can perform multiple operations without re-navigating.
 
-### Import Workflow (Menu 2)
+### Import Workflow (Import > Import images)
 
 1. Select source: type a path, browse for folder, or browse for files (tkinter)
 2. Scanner groups TIFF files by FOV token, showing a file group table
@@ -88,7 +87,7 @@ Sub-menus (Edit, Query, Measure, Workflow) loop after completing an action so yo
 5. Z-projection selection: `mip` (max intensity), `sum`, `mean`, `keep`
 6. Confirmation with assignment summary table
 
-### Segmentation Workflow (Menu 3)
+### Segmentation Workflow (Segment > Segment cells)
 
 1. Select channel to segment
 2. Select Cellpose model — available models: `cpsam`, `cyto`, `cyto2`, `cyto2_cp3`, `cyto3`, `nuclei`, `bact_fluor_cp3`, `bact_phase_cp3`, `deepbacs_cp3`, `livecell`, `livecell_cp3`, `plant_cp3`, `tissuenet`, `tissuenet_cp3`, `yeast_BF_cp3`, `yeast_PhC_cp3`
@@ -97,14 +96,14 @@ Sub-menus (Edit, Query, Measure, Workflow) loop after completing an action so yo
 5. Re-segmentation warning for FOVs with existing cells
 6. After segmentation completes, **auto-measures all channels** on the segmented FOVs
 
-### Measurement Modes (Menu 5)
+### Measurement Modes (Analyze > Measure channels)
 
 - **Whole cell** — all selected channels, all metrics, standard per-cell measurement
 - **Inside threshold mask** — pixels where cell mask AND threshold mask are both true
 - **Outside threshold mask** — pixels where cell mask is true but threshold mask is false
 - **Both inside + outside** — runs both scopes
 
-### Threshold + Particle Analysis (Menu 6)
+### Threshold + Particle Analysis (Analyze > Apply threshold)
 
 1. Select grouping channel and metric (mean/median/integrated intensity, area)
 2. Select threshold channel
@@ -112,7 +111,7 @@ Sub-menus (Edit, Query, Measure, Workflow) loop after completing an action so yo
 4. Per-FOV: GMM-based cell grouping (BIC model selection), then per-group napari threshold QC with live Otsu preview, accept/skip/skip-remaining
 5. Particle analysis on accepted groups: connected component analysis with morphometrics
 
-### Export Options (Menu 9)
+### Export Options (Data > Export)
 
 - Export type: cell measurements only, particle data only, or both
 - Channel filter (multi-select)
@@ -120,6 +119,18 @@ Sub-menus (Edit, Query, Measure, Workflow) loop after completing an action so yo
 - Scope filter: all scopes, whole cell only, inside mask only, outside mask only
 - Particle metric filter: area, perimeter, circularity, intensity metrics
 - When exporting both, creates `output.csv` + `output_particles.csv`
+
+### Plugins (Menu 8)
+
+Plugins are auto-discovered from `percell3.plugins.builtin`. Two plugin types:
+
+**Analysis Plugins** (`AnalysisPlugin`) — read data, write measurements back:
+
+- **Local BG Subtraction** — Per-particle local background estimation using Gaussian peak detection on a dilated ring. Exports per-particle CSV files split by condition.
+
+**Visualization Plugins** (`VisualizationPlugin`) — read data, launch interactive viewers:
+
+- **3D Surface Plot** — Renders a microscopy image as a 3D heightmap in napari. Select a height channel (Z-axis elevation) and a color channel (colormap overlay). Draw an ROI rectangle, then generate an interactive 3D surface with colormap, Z-scale, and smoothing controls. Includes screenshot export.
 
 ## CLI Commands
 
@@ -228,7 +239,7 @@ Lists or runs preset workflows (`complete`, `measure_only`).
 
 ## Napari Viewer
 
-The napari viewer (`percell3 view` or menu item 4) opens FOVs with:
+The napari viewer (`percell3 view` or View > View in napari) opens FOVs with:
 
 - **Channel image layers** with automatic colormap assignment (blue for DAPI, green for GFP, red for RFP)
 - **Segmentation labels** (opacity 0.5, change detection on close for save-back)
@@ -247,11 +258,20 @@ The napari viewer (`percell3 view` or menu item 4) opens FOVs with:
 - **Delete Cell**: click on a cell label to select, then delete
 - **Draw Cell (Polygon)**: click vertices to draw a polygon, confirm to rasterize as a new label
 
-**Threshold QC Viewer** (launched from menu item 6):
+**Threshold QC Viewer** (launched from Analyze > Apply threshold):
 - Live threshold preview with Otsu auto-compute
 - ROI rectangle drawing to restrict threshold region
 - Accept / Skip / Skip Remaining buttons per cell group
 - Real-time positive pixel count and fraction display
+
+**3D Surface Plot Widget** (launched from Plugins > surface_plot_3d):
+- Height channel + color channel dropdowns
+- Colormap selector (viridis, plasma, magma, inferno, turbo, hot, gray)
+- Z-scale slider (1–200) for height exaggeration
+- Smoothing sigma slider (0.0–10.0) for Gaussian blur on height data
+- Generate Surface button with interactive ROI rectangle selection
+- Save Screenshot button (exports to `{experiment}/exports/`)
+- **3D navigation:** left-click drag = rotate, Shift + left-click drag = pan, scroll = zoom
 
 ## Measurement Metrics
 
