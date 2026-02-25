@@ -45,6 +45,7 @@ class ThresholdEngine:
         channel: str,
         method: str = "otsu",
         manual_value: float | None = None,
+        gaussian_sigma: float | None = None,
     ) -> ThresholdResult:
         """Apply thresholding to a channel image in a FOV.
 
@@ -72,6 +73,11 @@ class ThresholdEngine:
         # Read channel image
         image = store.read_image_numpy(fov_id, channel)
 
+        # Apply Gaussian smoothing if requested
+        if gaussian_sigma is not None and gaussian_sigma > 0:
+            from scipy.ndimage import gaussian_filter
+            image = gaussian_filter(image.astype(np.float64), sigma=gaussian_sigma)
+
         # Compute threshold
         threshold_value = self._compute_threshold(image, method, manual_value)
 
@@ -85,6 +91,8 @@ class ThresholdEngine:
         parameters = {"method": method, "threshold_value": float(threshold_value)}
         if manual_value is not None:
             parameters["manual_value"] = float(manual_value)
+        if gaussian_sigma is not None and gaussian_sigma > 0:
+            parameters["gaussian_sigma"] = float(gaussian_sigma)
         run_id = store.add_threshold_run(channel, method, parameters)
 
         # Write mask to masks.zarr
@@ -114,6 +122,7 @@ class ThresholdEngine:
         threshold_value: float,
         roi: list[tuple[int, int, int, int]] | None = None,
         group_tag: str | None = None,
+        gaussian_sigma: float | None = None,
     ) -> ThresholdResult:
         """Store a threshold result for a group of cells.
 
@@ -144,6 +153,13 @@ class ThresholdEngine:
 
         group_image, cell_mask = create_group_image(image, labels, label_values)
 
+        # Apply Gaussian smoothing if requested
+        if gaussian_sigma is not None and gaussian_sigma > 0:
+            from scipy.ndimage import gaussian_filter
+            group_image = gaussian_filter(
+                group_image.astype(np.float64), sigma=gaussian_sigma,
+            )
+
         # Create binary mask: threshold applied to full group image (not just ROI)
         mask = (group_image > threshold_value) & cell_mask
 
@@ -159,6 +175,8 @@ class ThresholdEngine:
             parameters["roi"] = [list(r) for r in roi]
         if group_tag:
             parameters["group_tag"] = group_tag
+        if gaussian_sigma is not None and gaussian_sigma > 0:
+            parameters["gaussian_sigma"] = float(gaussian_sigma)
 
         run_id = store.add_threshold_run(channel, "otsu", parameters)
 

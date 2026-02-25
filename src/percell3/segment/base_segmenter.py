@@ -35,6 +35,8 @@ class SegmentationParams:
     min_size: int = 15
     normalize: bool = True
     channels_cellpose: tuple[int, ...] | None = None
+    remove_edge_cells: bool = False
+    edge_margin: int = 0
 
     def __post_init__(self) -> None:
         """Validate parameters."""

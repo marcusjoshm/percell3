@@ -15,7 +15,7 @@ from percell3.segment.base_segmenter import (
     SegmentationParams,
     SegmentationResult,
 )
-from percell3.segment.label_processor import LabelProcessor
+from percell3.segment.label_processor import LabelProcessor, filter_edge_cells
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,7 @@ class SegmentationEngine:
             for key in (
                 "flow_threshold", "cellprob_threshold", "gpu",
                 "min_size", "normalize", "channels_cellpose",
+                "remove_edge_cells", "edge_margin",
             ):
                 if key in kwargs:
                     param_kwargs[key] = kwargs[key]
@@ -127,6 +128,17 @@ class SegmentationEngine:
 
                 # Run segmentation
                 labels = segmenter.segment(image, params)
+
+                # Filter edge cells if requested
+                if params.remove_edge_cells:
+                    labels, n_removed = filter_edge_cells(
+                        labels, params.edge_margin,
+                    )
+                    if n_removed:
+                        logger.info(
+                            "Removed %d edge cell(s) from FOV %s",
+                            n_removed, fov_info.display_name,
+                        )
 
                 # Write labels to zarr
                 store.write_labels(fov_info.id, labels, run_id)

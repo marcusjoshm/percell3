@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from skimage.draw import disk
 
-from percell3.segment.label_processor import LabelProcessor
+from percell3.segment.label_processor import LabelProcessor, filter_edge_cells
 
 
 @pytest.fixture
@@ -134,3 +134,68 @@ class TestExtractCells:
         cells = processor.extract_cells(labels, fov_id=1, segmentation_id=1)
         assert cells[0].perimeter is not None
         assert cells[0].perimeter > 0
+
+
+class TestFilterEdgeCells:
+    """Tests for filter_edge_cells()."""
+
+    def test_removes_cells_touching_border(self) -> None:
+        """Cells whose bbox touches the image border are removed."""
+        labels = np.zeros((100, 100), dtype=np.int32)
+        labels[0:10, 40:60] = 1   # Touches top edge
+        labels[40:60, 40:60] = 2  # Center cell (safe)
+        labels[90:100, 40:60] = 3  # Touches bottom edge
+        filtered, removed = filter_edge_cells(labels.copy(), edge_margin=0)
+        assert removed == 2
+        assert (filtered == 2).any()
+        assert not (filtered == 1).any()
+        assert not (filtered == 3).any()
+
+    def test_margin_zero_only_touching(self) -> None:
+        """margin=0 removes only cells directly touching the border."""
+        labels = np.zeros((100, 100), dtype=np.int32)
+        labels[1:10, 40:60] = 1  # 1 pixel from top (not touching)
+        labels[40:60, 40:60] = 2  # Center
+        filtered, removed = filter_edge_cells(labels.copy(), edge_margin=0)
+        assert removed == 0
+        assert (filtered == 1).any()
+        assert (filtered == 2).any()
+
+    def test_larger_margin(self) -> None:
+        """Larger margin removes cells within margin pixels of border."""
+        labels = np.zeros((100, 100), dtype=np.int32)
+        labels[3:10, 40:60] = 1  # 3 pixels from top
+        labels[40:60, 40:60] = 2  # Center
+        # edge_margin=5: cell 1's min_row=3 <= 5, so removed
+        filtered, removed = filter_edge_cells(labels.copy(), edge_margin=5)
+        assert removed == 1
+        assert not (filtered == 1).any()
+        assert (filtered == 2).any()
+
+    def test_all_cells_removed(self) -> None:
+        """Very large margin removes all cells."""
+        labels = np.zeros((100, 100), dtype=np.int32)
+        labels[30:70, 30:70] = 1
+        # edge_margin=50: bbox max_row=70 >= 100-50=50, removed
+        filtered, removed = filter_edge_cells(labels.copy(), edge_margin=50)
+        assert removed == 1
+        assert filtered.max() == 0
+
+    def test_empty_label_image(self) -> None:
+        """Empty label image returns 0 removed."""
+        labels = np.zeros((100, 100), dtype=np.int32)
+        filtered, removed = filter_edge_cells(labels, edge_margin=0)
+        assert removed == 0
+        assert filtered.max() == 0
+
+    def test_right_and_bottom_edges(self) -> None:
+        """Cells near right and bottom edges are also removed."""
+        labels = np.zeros((100, 100), dtype=np.int32)
+        labels[40:60, 90:100] = 1  # Touches right edge
+        labels[40:60, 0:10] = 2    # Touches left edge
+        labels[40:60, 40:60] = 3   # Center (safe)
+        filtered, removed = filter_edge_cells(labels.copy(), edge_margin=0)
+        assert removed == 2
+        assert (filtered == 3).any()
+        assert not (filtered == 1).any()
+        assert not (filtered == 2).any()

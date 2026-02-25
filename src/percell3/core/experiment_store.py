@@ -528,6 +528,19 @@ class ExperimentStore:
                     merge_df = cells_df[available].rename(columns={"id": "cell_id"})
                     pivot = pivot.merge(merge_df, on="cell_id", how="left")
 
+        # Merge group tags if any exist
+        if "cell_id" in pivot.columns:
+            group_tags = self.get_cell_group_tags(pivot["cell_id"].tolist())
+            if group_tags:
+                group_df = pd.DataFrame.from_dict(group_tags, orient="index")
+                group_df.index.name = "cell_id"
+                group_df = group_df.reset_index()
+                pivot = pivot.merge(group_df, on="cell_id", how="left")
+                # Fill NaN group columns with empty string
+                for col in group_df.columns:
+                    if col != "cell_id" and col in pivot.columns:
+                        pivot[col] = pivot[col].fillna("")
+
         return pivot
 
     # --- Masks ---
@@ -640,6 +653,48 @@ class ExperimentStore:
             Number of cell_tag rows deleted.
         """
         return queries.delete_tags_by_prefix(self._conn, prefix, cell_ids)
+
+    def get_cell_group_tags(
+        self,
+        cell_ids: list[int],
+    ) -> dict[int, dict[str, str]]:
+        """Get group tag columns for cells.
+
+        Parses tags like ``group:GFP:mean_intensity:g1`` into column-value pairs.
+        If only one (channel, metric) grouping exists, uses column name ``group``.
+        Otherwise uses ``group_{channel}_{metric}``.
+
+        Args:
+            cell_ids: Cell IDs to look up.
+
+        Returns:
+            Dict mapping cell_id -> {column_name: group_value}.
+        """
+        rows = queries.select_group_tags_for_cells(self._conn, cell_ids)
+        if not rows:
+            return {}
+
+        # Parse tag names: group:{channel}:{metric}:{value}
+        parsed: list[tuple[int, str, str, str]] = []  # (cell_id, channel, metric, value)
+        for cell_id, tag_name in rows:
+            parts = tag_name.split(":")
+            if len(parts) == 4:
+                _, channel, metric, value = parts
+                parsed.append((cell_id, channel, metric, value))
+
+        if not parsed:
+            return {}
+
+        # Determine unique (channel, metric) combinations
+        grouping_keys = {(ch, m) for _, ch, m, _ in parsed}
+        use_simple = len(grouping_keys) == 1
+
+        result: dict[int, dict[str, str]] = {}
+        for cell_id, channel, metric, value in parsed:
+            col_name = "group" if use_simple else f"group_{channel}_{metric}"
+            result.setdefault(cell_id, {})[col_name] = value
+
+        return result
 
     # --- Particles ---
 
@@ -880,6 +935,21 @@ class ExperimentStore:
         if not df.empty:
             df = df.merge(cell_context, on="cell_id", how="inner")
 
+        # Merge group tags so Prism columns can be split by group
+        all_cell_ids = df["cell_id"].unique().tolist() if not df.empty else []
+        group_tags = self.get_cell_group_tags(all_cell_ids) if all_cell_ids else {}
+        if group_tags and not df.empty:
+            group_df = pd.DataFrame.from_dict(group_tags, orient="index")
+            group_df.index.name = "cell_id"
+            group_df = group_df.reset_index()
+            df = df.merge(group_df, on="cell_id", how="left")
+            # Find group columns (all columns from group_df except cell_id)
+            _prism_group_cols = [c for c in group_df.columns if c != "cell_id"]
+            for gc in _prism_group_cols:
+                df[gc] = df[gc].fillna("")
+        else:
+            _prism_group_cols = []
+
         # Scope suffix for filenames (particle metrics never get suffix)
         scope_suffix = "" if scope == "whole_cell" else f"_{scope}"
 
@@ -893,13 +963,23 @@ class ExperimentStore:
                 ps = group["pixel_size_um"]
                 group["value"] = group["value"] * ps * ps
 
-            # Build ragged columns grouped by (condition, bio_rep)
+            # Build ragged columns grouped by (condition, bio_rep[, group])
             column_data: dict[str, list[float]] = {}
-            for (cond, bio_rep), sub in group.groupby(
-                ["condition_name", "bio_rep_name"]
-            ):
-                col_name = f"{cond}_{bio_rep}"
-                column_data[col_name] = sub["value"].tolist()
+            if _prism_group_cols:
+                # Include group in column name for finer-grained Prism columns
+                group_by_cols = ["condition_name", "bio_rep_name"] + _prism_group_cols
+                for keys, sub in group.groupby(group_by_cols):
+                    if isinstance(keys, str):
+                        keys = (keys,)
+                    parts = [str(k) for k in keys if str(k)]
+                    col_name = "_".join(parts)
+                    column_data[col_name] = sub["value"].tolist()
+            else:
+                for (cond, bio_rep), sub in group.groupby(
+                    ["condition_name", "bio_rep_name"]
+                ):
+                    col_name = f"{cond}_{bio_rep}"
+                    column_data[col_name] = sub["value"].tolist()
 
             if not column_data:
                 continue
@@ -1020,6 +1100,19 @@ class ExperimentStore:
 
         # Drop internal IDs
         df = df.drop(columns=["id", "threshold_run_id"], errors="ignore")
+
+        # Merge group tags for parent cells
+        if "cell_id" in df.columns:
+            unique_cell_ids = df["cell_id"].unique().tolist()
+            group_tags = self.get_cell_group_tags(unique_cell_ids)
+            if group_tags:
+                group_df = pd.DataFrame.from_dict(group_tags, orient="index")
+                group_df.index.name = "cell_id"
+                group_df = group_df.reset_index()
+                df = df.merge(group_df, on="cell_id", how="left")
+                for col in group_df.columns:
+                    if col != "cell_id" and col in df.columns:
+                        df[col] = df[col].fillna("")
 
         # Apply metric filter
         context_cols = [

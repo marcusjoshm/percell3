@@ -1043,6 +1043,22 @@ def _segment_cells(state: MenuState) -> None:
             console.print(f"[red]Invalid diameter: {diam_str}[/red]")
             return
 
+    # 4b. Edge cell removal
+    edge_margin: int | None = None
+    edge_str = menu_prompt(
+        "Edge margin (remove cells within N px of border, blank = off)",
+        default="",
+    )
+    if edge_str:
+        try:
+            edge_margin = int(edge_str)
+            if edge_margin < 0:
+                console.print("[red]Edge margin must be >= 0.[/red]")
+                return
+        except ValueError:
+            console.print(f"[red]Invalid edge margin: {edge_str}[/red]")
+            return
+
     # 5. FOV status table + selection
     seg_summary = store.get_fov_segmentation_summary()
     _show_fov_status_table(all_fovs, seg_summary)
@@ -1063,6 +1079,8 @@ def _segment_cells(state: MenuState) -> None:
     console.print(f"  Channel:  {channel}")
     console.print(f"  Model:    {model}")
     console.print(f"  Diameter: {diameter or 'auto-detect'}")
+    if edge_margin is not None:
+        console.print(f"  Edge margin: {edge_margin} px")
     console.print(f"  FOVs:     {len(selected_fovs)} selected")
 
     if reseg_fovs:
@@ -1098,6 +1116,11 @@ def _segment_cells(state: MenuState) -> None:
                 description=f"Segmenting {fov_name}",
             )
 
+        seg_kwargs: dict = {}
+        if edge_margin is not None:
+            seg_kwargs["remove_edge_cells"] = True
+            seg_kwargs["edge_margin"] = edge_margin
+
         result = engine.run(
             store,
             channel=channel,
@@ -1105,6 +1128,7 @@ def _segment_cells(state: MenuState) -> None:
             diameter=diameter,
             fovs=fov_names,
             progress_callback=on_progress,
+            **seg_kwargs,
         )
 
     console.print()
@@ -1409,6 +1433,7 @@ def _threshold_fov(
     threshold_channel: str,
     grouping_channel: str,
     grouping_metric: str,
+    gaussian_sigma: float | None = None,
 ) -> tuple[int, int]:
     """Run grouping + threshold QC + particle analysis for one FOV.
 
@@ -1418,6 +1443,7 @@ def _threshold_fov(
         threshold_channel: Channel to threshold on.
         grouping_channel: Channel used for GMM grouping metric.
         grouping_metric: Metric name for grouping (e.g. mean_intensity).
+        gaussian_sigma: Optional Gaussian sigma for pre-threshold smoothing.
 
     Returns:
         (fovs_processed, total_particles) — 1 or 0 for fovs_processed.
@@ -1490,7 +1516,9 @@ def _threshold_fov(
 
         # Compute initial Otsu
         try:
-            initial_thresh = compute_masked_otsu(group_image, cell_mask)
+            initial_thresh = compute_masked_otsu(
+                group_image, cell_mask, gaussian_sigma=gaussian_sigma,
+            )
         except ValueError:
             console.print(f"  [yellow]{tag_name}: no pixels to threshold, skipping[/yellow]")
             continue
@@ -1535,6 +1563,7 @@ def _threshold_fov(
             threshold_value=decision.threshold_value,
             roi=decision.roi,
             group_tag=tag_name,
+            gaussian_sigma=gaussian_sigma,
         )
         console.print(
             f"  [green]Accepted {tag_name}[/green]: "
@@ -1658,10 +1687,28 @@ def _apply_threshold(state: MenuState) -> None:
     else:
         selected_fovs = _select_fovs_from_table(fovs_with_cells)
 
-    # 5. Confirmation
+    # 5. Gaussian sigma (optional pre-smoothing)
+    gaussian_sigma: float | None = None
+    sigma_str = menu_prompt(
+        "Gaussian sigma for pre-smoothing (blank = off, 1.7 = PerCell default)",
+        default="",
+    )
+    if sigma_str:
+        try:
+            gaussian_sigma = float(sigma_str)
+            if gaussian_sigma < 0:
+                console.print("[red]Sigma must be >= 0.[/red]")
+                return
+        except ValueError:
+            console.print(f"[red]Invalid sigma: {sigma_str}[/red]")
+            return
+
+    # 6. Confirmation
     console.print(f"\n[bold]Thresholding settings:[/bold]")
     console.print(f"  Grouping:    {grouping_channel} / {grouping_metric}")
     console.print(f"  Threshold:   {threshold_channel} (Otsu)")
+    if gaussian_sigma:
+        console.print(f"  Smoothing:   Gaussian sigma={gaussian_sigma}")
     console.print(f"  FOVs:        {len(selected_fovs)} selected")
 
     if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
@@ -1679,11 +1726,12 @@ def _apply_threshold(state: MenuState) -> None:
 
         processed, particles = _threshold_fov(
             store, fov_info, threshold_channel, grouping_channel, grouping_metric,
+            gaussian_sigma=gaussian_sigma,
         )
         fovs_processed += processed
         total_particles += particles
 
-    # 7. Summary
+    # 8. Summary
     console.print(f"\n[bold]{'='*60}[/bold]")
     console.print(f"[green]Thresholding complete[/green]")
     console.print(f"  FOVs processed: {fovs_processed}")
@@ -2283,6 +2331,21 @@ def _particle_workflow(state: MenuState) -> None:
             console.print(f"[red]Invalid diameter: {diam_str}[/red]")
             return
 
+    edge_margin: int | None = None
+    edge_str = menu_prompt(
+        "Edge margin (remove cells within N px of border, blank = off)",
+        default="",
+    )
+    if edge_str:
+        try:
+            edge_margin = int(edge_str)
+            if edge_margin < 0:
+                console.print("[red]Edge margin must be >= 0.[/red]")
+                return
+        except ValueError:
+            console.print(f"[red]Invalid edge margin: {edge_str}[/red]")
+            return
+
     # --- Step 3: Threshold channels (multi-select) ---
     console.print("\n[bold]Step 3: Threshold Channels[/bold]")
     console.print("\n[bold]Channels to threshold:[/bold]")
@@ -2296,6 +2359,22 @@ def _particle_workflow(state: MenuState) -> None:
     metrics = ["mean_intensity", "median_intensity", "integrated_intensity", "area_um2"]
     console.print("\n[bold]Metric for grouping:[/bold]")
     grouping_metric = numbered_select_one(metrics, "Grouping metric")
+
+    # Gaussian sigma for threshold smoothing
+    gaussian_sigma: float | None = None
+    sigma_str = menu_prompt(
+        "Gaussian sigma for pre-smoothing (blank = off, 1.7 = PerCell default)",
+        default="",
+    )
+    if sigma_str:
+        try:
+            gaussian_sigma = float(sigma_str)
+            if gaussian_sigma < 0:
+                console.print("[red]Sigma must be >= 0.[/red]")
+                return
+        except ValueError:
+            console.print(f"[red]Invalid sigma: {sigma_str}[/red]")
+            return
 
     # --- Step 5: Export directory ---
     console.print("\n[bold]Step 5: Export[/bold]")
@@ -2324,7 +2403,11 @@ def _particle_workflow(state: MenuState) -> None:
     console.print(f"\n[bold]Workflow settings:[/bold]")
     console.print(f"  FOVs:           {len(selected_fovs)} selected")
     console.print(f"  Segmentation:   {seg_channel} / {model} / {diameter or 'auto-detect'}")
+    if edge_margin is not None:
+        console.print(f"  Edge margin:    {edge_margin} px")
     console.print(f"  Threshold:      {', '.join(threshold_channels)} (Otsu)")
+    if gaussian_sigma:
+        console.print(f"  Smoothing:      Gaussian sigma={gaussian_sigma}")
     console.print(f"  Grouping:       {grouping_channel} / {grouping_metric}")
     console.print(f"  Measurement:    all channels")
     console.print(f"  Export:         {out_dir} (Prism format)")
@@ -2362,6 +2445,11 @@ def _particle_workflow(state: MenuState) -> None:
                 description=f"Segmenting {fov_name}",
             )
 
+        wf_seg_kwargs: dict = {}
+        if edge_margin is not None:
+            wf_seg_kwargs["remove_edge_cells"] = True
+            wf_seg_kwargs["edge_margin"] = edge_margin
+
         seg_result = engine.run(
             store,
             channel=seg_channel,
@@ -2369,6 +2457,7 @@ def _particle_workflow(state: MenuState) -> None:
             diameter=diameter,
             fovs=fov_names,
             progress_callback=on_seg_progress,
+            **wf_seg_kwargs,
         )
 
     console.print(f"\n[green]Segmentation complete[/green]")
@@ -2427,6 +2516,7 @@ def _particle_workflow(state: MenuState) -> None:
         for fov_info in selected_fovs:
             processed, particles = _threshold_fov(
                 store, fov_info, thr_channel, grouping_channel, grouping_metric,
+                gaussian_sigma=gaussian_sigma,
             )
             fovs_thresholded += processed
             total_particles += particles

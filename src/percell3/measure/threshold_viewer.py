@@ -33,6 +33,7 @@ def compute_masked_otsu(
     image: np.ndarray,
     cell_mask: np.ndarray,
     roi: list[tuple[int, int, int, int]] | None = None,
+    gaussian_sigma: float | None = None,
 ) -> float:
     """Compute Otsu threshold on non-zero pixels within mask, optionally restricted by ROI.
 
@@ -48,6 +49,11 @@ def compute_masked_otsu(
         ValueError: If no valid pixels to threshold.
     """
     from skimage.filters import threshold_otsu
+
+    # Apply Gaussian smoothing if requested
+    if gaussian_sigma is not None and gaussian_sigma > 0:
+        from scipy.ndimage import gaussian_filter
+        image = gaussian_filter(image.astype(np.float64), sigma=gaussian_sigma)
 
     if roi:
         # Create ROI mask from union of rectangles

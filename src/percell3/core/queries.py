@@ -1192,6 +1192,36 @@ def generate_display_name(
     raise DuplicateError("fov", candidate)
 
 
+def select_group_tags_for_cells(
+    conn: sqlite3.Connection,
+    cell_ids: list[int],
+) -> list[tuple[int, str]]:
+    """Return (cell_id, tag_name) pairs for group tags.
+
+    Args:
+        conn: Database connection.
+        cell_ids: Cell IDs to look up.
+
+    Returns:
+        List of (cell_id, tag_name) tuples where tag_name matches 'group:%'.
+    """
+    if not cell_ids:
+        return []
+    placeholders = ",".join("?" * len(cell_ids))
+    rows = conn.execute(
+        f"""
+        SELECT ct.cell_id, t.name
+        FROM cell_tags ct
+        JOIN tags t ON ct.tag_id = t.id
+        WHERE t.name LIKE 'group:%'
+          AND ct.cell_id IN ({placeholders})
+        ORDER BY ct.cell_id
+        """,
+        cell_ids,
+    ).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
 def delete_tags_by_prefix(
     conn: sqlite3.Connection,
     prefix: str,

@@ -10,6 +10,33 @@ from skimage.measure import regionprops
 from percell3.core.models import CellRecord
 
 
+def filter_edge_cells(
+    labels: np.ndarray,
+    edge_margin: int = 0,
+) -> tuple[np.ndarray, int]:
+    """Remove cells whose bounding box is within edge_margin of the image border.
+
+    Args:
+        labels: 2D integer label image (0 = background).
+        edge_margin: Pixels from border. 0 = only cells touching edge.
+
+    Returns:
+        Tuple of (filtered_labels, removed_count).
+    """
+    if labels.max() == 0:
+        return labels, 0
+
+    h, w = labels.shape
+    removed = 0
+    for prop in regionprops(labels):
+        min_row, min_col, max_row, max_col = prop.bbox
+        if (min_row <= edge_margin or min_col <= edge_margin
+                or max_row >= h - edge_margin or max_col >= w - edge_margin):
+            labels[labels == prop.label] = 0
+            removed += 1
+    return labels, removed
+
+
 def extract_cells(
     labels: np.ndarray,
     fov_id: int,

@@ -45,6 +45,10 @@ from percell3.cli.utils import console, error_handler, make_progress, open_exper
     "-b", "--bio-rep", default=None,
     help="Only segment FOVs in this biological replicate.",
 )
+@click.option(
+    "--edge-margin", type=int, default=None,
+    help="Remove cells within this many pixels of the image border. 0 = touching edge only.",
+)
 @error_handler
 def segment(
     experiment: str,
@@ -54,6 +58,7 @@ def segment(
     fovs: str | None,
     condition: str | None,
     bio_rep: str | None,
+    edge_margin: int | None,
 ) -> None:
     """Run cell segmentation on experiment FOVs."""
     from percell3.segment import SegmentationEngine, detect_gpu
@@ -78,6 +83,11 @@ def segment(
                     description=f"Segmenting {fov_name}",
                 )
 
+            kwargs: dict = {}
+            if edge_margin is not None:
+                kwargs["remove_edge_cells"] = True
+                kwargs["edge_margin"] = edge_margin
+
             result = engine.run(
                 store,
                 channel=channel,
@@ -87,6 +97,7 @@ def segment(
                 condition=condition,
                 bio_rep=bio_rep,
                 progress_callback=on_progress,
+                **kwargs,
             )
 
         # Summary
