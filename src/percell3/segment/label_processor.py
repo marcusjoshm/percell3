@@ -16,6 +16,8 @@ def filter_edge_cells(
 ) -> tuple[np.ndarray, int]:
     """Remove cells whose bounding box is within edge_margin of the image border.
 
+    Returns a new array; the input is not modified.
+
     Args:
         labels: 2D integer label image (0 = background).
         edge_margin: Pixels from border. 0 = only cells touching edge.
@@ -24,17 +26,22 @@ def filter_edge_cells(
         Tuple of (filtered_labels, removed_count).
     """
     if labels.max() == 0:
-        return labels, 0
+        return labels.copy(), 0
 
     h, w = labels.shape
-    removed = 0
+    edge_labels: list[int] = []
     for prop in regionprops(labels):
         min_row, min_col, max_row, max_col = prop.bbox
         if (min_row <= edge_margin or min_col <= edge_margin
                 or max_row >= h - edge_margin or max_col >= w - edge_margin):
-            labels[labels == prop.label] = 0
-            removed += 1
-    return labels, removed
+            edge_labels.append(prop.label)
+
+    if not edge_labels:
+        return labels.copy(), 0
+
+    filtered = labels.copy()
+    filtered[np.isin(filtered, edge_labels)] = 0
+    return filtered, len(edge_labels)
 
 
 def extract_cells(

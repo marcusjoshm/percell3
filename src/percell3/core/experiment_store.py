@@ -88,12 +88,38 @@ class ExperimentStore:
     # --- Lifecycle ---
 
     @classmethod
-    def create(cls, path: Path, name: str = "", description: str = "") -> ExperimentStore:
-        """Create a new .percell experiment directory."""
+    def create(
+        cls,
+        path: Path,
+        name: str = "",
+        description: str = "",
+        overwrite: bool = False,
+    ) -> ExperimentStore:
+        """Create a new .percell experiment directory.
+
+        Args:
+            path: Directory for the new experiment.
+            name: Human-readable experiment name.
+            description: Experiment description.
+            overwrite: If True, delete existing non-empty directory contents
+                before creating. Empty directories are always accepted.
+        """
+        import shutil
+
         path = Path(path)
         if path.exists():
-            raise ExperimentError(f"Path already exists: {path}")
-        path.mkdir(parents=True)
+            if any(path.iterdir()):
+                if not overwrite:
+                    raise ExperimentError(
+                        f"Directory is not empty: {path}  "
+                        "(use overwrite=True to replace)"
+                    )
+                # Remove old contents before re-creating
+                shutil.rmtree(path)
+                path.mkdir(parents=True)
+            # else: empty directory — proceed without error
+        else:
+            path.mkdir(parents=True)
 
         # Create SQLite database
         db_path = path / "experiment.db"
@@ -105,7 +131,7 @@ class ExperimentStore:
         zarr_io.init_zarr_store(path / "masks.zarr")
 
         # Create exports directory
-        (path / "exports").mkdir()
+        (path / "exports").mkdir(exist_ok=True)
 
         return cls(path, conn)
 

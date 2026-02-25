@@ -622,6 +622,18 @@ def _create_experiment(state: MenuState) -> None:
     path_str = menu_prompt("Path for new experiment")
 
     path = Path(path_str).expanduser()
+
+    # Check if directory already exists and prompt for overwrite
+    overwrite = False
+    if path.exists() and any(path.iterdir()):
+        console.print(
+            f"[yellow]Directory is not empty:[/yellow] {path}"
+        )
+        if numbered_select_one(["No", "Yes"], "Overwrite existing contents?") != "Yes":
+            console.print("[yellow]Creation cancelled.[/yellow]")
+            return
+        overwrite = True
+
     name = menu_prompt("Experiment name", default="")
     description = menu_prompt("Description", default="")
 
@@ -630,7 +642,9 @@ def _create_experiment(state: MenuState) -> None:
         from percell3.core.exceptions import ExperimentError
         from percell3.cli._recent import add_to_recent
 
-        store = ExperimentStore.create(path, name=name, description=description)
+        store = ExperimentStore.create(
+            path, name=name, description=description, overwrite=overwrite,
+        )
         console.print(f"[green]Created experiment at {path}[/green]\n")
         # Set as current
         state.experiment_path = path

@@ -23,12 +23,34 @@ class TestCreateCommand:
         assert result.exit_code == 0
         assert path.exists()
 
-    def test_create_already_exists(self, runner: CliRunner, tmp_path: Path):
-        path = tmp_path / "existing.percell"
+    def test_create_in_empty_existing_directory(self, runner: CliRunner, tmp_path: Path):
+        """Empty existing directory should be accepted without error."""
+        path = tmp_path / "empty.percell"
         path.mkdir()
         result = runner.invoke(cli, ["create", str(path)])
+        assert result.exit_code == 0
+        assert "Created experiment" in result.output
+        assert (path / "experiment.db").exists()
+
+    def test_create_non_empty_without_overwrite_fails(self, runner: CliRunner, tmp_path: Path):
+        """Non-empty directory without --overwrite should fail."""
+        path = tmp_path / "existing.percell"
+        path.mkdir()
+        (path / "some_file.txt").write_text("data")
+        result = runner.invoke(cli, ["create", str(path)])
         assert result.exit_code == 1
-        assert "Error" in result.output
+        assert "not empty" in result.output
+
+    def test_create_non_empty_with_overwrite(self, runner: CliRunner, tmp_path: Path):
+        """Non-empty directory with --overwrite should succeed."""
+        path = tmp_path / "existing.percell"
+        path.mkdir()
+        (path / "old_file.txt").write_text("old data")
+        result = runner.invoke(cli, ["create", str(path), "--overwrite"])
+        assert result.exit_code == 0
+        assert "Created experiment" in result.output
+        assert (path / "experiment.db").exists()
+        assert not (path / "old_file.txt").exists()
 
     def test_create_help(self, runner: CliRunner):
         result = runner.invoke(cli, ["create", "--help"])

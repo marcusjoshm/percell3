@@ -145,18 +145,27 @@ class TestFilterEdgeCells:
         labels[0:10, 40:60] = 1   # Touches top edge
         labels[40:60, 40:60] = 2  # Center cell (safe)
         labels[90:100, 40:60] = 3  # Touches bottom edge
-        filtered, removed = filter_edge_cells(labels.copy(), edge_margin=0)
+        filtered, removed = filter_edge_cells(labels, edge_margin=0)
         assert removed == 2
         assert (filtered == 2).any()
         assert not (filtered == 1).any()
         assert not (filtered == 3).any()
+
+    def test_does_not_mutate_input(self) -> None:
+        """filter_edge_cells must not modify the input array."""
+        labels = np.zeros((100, 100), dtype=np.int32)
+        labels[0:10, 40:60] = 1   # Touches top edge
+        labels[40:60, 40:60] = 2  # Center cell (safe)
+        original = labels.copy()
+        filter_edge_cells(labels, edge_margin=0)
+        np.testing.assert_array_equal(labels, original)
 
     def test_margin_zero_only_touching(self) -> None:
         """margin=0 removes only cells directly touching the border."""
         labels = np.zeros((100, 100), dtype=np.int32)
         labels[1:10, 40:60] = 1  # 1 pixel from top (not touching)
         labels[40:60, 40:60] = 2  # Center
-        filtered, removed = filter_edge_cells(labels.copy(), edge_margin=0)
+        filtered, removed = filter_edge_cells(labels, edge_margin=0)
         assert removed == 0
         assert (filtered == 1).any()
         assert (filtered == 2).any()
@@ -167,7 +176,7 @@ class TestFilterEdgeCells:
         labels[3:10, 40:60] = 1  # 3 pixels from top
         labels[40:60, 40:60] = 2  # Center
         # edge_margin=5: cell 1's min_row=3 <= 5, so removed
-        filtered, removed = filter_edge_cells(labels.copy(), edge_margin=5)
+        filtered, removed = filter_edge_cells(labels, edge_margin=5)
         assert removed == 1
         assert not (filtered == 1).any()
         assert (filtered == 2).any()
@@ -177,7 +186,7 @@ class TestFilterEdgeCells:
         labels = np.zeros((100, 100), dtype=np.int32)
         labels[30:70, 30:70] = 1
         # edge_margin=50: bbox max_row=70 >= 100-50=50, removed
-        filtered, removed = filter_edge_cells(labels.copy(), edge_margin=50)
+        filtered, removed = filter_edge_cells(labels, edge_margin=50)
         assert removed == 1
         assert filtered.max() == 0
 
@@ -194,7 +203,7 @@ class TestFilterEdgeCells:
         labels[40:60, 90:100] = 1  # Touches right edge
         labels[40:60, 0:10] = 2    # Touches left edge
         labels[40:60, 40:60] = 3   # Center (safe)
-        filtered, removed = filter_edge_cells(labels.copy(), edge_margin=0)
+        filtered, removed = filter_edge_cells(labels, edge_margin=0)
         assert removed == 2
         assert (filtered == 3).any()
         assert not (filtered == 1).any()

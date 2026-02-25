@@ -1198,6 +1198,8 @@ def select_group_tags_for_cells(
 ) -> list[tuple[int, str]]:
     """Return (cell_id, tag_name) pairs for group tags.
 
+    Batches the query to stay within SQLite's bind parameter limit.
+
     Args:
         conn: Database connection.
         cell_ids: Cell IDs to look up.
@@ -1207,19 +1209,27 @@ def select_group_tags_for_cells(
     """
     if not cell_ids:
         return []
-    placeholders = ",".join("?" * len(cell_ids))
-    rows = conn.execute(
-        f"""
-        SELECT ct.cell_id, t.name
-        FROM cell_tags ct
-        JOIN tags t ON ct.tag_id = t.id
-        WHERE t.name LIKE 'group:%'
-          AND ct.cell_id IN ({placeholders})
-        ORDER BY ct.cell_id
-        """,
-        cell_ids,
-    ).fetchall()
-    return [(r[0], r[1]) for r in rows]
+
+    _BATCH_SIZE = 900  # Stay well under SQLite's 999 limit
+    all_rows: list[tuple[int, str]] = []
+
+    for i in range(0, len(cell_ids), _BATCH_SIZE):
+        batch = cell_ids[i : i + _BATCH_SIZE]
+        placeholders = ",".join("?" * len(batch))
+        rows = conn.execute(
+            f"""
+            SELECT ct.cell_id, t.name
+            FROM cell_tags ct
+            JOIN tags t ON ct.tag_id = t.id
+            WHERE t.name LIKE 'group:%'
+              AND ct.cell_id IN ({placeholders})
+            ORDER BY ct.cell_id
+            """,
+            batch,
+        ).fetchall()
+        all_rows.extend((r[0], r[1]) for r in rows)
+
+    return all_rows
 
 
 def delete_tags_by_prefix(

@@ -56,6 +56,8 @@ class SegmentationParams:
             raise ValueError(
                 f"cellprob_threshold must be between -8 and 8, got {self.cellprob_threshold}"
             )
+        if self.edge_margin < 0:
+            raise ValueError(f"edge_margin must be >= 0, got {self.edge_margin}")
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict for storing in segmentation_runs.parameters."""
