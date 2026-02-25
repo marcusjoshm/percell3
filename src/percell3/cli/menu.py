@@ -538,14 +538,14 @@ def _run_surface_plot(state: MenuState, registry) -> None:
 
 
 _BANNER_LINES = [
-    "    ◎                                                                          ",
-    "    ║      ███████╗ ████████╗███████╗ ███████╗████████╗██╗      ██╗            ",
-    "   ▐█▌     ██╔═══██╗██╔═════╝██╔═══██╗██╔════╝██╔═════╝██║      ██║            ",
-    "   ▐█▌     ███████╔╝███████╗ ███████╔╝██║     ███████╗ ██║      ██║            ",
-    "    █      ██╔════╝ ██╔════╝ ██╔═══██╗██║     ██╔════╝ ██║      ██║            ",
-    "    ▽      ██║      ████████╗██║   ██║███████╗████████╗████████╗████████╗      ",
-    " ───●───   ╚═╝      ╚═══════╝╚═╝   ╚═╝╚══════╝╚═══════╝╚═══════╝╚═══════╝      ",
-    " ▀█████▀                                                                      ",
+    "      ◎                                                                        ",
+    "      ║      ███████╗ ████████╗███████╗ ███████╗████████╗██╗      ██╗          ",
+    "     ▐█▌     ██╔═══██╗██╔═════╝██╔═══██╗██╔════╝██╔═════╝██║      ██║          ",
+    "     ▐█▌     ███████╔╝███████╗ ███████╔╝██║     ███████╗ ██║      ██║          ",
+    "      █      ██╔════╝ ██╔════╝ ██╔═══██╗██║     ██╔════╝ ██║      ██║          ",
+    "      ▽      ██║      ████████╗██║   ██║███████╗████████╗████████╗████████╗    ",
+    "   ───●───   ╚═╝      ╚═══════╝╚═╝   ╚═╝╚══════╝╚═══════╝╚═══════╝╚═══════╝    ",
+    "   ▀█████▀                                                                     ",
 ]
 
 
@@ -557,7 +557,7 @@ def _colorize_banner_line(line: str) -> str:
             parts.append(char)
         elif j <= 10:
             parts.append(f"[cyan]{char}[/cyan]")
-        elif j <= 37:
+        elif j <= 39:
             parts.append(f"[green]{char}[/green]")
         else:
             parts.append(f"[magenta]{char}[/magenta]")
@@ -570,7 +570,7 @@ def _show_header(state: MenuState) -> None:
     for line in _BANNER_LINES:
         console.print(_colorize_banner_line(line))
     console.print()
-    console.print("[bold]                PerCell 3.0 — Single-Cell Microscopy Analysis[/bold]")
+    console.print("[bold]                PerCell 3.0 — Single-Cell Microscopy Analysis                [/bold]")
     console.print()
     if state.experiment_path:
         name = state.store.name if state.store else ""
