@@ -1,4 +1,4 @@
-"""AnalysisPlugin ABC and supporting dataclasses for the PerCell 3 plugin system."""
+"""Plugin ABCs and supporting dataclasses for the PerCell 3 plugin system."""
 
 from __future__ import annotations
 
@@ -94,4 +94,46 @@ class AnalysisPlugin(ABC):
         Used by CLI/GUI to generate parameter forms.
         Override in subclasses to define plugin-specific parameters.
         """
+        return {}
+
+
+class VisualizationPlugin(ABC):
+    """Base class for plugins that launch interactive viewers (no data writes).
+
+    Unlike AnalysisPlugin, visualization plugins read data and open a viewer
+    rather than writing measurements back to the store.
+    """
+
+    @abstractmethod
+    def info(self) -> PluginInfo:
+        """Return plugin metadata."""
+
+    @abstractmethod
+    def validate(self, store: ExperimentStore) -> list[str]:
+        """Check if the plugin can launch on this experiment.
+
+        Args:
+            store: The experiment to validate against.
+
+        Returns:
+            List of validation error messages (empty = OK to launch).
+        """
+
+    @abstractmethod
+    def launch(
+        self,
+        store: ExperimentStore,
+        fov_id: int,
+        parameters: dict[str, Any] | None = None,
+    ) -> None:
+        """Open the interactive visualization. Blocks until viewer is closed.
+
+        Args:
+            store: ExperimentStore to read from.
+            fov_id: FOV database ID to visualize.
+            parameters: Plugin-specific parameters.
+        """
+
+    def get_parameter_schema(self) -> dict[str, Any]:
+        """Return JSON Schema for plugin parameters."""
         return {}

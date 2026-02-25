@@ -284,23 +284,29 @@ def _workflows_menu(state: MenuState) -> None:
 
 
 def _plugins_menu(state: MenuState) -> None:
-    """Plugin manager — discover and run analysis plugins."""
+    """Plugin manager — discover and run analysis/visualization plugins."""
     from percell3.plugins.registry import PluginRegistry
 
     store = state.require_experiment()
     registry = PluginRegistry()
     registry.discover()
-    plugins = registry.list_plugins()
+    analysis_plugins = registry.list_plugins()
+    viz_plugins = registry.list_viz_plugins()
 
-    if not plugins:
+    if not analysis_plugins and not viz_plugins:
         console.print("\n[yellow]No plugins available.[/yellow]")
         return
 
     # Build menu items for each discovered plugin
     items: list[MenuItem] = []
-    for i, info in enumerate(plugins, 1):
-        items.append(MenuItem(str(i), info.name, info.description, _make_plugin_runner(registry, info.name)))
-    items.append(MenuItem(str(len(plugins) + 1), "Back", "", None))
+    idx = 1
+    for info in analysis_plugins:
+        items.append(MenuItem(str(idx), info.name, info.description, _make_plugin_runner(registry, info.name)))
+        idx += 1
+    for info in viz_plugins:
+        items.append(MenuItem(str(idx), info.name, info.description, _make_viz_runner(registry, info.name)))
+        idx += 1
+    items.append(MenuItem(str(idx), "Back", "", None))
 
     Menu("PLUGINS", items, state).run()
     raise _MenuCancel()
@@ -485,6 +491,50 @@ def _run_bg_subtraction(state: MenuState, registry) -> None:
     for w in result.warnings:
         console.print(f"  [yellow]Warning: {w}[/yellow]")
     console.print()
+
+
+def _make_viz_runner(registry, plugin_name: str):
+    """Create a handler function for a visualization plugin."""
+    def handler(state: MenuState) -> None:
+        if plugin_name == "surface_plot_3d":
+            _run_surface_plot(state, registry)
+        else:
+            console.print(f"[yellow]No interactive handler for visualization plugin '{plugin_name}'.[/yellow]")
+    return handler
+
+
+def _run_surface_plot(state: MenuState, registry) -> None:
+    """Interactive handler for the 3D surface plot visualization plugin."""
+    store = state.require_experiment()
+    plugin = registry.get_viz_plugin("surface_plot_3d")
+
+    # Validate before opening napari
+    errors = plugin.validate(store)
+    if errors:
+        console.print(f"\n[red]Cannot launch 3D surface plot:[/red]")
+        for e in errors:
+            console.print(f"  - {e}")
+        return
+
+    # Select FOV
+    fovs = store.get_fovs()
+    seg_summary = store.get_fov_segmentation_summary()
+    _show_fov_status_table(fovs, seg_summary)
+    selected = _select_fovs_from_table(fovs)
+    if not selected:
+        return
+    fov = selected[0]  # Single FOV
+
+    console.print(f"\nOpening 3D Surface Plot for [bold]{fov.display_name}[/bold]...")
+    console.print("Draw a rectangle ROI, select channels, then click 'Generate Surface'.\n")
+
+    try:
+        plugin.launch(store, fov.id)
+    except ImportError:
+        console.print(
+            "[red]Error:[/red] napari is not installed.\n"
+            "Install with: [bold]pip install 'percell3[napari]'[/bold]"
+        )
 
 
 _BANNER_LINES = [

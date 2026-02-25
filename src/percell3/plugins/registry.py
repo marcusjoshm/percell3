@@ -1,4 +1,4 @@
-"""PluginRegistry — discovers and manages PerCell 3 analysis plugins."""
+"""PluginRegistry — discovers and manages PerCell 3 analysis and visualization plugins."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import logging
 import pkgutil
 from typing import TYPE_CHECKING, Any
 
-from percell3.plugins.base import AnalysisPlugin, PluginInfo, PluginResult
+from percell3.plugins.base import AnalysisPlugin, PluginInfo, PluginResult, VisualizationPlugin
 
 if TYPE_CHECKING:
     from percell3.core import ExperimentStore
@@ -22,15 +22,16 @@ class PluginError(Exception):
 
 
 class PluginRegistry:
-    """Discovers and manages analysis plugins.
+    """Discovers and manages analysis and visualization plugins.
 
     Built-in plugins are discovered by scanning the ``percell3.plugins.builtin``
-    package. Each module is imported and any ``AnalysisPlugin`` subclass found
-    is registered automatically.
+    package. Each module is imported and any ``AnalysisPlugin`` or
+    ``VisualizationPlugin`` subclass found is registered automatically.
     """
 
     def __init__(self) -> None:
         self._plugins: dict[str, type[AnalysisPlugin]] = {}
+        self._viz_plugins: dict[str, type[VisualizationPlugin]] = {}
 
     def discover(self) -> None:
         """Discover built-in plugins from the builtin package.
@@ -54,10 +55,19 @@ class PluginRegistry:
                 continue
 
             for _name, obj in inspect.getmembers(mod, inspect.isclass):
+                if getattr(obj, "_INTERNAL_BASE_CLASS", False):
+                    continue
                 if (
+                    issubclass(obj, VisualizationPlugin)
+                    and obj is not VisualizationPlugin
+                ):
+                    instance = obj()
+                    plugin_name = instance.info().name
+                    self._viz_plugins[plugin_name] = obj
+                    logger.debug("Discovered viz plugin: %s", plugin_name)
+                elif (
                     issubclass(obj, AnalysisPlugin)
                     and obj is not AnalysisPlugin
-                    and not getattr(obj, "_INTERNAL_BASE_CLASS", False)
                 ):
                     instance = obj()
                     plugin_name = instance.info().name
@@ -168,3 +178,31 @@ class PluginRegistry:
         )
 
         return result
+
+    # ------------------------------------------------------------------
+    # Visualization plugin methods
+    # ------------------------------------------------------------------
+
+    def list_viz_plugins(self) -> list[PluginInfo]:
+        """Return metadata for all discovered visualization plugins."""
+        return [cls().info() for cls in self._viz_plugins.values()]
+
+    def get_viz_plugin(self, name: str) -> VisualizationPlugin:
+        """Get a visualization plugin instance by name.
+
+        Args:
+            name: Plugin name (from PluginInfo.name).
+
+        Returns:
+            An instantiated VisualizationPlugin.
+
+        Raises:
+            PluginError: If the plugin is not found.
+        """
+        cls = self._viz_plugins.get(name)
+        if cls is None:
+            available = sorted(self._viz_plugins.keys())
+            raise PluginError(
+                f"Visualization plugin {name!r} not found. Available: {available}"
+            )
+        return cls()
