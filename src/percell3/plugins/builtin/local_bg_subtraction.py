@@ -160,7 +160,7 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
         if not particle_runs:
             raise RuntimeError(
                 f"No threshold run found for channel '{particle_channel}'. "
-                "Run 'Apply threshold' first to generate particle masks."
+                "Run 'Grouped intensity thresholding' first to generate particle masks."
             )
 
         # Determine FOVs to process

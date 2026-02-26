@@ -430,7 +430,7 @@ def _run_bg_subtraction(state: MenuState, registry) -> None:
     particle_channels = sorted({tr["channel"] for tr in threshold_runs})
     if not particle_channels:
         console.print("\n[red]No particle masks found.[/red]")
-        console.print("[dim]Run 'Apply threshold' first to generate particle masks.[/dim]")
+        console.print("[dim]Run 'Grouped intensity thresholding' first to generate particle masks.[/dim]")
         return
 
     console.print("\n[bold]Step 2: Particle Mask[/bold]")
@@ -1182,7 +1182,6 @@ def _segment_cells(state: MenuState) -> None:
 
         seg_kwargs: dict = {}
         if edge_margin is not None:
-            seg_kwargs["remove_edge_cells"] = True
             seg_kwargs["edge_margin"] = edge_margin
 
         result = engine.run(
@@ -1399,7 +1398,7 @@ def _measure_masked(store, channels, all_fovs, scopes: list[str]) -> None:
     if not threshold_runs:
         console.print(
             "[red]No threshold runs found.[/red] "
-            "Run 'Apply threshold' (menu 6) first."
+            "Run 'Grouped intensity thresholding' (menu 6) first."
         )
         return
 
@@ -2531,7 +2530,6 @@ def _particle_workflow(state: MenuState) -> None:
 
         wf_seg_kwargs: dict = {}
         if edge_margin is not None:
-            wf_seg_kwargs["remove_edge_cells"] = True
             wf_seg_kwargs["edge_margin"] = edge_margin
 
         seg_result = engine.run(

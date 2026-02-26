@@ -85,7 +85,7 @@ class SegmentationEngine:
             for key in (
                 "flow_threshold", "cellprob_threshold", "gpu",
                 "min_size", "normalize", "channels_cellpose",
-                "remove_edge_cells", "edge_margin",
+                "edge_margin",
             ):
                 if key in kwargs:
                     param_kwargs[key] = kwargs[key]
@@ -130,7 +130,7 @@ class SegmentationEngine:
                 labels = segmenter.segment(image, params)
 
                 # Filter edge cells if requested
-                if params.remove_edge_cells:
+                if params.edge_margin is not None:
                     labels, n_removed = filter_edge_cells(
                         labels, params.edge_margin,
                     )

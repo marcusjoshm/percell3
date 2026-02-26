@@ -85,7 +85,6 @@ def segment(
 
             kwargs: dict = {}
             if edge_margin is not None:
-                kwargs["remove_edge_cells"] = True
                 kwargs["edge_margin"] = edge_margin
 
             result = engine.run(

@@ -35,8 +35,7 @@ class SegmentationParams:
     min_size: int = 15
     normalize: bool = True
     channels_cellpose: tuple[int, ...] | None = None
-    remove_edge_cells: bool = False
-    edge_margin: int = 0
+    edge_margin: int | None = None
 
     def __post_init__(self) -> None:
         """Validate parameters."""
@@ -56,7 +55,7 @@ class SegmentationParams:
             raise ValueError(
                 f"cellprob_threshold must be between -8 and 8, got {self.cellprob_threshold}"
             )
-        if self.edge_margin < 0:
+        if self.edge_margin is not None and self.edge_margin < 0:
             raise ValueError(f"edge_margin must be >= 0, got {self.edge_margin}")
 
     def to_dict(self) -> dict[str, Any]:
