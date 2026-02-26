@@ -36,6 +36,7 @@ class SegmentationParams:
     normalize: bool = True
     channels_cellpose: tuple[int, ...] | None = None
     edge_margin: int | None = None
+    min_area: int | None = None
 
     def __post_init__(self) -> None:
         """Validate parameters."""
@@ -57,6 +58,8 @@ class SegmentationParams:
             )
         if self.edge_margin is not None and self.edge_margin < 0:
             raise ValueError(f"edge_margin must be >= 0, got {self.edge_margin}")
+        if self.min_area is not None and self.min_area < 1:
+            raise ValueError(f"min_area must be >= 1, got {self.min_area}")
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict for storing in segmentation_runs.parameters."""

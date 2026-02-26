@@ -49,6 +49,10 @@ from percell3.cli.utils import console, error_handler, make_progress, open_exper
     "--edge-margin", type=int, default=None,
     help="Remove cells within this many pixels of the image border. 0 = touching edge only.",
 )
+@click.option(
+    "--min-area", type=int, default=None,
+    help="Remove cells with area below this many pixels.",
+)
 @error_handler
 def segment(
     experiment: str,
@@ -59,6 +63,7 @@ def segment(
     condition: str | None,
     bio_rep: str | None,
     edge_margin: int | None,
+    min_area: int | None,
 ) -> None:
     """Run cell segmentation on experiment FOVs."""
     from percell3.segment import SegmentationEngine, detect_gpu
@@ -86,6 +91,8 @@ def segment(
             kwargs: dict = {}
             if edge_margin is not None:
                 kwargs["edge_margin"] = edge_margin
+            if min_area is not None:
+                kwargs["min_area"] = min_area
 
             result = engine.run(
                 store,

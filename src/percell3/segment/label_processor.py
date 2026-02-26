@@ -44,6 +44,38 @@ def filter_edge_cells(
     return filtered, len(edge_labels)
 
 
+def filter_small_cells(
+    labels: np.ndarray,
+    min_area: int,
+) -> tuple[np.ndarray, int]:
+    """Remove cells with area (in pixels) below min_area.
+
+    Returns a new array; the input is not modified.
+
+    Args:
+        labels: 2D integer label image (0 = background).
+        min_area: Minimum cell area in pixels. Cells smaller than this
+            are zeroed out.
+
+    Returns:
+        Tuple of (filtered_labels, removed_count).
+    """
+    if labels.max() == 0:
+        return labels.copy(), 0
+
+    small_labels: list[int] = []
+    for prop in regionprops(labels):
+        if prop.area < min_area:
+            small_labels.append(prop.label)
+
+    if not small_labels:
+        return labels.copy(), 0
+
+    filtered = labels.copy()
+    filtered[np.isin(filtered, small_labels)] = 0
+    return filtered, len(small_labels)
+
+
 def extract_cells(
     labels: np.ndarray,
     fov_id: int,

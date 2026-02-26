@@ -209,20 +209,27 @@ def _prompt_path(
             import tkinter as tk
             from tkinter import filedialog
 
-            root = tk.Tk()
-            root.withdraw()
+            # Reuse a single hidden root to avoid broken dialogs on
+            # subsequent calls (multiple Tk() instances corrupt state).
+            if not hasattr(_prompt_path, "_tk_root") or not _prompt_path._tk_root.winfo_exists():
+                _prompt_path._tk_root = tk.Tk()
+                _prompt_path._tk_root.withdraw()
+            root = _prompt_path._tk_root
+
             dialog_title = title or prompt
+            root.lift()
+            root.focus_force()
             if mode == "dir":
-                result = filedialog.askdirectory(title=dialog_title)
+                result = filedialog.askdirectory(title=dialog_title, parent=root)
             elif mode == "save":
                 result = filedialog.asksaveasfilename(
                     title=dialog_title,
+                    parent=root,
                     defaultextension=".csv",
                     filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
                 )
             else:
-                result = filedialog.askopenfilename(title=dialog_title)
-            root.destroy()
+                result = filedialog.askopenfilename(title=dialog_title, parent=root)
             if result:
                 console.print(f"  [dim]Selected: {result}[/dim]")
                 return result
@@ -1107,7 +1114,7 @@ def _segment_cells(state: MenuState) -> None:
             console.print(f"[red]Invalid diameter: {diam_str}[/red]")
             return
 
-    # 4b. Edge cell removal
+    # 4b. Post-segmentation cleanup
     edge_margin: int | None = None
     edge_str = menu_prompt(
         "Edge margin (remove cells within N px of border, blank = off)",
@@ -1121,6 +1128,21 @@ def _segment_cells(state: MenuState) -> None:
                 return
         except ValueError:
             console.print(f"[red]Invalid edge margin: {edge_str}[/red]")
+            return
+
+    min_area: int | None = None
+    area_str = menu_prompt(
+        "Min cell area in px (remove small artifacts, blank = off)",
+        default="",
+    )
+    if area_str:
+        try:
+            min_area = int(area_str)
+            if min_area < 1:
+                console.print("[red]Min area must be >= 1.[/red]")
+                return
+        except ValueError:
+            console.print(f"[red]Invalid min area: {area_str}[/red]")
             return
 
     # 5. FOV status table + selection
@@ -1145,6 +1167,8 @@ def _segment_cells(state: MenuState) -> None:
     console.print(f"  Diameter: {diameter or 'auto-detect'}")
     if edge_margin is not None:
         console.print(f"  Edge margin: {edge_margin} px")
+    if min_area is not None:
+        console.print(f"  Min area:    {min_area} px")
     console.print(f"  FOVs:     {len(selected_fovs)} selected")
 
     if reseg_fovs:
@@ -1183,6 +1207,8 @@ def _segment_cells(state: MenuState) -> None:
         seg_kwargs: dict = {}
         if edge_margin is not None:
             seg_kwargs["edge_margin"] = edge_margin
+        if min_area is not None:
+            seg_kwargs["min_area"] = min_area
 
         result = engine.run(
             store,
@@ -2429,6 +2455,21 @@ def _particle_workflow(state: MenuState) -> None:
             console.print(f"[red]Invalid edge margin: {edge_str}[/red]")
             return
 
+    min_area: int | None = None
+    area_str = menu_prompt(
+        "Min cell area in px (remove small artifacts, blank = off)",
+        default="",
+    )
+    if area_str:
+        try:
+            min_area = int(area_str)
+            if min_area < 1:
+                console.print("[red]Min area must be >= 1.[/red]")
+                return
+        except ValueError:
+            console.print(f"[red]Invalid min area: {area_str}[/red]")
+            return
+
     # --- Step 3: Threshold channels (multi-select) ---
     console.print("\n[bold]Step 3: Threshold Channels[/bold]")
     console.print("\n[bold]Channels to threshold:[/bold]")
@@ -2488,6 +2529,8 @@ def _particle_workflow(state: MenuState) -> None:
     console.print(f"  Segmentation:   {seg_channel} / {model} / {diameter or 'auto-detect'}")
     if edge_margin is not None:
         console.print(f"  Edge margin:    {edge_margin} px")
+    if min_area is not None:
+        console.print(f"  Min area:       {min_area} px")
     console.print(f"  Threshold:      {', '.join(threshold_channels)} (Otsu)")
     if gaussian_sigma:
         console.print(f"  Smoothing:      Gaussian sigma={gaussian_sigma}")
@@ -2531,6 +2574,8 @@ def _particle_workflow(state: MenuState) -> None:
         wf_seg_kwargs: dict = {}
         if edge_margin is not None:
             wf_seg_kwargs["edge_margin"] = edge_margin
+        if min_area is not None:
+            wf_seg_kwargs["min_area"] = min_area
 
         seg_result = engine.run(
             store,

@@ -115,9 +115,9 @@ def _launch(
         cellpose_w.widget, name="Cellpose", area="right",
     )
 
-    edge_w = EdgeRemovalWidget(viewer, store, fov_id)
+    cleanup_w = EdgeRemovalWidget(viewer, store, fov_id)
     viewer.window.add_dock_widget(
-        edge_w.widget, name="Edge Removal", area="right",
+        cleanup_w.widget, name="Label Cleanup", area="right",
     )
 
     edit_w = EditWidget(viewer)

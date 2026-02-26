@@ -1,4 +1,4 @@
-"""Edge cell removal dock widget for the napari viewer."""
+"""Label cleanup dock widget for the napari viewer."""
 
 from __future__ import annotations
 
@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 class EdgeRemovalWidget:
-    """Dock widget for previewing and applying edge cell removal.
+    """Dock widget for previewing and applying label cleanup filters.
 
-    Shows which cells would be removed at a given edge margin, then
-    applies the removal and updates the label layer when confirmed.
+    Combines edge cell removal and minimum area filtering into a single
+    Preview / Apply workflow.
 
     Args:
         viewer: The napari Viewer instance.
@@ -54,7 +54,7 @@ class EdgeRemovalWidget:
         layout.setSpacing(6)
 
         # Title
-        title = QLabel("Edge Cell Removal")
+        title = QLabel("Label Cleanup")
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(title)
 
@@ -62,13 +62,23 @@ class EdgeRemovalWidget:
         param_group = QGroupBox("Parameters")
         param_layout = QVBoxLayout()
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Edge margin (px):"))
+        # Edge margin
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Edge margin (px):"))
         self._margin_spin = QSpinBox()
         self._margin_spin.setRange(0, 200)
         self._margin_spin.setValue(0)
-        row.addWidget(self._margin_spin)
-        param_layout.addLayout(row)
+        row1.addWidget(self._margin_spin)
+        param_layout.addLayout(row1)
+
+        # Min area
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Min area (px):"))
+        self._min_area_spin = QSpinBox()
+        self._min_area_spin.setRange(0, 10000)
+        self._min_area_spin.setValue(0)
+        row2.addWidget(self._min_area_spin)
+        param_layout.addLayout(row2)
 
         param_group.setLayout(param_layout)
         layout.addWidget(param_group)
@@ -106,10 +116,31 @@ class EdgeRemovalWidget:
                 return layer
         return None
 
-    def _on_preview(self) -> None:
-        """Highlight cells that would be removed at the current margin."""
-        from percell3.segment.label_processor import filter_edge_cells
+    def _apply_filters(
+        self, labels: np.ndarray,
+    ) -> tuple[np.ndarray, int, int]:
+        """Apply edge and small-cell filters, returning filtered labels and counts."""
+        from percell3.segment.label_processor import (
+            filter_edge_cells,
+            filter_small_cells,
+        )
 
+        margin = self._margin_spin.value()
+        min_area = self._min_area_spin.value()
+
+        filtered = labels
+        edge_removed = 0
+        small_removed = 0
+
+        if margin > 0:
+            filtered, edge_removed = filter_edge_cells(filtered, edge_margin=margin)
+        if min_area > 0:
+            filtered, small_removed = filter_small_cells(filtered, min_area=min_area)
+
+        return filtered, edge_removed, small_removed
+
+    def _on_preview(self) -> None:
+        """Highlight cells that would be removed by current settings."""
         label_layer = self._get_label_layer()
         if label_layer is None:
             self._status_label.setText("No segmentation labels found.")
@@ -117,15 +148,13 @@ class EdgeRemovalWidget:
             return
 
         labels = np.asarray(label_layer.data, dtype=np.int32)
-        margin = self._margin_spin.value()
+        filtered, edge_removed, small_removed = self._apply_filters(labels)
+        total_removed = edge_removed + small_removed
 
-        filtered, removed_count = filter_edge_cells(labels, edge_margin=margin)
-
-        if removed_count == 0:
-            self._status_label.setText("No edge cells found at this margin.")
+        if total_removed == 0:
+            self._status_label.setText("No cells to remove at these settings.")
             self._status_label.setStyleSheet("color: gray;")
             self._apply_btn.setEnabled(False)
-            # Remove preview layer if it exists
             if self._preview_layer is not None:
                 try:
                     self._viewer.layers.remove(self._preview_layer)
@@ -149,19 +178,24 @@ class EdgeRemovalWidget:
         else:
             self._preview_layer = self._viewer.add_labels(
                 highlight,
-                name="edge_cells_preview",
+                name="cleanup_preview",
                 opacity=0.5,
                 colormap=red_cmap,
             )
 
-        self._status_label.setText(f"{removed_count} cells would be removed.")
+        parts = []
+        if edge_removed:
+            parts.append(f"{edge_removed} edge")
+        if small_removed:
+            parts.append(f"{small_removed} small")
+        self._status_label.setText(
+            f"{total_removed} cells would be removed ({', '.join(parts)})."
+        )
         self._status_label.setStyleSheet("color: orange;")
         self._apply_btn.setEnabled(True)
 
     def _on_apply(self) -> None:
-        """Remove edge cells from the label image and save."""
-        from percell3.segment.label_processor import filter_edge_cells
-
+        """Remove cells from the label image."""
         label_layer = self._get_label_layer()
         if label_layer is None:
             self._status_label.setText("No segmentation labels found.")
@@ -169,12 +203,11 @@ class EdgeRemovalWidget:
             return
 
         labels = np.asarray(label_layer.data, dtype=np.int32)
-        margin = self._margin_spin.value()
+        filtered, edge_removed, small_removed = self._apply_filters(labels)
+        total_removed = edge_removed + small_removed
 
-        filtered, removed_count = filter_edge_cells(labels, edge_margin=margin)
-
-        if removed_count == 0:
-            self._status_label.setText("No edge cells to remove.")
+        if total_removed == 0:
+            self._status_label.setText("No cells to remove.")
             self._status_label.setStyleSheet("color: gray;")
             return
 
@@ -190,12 +223,17 @@ class EdgeRemovalWidget:
             self._preview_layer = None
 
         self._apply_btn.setEnabled(False)
+        parts = []
+        if edge_removed:
+            parts.append(f"{edge_removed} edge")
+        if small_removed:
+            parts.append(f"{small_removed} small")
         self._status_label.setText(
-            f"Removed {removed_count} edge cells. "
+            f"Removed {total_removed} cells ({', '.join(parts)}). "
             "Close napari to save."
         )
         self._status_label.setStyleSheet("color: green;")
         logger.info(
-            "Removed %d edge cells (margin=%d) from FOV %d",
-            removed_count, margin, self._fov_id,
+            "Removed %d cells (edge=%d, small=%d) from FOV %d",
+            total_removed, edge_removed, small_removed, self._fov_id,
         )

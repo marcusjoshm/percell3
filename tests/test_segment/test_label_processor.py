@@ -8,7 +8,11 @@ import numpy as np
 import pytest
 from skimage.draw import disk
 
-from percell3.segment.label_processor import LabelProcessor, filter_edge_cells
+from percell3.segment.label_processor import (
+    LabelProcessor,
+    filter_edge_cells,
+    filter_small_cells,
+)
 
 
 @pytest.fixture
@@ -208,3 +212,49 @@ class TestFilterEdgeCells:
         assert (filtered == 3).any()
         assert not (filtered == 1).any()
         assert not (filtered == 2).any()
+
+
+class TestFilterSmallCells:
+    """Tests for filter_small_cells()."""
+
+    def test_removes_small_cells(self) -> None:
+        """Cells below min_area are removed."""
+        labels = np.zeros((100, 100), dtype=np.int32)
+        labels[10:13, 10:13] = 1   # 3x3 = 9 pixels (small)
+        labels[40:60, 40:60] = 2   # 20x20 = 400 pixels (large)
+        filtered, removed = filter_small_cells(labels, min_area=50)
+        assert removed == 1
+        assert not (filtered == 1).any()
+        assert (filtered == 2).any()
+
+    def test_keeps_cells_at_threshold(self) -> None:
+        """Cells with area exactly equal to min_area are kept."""
+        labels = np.zeros((100, 100), dtype=np.int32)
+        labels[10:20, 10:20] = 1  # 10x10 = 100 pixels
+        filtered, removed = filter_small_cells(labels, min_area=100)
+        assert removed == 0
+        assert (filtered == 1).any()
+
+    def test_does_not_mutate_input(self) -> None:
+        """filter_small_cells must not modify the input array."""
+        labels = np.zeros((100, 100), dtype=np.int32)
+        labels[10:13, 10:13] = 1
+        labels[40:60, 40:60] = 2
+        original = labels.copy()
+        filter_small_cells(labels, min_area=50)
+        np.testing.assert_array_equal(labels, original)
+
+    def test_empty_label_image(self) -> None:
+        """Empty label image returns 0 removed."""
+        labels = np.zeros((100, 100), dtype=np.int32)
+        filtered, removed = filter_small_cells(labels, min_area=10)
+        assert removed == 0
+
+    def test_all_cells_removed(self) -> None:
+        """All cells below threshold are removed."""
+        labels = np.zeros((100, 100), dtype=np.int32)
+        labels[10:13, 10:13] = 1   # 9 pixels
+        labels[20:24, 20:24] = 2   # 16 pixels
+        filtered, removed = filter_small_cells(labels, min_area=20)
+        assert removed == 2
+        assert filtered.max() == 0
