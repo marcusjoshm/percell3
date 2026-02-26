@@ -13,6 +13,25 @@ if TYPE_CHECKING:
 SUPPORTED_METHODS = frozenset({"otsu", "adaptive", "manual", "triangle", "li"})
 
 
+def apply_gaussian_smoothing(
+    image: np.ndarray, sigma: float | None,
+) -> np.ndarray:
+    """Apply Gaussian smoothing if sigma is set.
+
+    Args:
+        image: 2D image array.
+        sigma: Gaussian sigma. None or <= 0 means no smoothing.
+
+    Returns:
+        Smoothed image (float32) or the original image unchanged.
+    """
+    if sigma is None or sigma <= 0:
+        return image
+    from scipy.ndimage import gaussian_filter
+
+    return gaussian_filter(image.astype(np.float32), sigma=sigma)
+
+
 @dataclass(frozen=True)
 class ThresholdResult:
     """Result of a thresholding operation.
@@ -74,9 +93,7 @@ class ThresholdEngine:
         image = store.read_image_numpy(fov_id, channel)
 
         # Apply Gaussian smoothing if requested
-        if gaussian_sigma is not None and gaussian_sigma > 0:
-            from scipy.ndimage import gaussian_filter
-            image = gaussian_filter(image.astype(np.float64), sigma=gaussian_sigma)
+        image = apply_gaussian_smoothing(image, gaussian_sigma)
 
         # Compute threshold
         threshold_value = self._compute_threshold(image, method, manual_value)
@@ -154,11 +171,7 @@ class ThresholdEngine:
         group_image, cell_mask = create_group_image(image, labels, label_values)
 
         # Apply Gaussian smoothing if requested
-        if gaussian_sigma is not None and gaussian_sigma > 0:
-            from scipy.ndimage import gaussian_filter
-            group_image = gaussian_filter(
-                group_image.astype(np.float64), sigma=gaussian_sigma,
-            )
+        group_image = apply_gaussian_smoothing(group_image, gaussian_sigma)
 
         # Create binary mask: threshold applied to full group image (not just ROI)
         mask = (group_image > threshold_value) & cell_mask

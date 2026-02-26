@@ -51,9 +51,9 @@ def compute_masked_otsu(
     from skimage.filters import threshold_otsu
 
     # Apply Gaussian smoothing if requested
-    if gaussian_sigma is not None and gaussian_sigma > 0:
-        from scipy.ndimage import gaussian_filter
-        image = gaussian_filter(image.astype(np.float64), sigma=gaussian_sigma)
+    from percell3.measure.thresholding import apply_gaussian_smoothing
+
+    image = apply_gaussian_smoothing(image, gaussian_sigma)
 
     if roi:
         # Create ROI mask from union of rectangles

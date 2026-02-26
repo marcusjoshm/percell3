@@ -131,11 +131,11 @@ def numbered_select_one(
 
 def numbered_select_many(
     items: list[str],
-    prompt: str = "Select (space-separated, or 'all')",
+    prompt: str = "Select (numbers, 'all', or blank=all)",
 ) -> list[str]:
     """Display a numbered list and return selected items.
 
-    Supports space-separated numbers and 'all'.
+    Supports space-separated numbers, 'all', and blank (= all).
 
     Raises:
         _MenuHome / _MenuCancel via menu_prompt.
@@ -146,7 +146,7 @@ def numbered_select_many(
     _print_numbered_list(items)
 
     while True:
-        raw = menu_prompt(prompt)
+        raw = menu_prompt(prompt, default="all")
 
         if raw.lower() == "all":
             return list(items)
@@ -177,6 +177,64 @@ def _print_numbered_list(items: list[str], *, page_size: int = 20) -> None:
     if len(items) > page_size:
         remaining = len(items) - page_size
         console.print(f"  [dim]... and {remaining} more (enter number to select)[/dim]")
+
+
+def _prompt_path(
+    prompt: str,
+    *,
+    mode: str = "dir",
+    title: str | None = None,
+) -> str:
+    """Prompt for a path with an optional native file picker.
+
+    Args:
+        prompt: Text prompt to display.
+        mode: "dir" for folder picker, "file" for open file, "save" for save dialog.
+        title: Dialog title for the native picker.
+
+    Returns:
+        The selected path string.
+
+    Raises:
+        _MenuHome / _MenuCancel via menu_prompt.
+    """
+    console.print(f"\n[bold]{prompt}[/bold]")
+    console.print("  \\[1] Type path")
+    console.print("  \\[2] Browse")
+
+    choice = menu_prompt("Select", choices=["1", "2"], default="1")
+
+    if choice == "2":
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            dialog_title = title or prompt
+            if mode == "dir":
+                result = filedialog.askdirectory(title=dialog_title)
+            elif mode == "save":
+                result = filedialog.asksaveasfilename(
+                    title=dialog_title,
+                    defaultextension=".csv",
+                    filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                )
+            else:
+                result = filedialog.askopenfilename(title=dialog_title)
+            root.destroy()
+            if result:
+                console.print(f"  [dim]Selected: {result}[/dim]")
+                return result
+            console.print("[dim]No selection made.[/dim]")
+            raise _MenuCancel()
+        except ImportError:
+            console.print(
+                "[yellow]tkinter not available.[/yellow] "
+                "Please type the path instead."
+            )
+
+    return menu_prompt("Path")
 
 
 def _try_auto_load(state: MenuState) -> None:
@@ -227,7 +285,6 @@ def _setup_menu(state: MenuState) -> None:
     Menu("SETUP", [
         MenuItem("1", "Create experiment", "Create a new .percell experiment", _create_experiment),
         MenuItem("2", "Select experiment", "Open an existing experiment", _select_experiment),
-        MenuItem("3", "Back", "", None),
     ], state, return_home=True).run()
     raise _MenuCancel()
 
@@ -235,7 +292,6 @@ def _setup_menu(state: MenuState) -> None:
 def _import_menu(state: MenuState) -> None:
     Menu("IMPORT", [
         MenuItem("1", "Import images", "Load LIF, TIFF, or CZI files", _import_images),
-        MenuItem("2", "Back", "", None),
     ], state, return_home=True).run()
     raise _MenuCancel()
 
@@ -243,7 +299,6 @@ def _import_menu(state: MenuState) -> None:
 def _segment_menu(state: MenuState) -> None:
     Menu("SEGMENT", [
         MenuItem("1", "Segment cells", "Run Cellpose segmentation", _segment_cells),
-        MenuItem("2", "Back", "", None),
     ], state).run()
     raise _MenuCancel()
 
@@ -251,8 +306,7 @@ def _segment_menu(state: MenuState) -> None:
 def _analyze_menu(state: MenuState) -> None:
     Menu("ANALYZE", [
         MenuItem("1", "Measure channels", "Measure fluorescence intensities per cell", _measure_channels),
-        MenuItem("2", "Apply threshold", "Otsu thresholding and particle detection", _apply_threshold),
-        MenuItem("3", "Back", "", None),
+        MenuItem("2", "Grouped intensity thresholding", "Otsu thresholding and particle detection", _apply_threshold),
     ], state).run()
     raise _MenuCancel()
 
@@ -260,7 +314,6 @@ def _analyze_menu(state: MenuState) -> None:
 def _view_menu(state: MenuState) -> None:
     Menu("VIEW", [
         MenuItem("1", "View in napari", "Open images and masks in napari viewer", _view_napari),
-        MenuItem("2", "Back", "", None),
     ], state).run()
     raise _MenuCancel()
 
@@ -270,7 +323,6 @@ def _data_menu(state: MenuState) -> None:
         MenuItem("1", "Query experiment", "Inspect experiment data", _query_menu),
         MenuItem("2", "Edit experiment", "Rename conditions, FOVs, channels, bio-reps", _edit_menu),
         MenuItem("3", "Export to CSV", "Export measurements and particle data", _export_csv),
-        MenuItem("4", "Back", "", None),
     ], state).run()
     raise _MenuCancel()
 
@@ -278,7 +330,6 @@ def _data_menu(state: MenuState) -> None:
 def _workflows_menu(state: MenuState) -> None:
     Menu("WORKFLOWS", [
         MenuItem("1", "Particle analysis", "Segment → measure → threshold → export", _particle_workflow),
-        MenuItem("2", "Back", "", None),
     ], state).run()
     raise _MenuCancel()
 
@@ -306,7 +357,6 @@ def _plugins_menu(state: MenuState) -> None:
     for info in viz_plugins:
         items.append(MenuItem(str(idx), info.name, info.description, _make_viz_runner(registry, info.name)))
         idx += 1
-    items.append(MenuItem(str(idx), "Back", "", None))
 
     Menu("PLUGINS", items, state).run()
     raise _MenuCancel()
@@ -599,11 +649,11 @@ def _select_experiment(state: MenuState) -> None:
         choice = menu_prompt("Select", choices=valid)
 
         if choice == "n":
-            path_str = menu_prompt("Path to .percell experiment")
+            path_str = _prompt_path("Select experiment", mode="dir", title="Open .percell experiment")
         else:
             path_str = recent[int(choice) - 1]
     else:
-        path_str = menu_prompt("Path to .percell experiment")
+        path_str = _prompt_path("Select experiment", mode="dir", title="Open .percell experiment")
 
     path = Path(path_str).expanduser()
     if not path.exists():
@@ -619,7 +669,7 @@ def _select_experiment(state: MenuState) -> None:
 
 def _create_experiment(state: MenuState) -> None:
     """Interactively create a new experiment."""
-    path_str = menu_prompt("Path for new experiment")
+    path_str = _prompt_path("Path for new experiment", mode="dir", title="Create .percell experiment")
 
     path = Path(path_str).expanduser()
 
@@ -1701,6 +1751,28 @@ def _apply_threshold(state: MenuState) -> None:
     else:
         selected_fovs = _select_fovs_from_table(fovs_with_cells)
 
+    # 4b. Auto-measure if no whole-cell measurements exist for selected FOVs
+    measured_channels = store.list_measured_channels()
+    if not measured_channels:
+        console.print(
+            "\n[yellow]No measurements found.[/yellow] "
+            "Measuring all channels first..."
+        )
+        from percell3.measure.measurer import Measurer as _PreMeasurer
+
+        pre_measurer = _PreMeasurer()
+        with make_progress() as progress:
+            task = progress.add_task("Measuring...", total=len(selected_fovs))
+            for i, fov_info in enumerate(selected_fovs):
+                pre_measurer.measure_fov(
+                    store, fov_id=fov_info.id, channels=ch_names,
+                )
+                progress.update(
+                    task, completed=i + 1,
+                    description=f"Measuring {fov_info.display_name}",
+                )
+        console.print("[green]Auto-measurement complete.[/green]")
+
     # 5. Gaussian sigma (optional pre-smoothing)
     gaussian_sigma: float | None = None
     sigma_str = menu_prompt(
@@ -1915,7 +1987,6 @@ def _query_menu(state: MenuState) -> None:
         MenuItem("3", "FOVs", "List fields of view", _query_fovs),
         MenuItem("4", "Conditions", "List experimental conditions", _query_conditions),
         MenuItem("5", "Biological replicates", "List biological replicates", _query_bio_reps),
-        MenuItem("6", "Back", "", None),
     ], state).run()
     raise _MenuCancel()
 
@@ -2040,7 +2111,7 @@ def _query_summary(state: MenuState) -> None:
     if save == "Yes":
         import pandas as pd
 
-        out_str = menu_prompt("Output CSV path")
+        out_str = _prompt_path("Output CSV path", mode="save", title="Save summary CSV")
         out_path = Path(out_str).expanduser()
         pd.DataFrame(summary).to_csv(out_path, index=False)
         console.print(f"[green]Saved to {out_path}[/green]")
@@ -2054,7 +2125,6 @@ def _edit_menu(state: MenuState) -> None:
         MenuItem("3", "Rename FOV", "Rename a field of view", _rename_fov),
         MenuItem("4", "Rename channel", "Rename a channel", _rename_channel),
         MenuItem("5", "Rename bio-rep", "Rename a biological replicate", _rename_bio_rep),
-        MenuItem("6", "Back", "", None),
     ], state).run()
     raise _MenuCancel()
 
@@ -2135,7 +2205,7 @@ def _export_csv(state: MenuState) -> None:
         _export_prism(state)
         return
 
-    output_str = menu_prompt("Output CSV path")
+    output_str = _prompt_path("Output CSV path", mode="save", title="Save measurements CSV")
 
     out_path = Path(output_str).expanduser()
 
@@ -2260,7 +2330,7 @@ def _export_prism(state: MenuState) -> None:
     """Interactively export measurements in Prism-friendly format."""
     store = state.require_experiment()
 
-    output_str = menu_prompt("Output directory path")
+    output_str = _prompt_path("Output directory for Prism export", mode="dir", title="Select Prism export directory")
     out_dir = Path(output_str).expanduser()
 
     # Auto-correct: if user enters a .csv path, use its parent directory
@@ -2392,7 +2462,7 @@ def _particle_workflow(state: MenuState) -> None:
 
     # --- Step 5: Export directory ---
     console.print("\n[bold]Step 5: Export[/bold]")
-    output_str = menu_prompt("Output directory for Prism export")
+    output_str = _prompt_path("Output directory for Prism export", mode="dir", title="Select Prism export directory")
     out_dir = Path(output_str).expanduser()
     if out_dir.suffix.lower() == ".csv":
         out_dir = out_dir.parent / out_dir.stem

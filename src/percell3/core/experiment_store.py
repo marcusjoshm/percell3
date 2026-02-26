@@ -556,16 +556,7 @@ class ExperimentStore:
 
         # Merge group tags if any exist
         if "cell_id" in pivot.columns:
-            group_tags = self.get_cell_group_tags(pivot["cell_id"].tolist())
-            if group_tags:
-                group_df = pd.DataFrame.from_dict(group_tags, orient="index")
-                group_df.index.name = "cell_id"
-                group_df = group_df.reset_index()
-                pivot = pivot.merge(group_df, on="cell_id", how="left")
-                # Fill NaN group columns with empty string
-                for col in group_df.columns:
-                    if col != "cell_id" and col in pivot.columns:
-                        pivot[col] = pivot[col].fillna("")
+            pivot, _ = self._merge_group_tags(pivot)
 
         return pivot
 
@@ -721,6 +712,34 @@ class ExperimentStore:
             result.setdefault(cell_id, {})[col_name] = value
 
         return result
+
+    def _merge_group_tags(
+        self,
+        df: pd.DataFrame,
+        cell_id_column: str = "cell_id",
+    ) -> tuple[pd.DataFrame, list[str]]:
+        """Merge group tag columns into a DataFrame.
+
+        Args:
+            df: DataFrame with a cell_id column.
+            cell_id_column: Name of the cell ID column.
+
+        Returns:
+            Tuple of (merged_df, group_column_names).
+        """
+        cell_ids = df[cell_id_column].unique().tolist()
+        group_tags = self.get_cell_group_tags(cell_ids)
+        if not group_tags:
+            return df, []
+        group_df = pd.DataFrame.from_dict(group_tags, orient="index")
+        group_df.index.name = cell_id_column
+        group_df = group_df.reset_index()
+        df = df.merge(group_df, on=cell_id_column, how="left")
+        group_cols = [c for c in group_df.columns if c != cell_id_column]
+        for col in group_cols:
+            if col in df.columns:
+                df[col] = df[col].fillna("")
+        return df, group_cols
 
     # --- Particles ---
 
@@ -962,17 +981,8 @@ class ExperimentStore:
             df = df.merge(cell_context, on="cell_id", how="inner")
 
         # Merge group tags so Prism columns can be split by group
-        all_cell_ids = df["cell_id"].unique().tolist() if not df.empty else []
-        group_tags = self.get_cell_group_tags(all_cell_ids) if all_cell_ids else {}
-        if group_tags and not df.empty:
-            group_df = pd.DataFrame.from_dict(group_tags, orient="index")
-            group_df.index.name = "cell_id"
-            group_df = group_df.reset_index()
-            df = df.merge(group_df, on="cell_id", how="left")
-            # Find group columns (all columns from group_df except cell_id)
-            _prism_group_cols = [c for c in group_df.columns if c != "cell_id"]
-            for gc in _prism_group_cols:
-                df[gc] = df[gc].fillna("")
+        if not df.empty:
+            df, _prism_group_cols = self._merge_group_tags(df)
         else:
             _prism_group_cols = []
 
@@ -1129,16 +1139,7 @@ class ExperimentStore:
 
         # Merge group tags for parent cells
         if "cell_id" in df.columns:
-            unique_cell_ids = df["cell_id"].unique().tolist()
-            group_tags = self.get_cell_group_tags(unique_cell_ids)
-            if group_tags:
-                group_df = pd.DataFrame.from_dict(group_tags, orient="index")
-                group_df.index.name = "cell_id"
-                group_df = group_df.reset_index()
-                df = df.merge(group_df, on="cell_id", how="left")
-                for col in group_df.columns:
-                    if col != "cell_id" and col in df.columns:
-                        df[col] = df[col].fillna("")
+            df, _ = self._merge_group_tags(df)
 
         # Apply metric filter
         context_cols = [

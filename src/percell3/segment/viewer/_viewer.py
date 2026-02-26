@@ -107,11 +107,17 @@ def _launch(
     channel_names = [ch.name for ch in selected_channels]
 
     from percell3.segment.viewer.cellpose_widget import CellposeWidget
+    from percell3.segment.viewer.edge_removal_widget import EdgeRemovalWidget
     from percell3.segment.viewer.edit_widget import EditWidget
 
     cellpose_w = CellposeWidget(viewer, store, fov_id, channel_names)
     viewer.window.add_dock_widget(
         cellpose_w.widget, name="Cellpose", area="right",
+    )
+
+    edge_w = EdgeRemovalWidget(viewer, store, fov_id)
+    viewer.window.add_dock_widget(
+        edge_w.widget, name="Edge Removal", area="right",
     )
 
     edit_w = EditWidget(viewer)

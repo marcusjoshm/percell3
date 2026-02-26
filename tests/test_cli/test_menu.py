@@ -98,10 +98,10 @@ class TestMenuState:
 class TestMenuCreateExperiment:
     def test_create_via_menu(self, runner: CliRunner, tmp_path: Path):
         exp_path = tmp_path / "menu_exp.percell"
-        # Main→Setup(1)→Create(1)→path→name→desc→Enter gate→Back(3)→quit
+        # Main→Setup(1)→Create(1)→TypePath(1)→path→name→desc→back→quit
         result = _invoke_menu(
             runner,
-            input=f"1\n1\n{exp_path}\nMyExp\nA test\n\n3\nq\n",
+            input=f"1\n1\n1\n{exp_path}\nMyExp\nA test\nb\nq\n",
         )
         assert result.exit_code == 0
         assert "Created experiment" in result.output
@@ -112,10 +112,10 @@ class TestMenuSelectExperiment:
     def test_select_experiment_via_menu(
         self, runner: CliRunner, experiment_path: Path,
     ):
-        # Main→Setup(1)→Select(2)→path→Enter gate→Back(3)→quit
+        # Main→Setup(1)→Select(2)→TypePath(1)→path→back→quit
         result = _invoke_menu(
             runner,
-            input=f"1\n2\n{experiment_path}\n\n3\nq\n",
+            input=f"1\n2\n1\n{experiment_path}\nb\nq\n",
         )
         assert result.exit_code == 0
         assert "Opened experiment" in result.output
@@ -223,11 +223,11 @@ class TestSubMenuNavigation:
         assert "Export to CSV" in result.output
 
     def test_analyze_sub_menu(self, runner: CliRunner):
-        # Main→Analyze(4) should show Measure/Threshold/Back, then Back(3)→quit
-        result = _invoke_menu(runner, input="4\n3\nq\n")
+        # Main→Analyze(4) should show Measure/Threshold, then back→quit
+        result = _invoke_menu(runner, input="4\nb\nq\n")
         assert result.exit_code == 0
         assert "Measure channels" in result.output
-        assert "Apply threshold" in result.output
+        assert "Grouped intensity thresholding" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -327,10 +327,10 @@ class TestWorkflowMenu:
     def test_workflow_no_channels_early_exit(self, runner: CliRunner, experiment: ExperimentStore):
         """Workflow should exit early with message when no channels exist."""
         exp_path = str(experiment.path)
-        # Setup → Select → path → (auto-return home) → Workflows → Particle analysis
+        # Setup → Select → TypePath(1) → path → (auto-return home) → Workflows → Particle analysis
         result = _invoke_menu(
             runner,
-            input=f"1\n2\n{exp_path}\n7\n1\n\nb\nq\n",
+            input=f"1\n2\n1\n{exp_path}\n7\n1\n\nb\nq\n",
         )
         assert "No channels found" in result.output
 
@@ -340,10 +340,10 @@ class TestWorkflowMenu:
         """Workflow should exit early when experiment has channels but no FOVs."""
         experiment.add_channel("DAPI")
         exp_path = str(experiment.path)
-        # Setup → Select → path → (auto-return home) → Workflows → Particle analysis
+        # Setup → Select → TypePath(1) → path → (auto-return home) → Workflows → Particle analysis
         result = _invoke_menu(
             runner,
-            input=f"1\n2\n{exp_path}\n7\n1\n\nb\nq\n",
+            input=f"1\n2\n1\n{exp_path}\n7\n1\n\nb\nq\n",
         )
         assert "No FOVs found" in result.output
 
