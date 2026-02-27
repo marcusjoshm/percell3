@@ -984,6 +984,83 @@ def delete_particles_for_threshold_run(
     return count
 
 
+def delete_stale_particles_for_fov_channel(
+    conn: sqlite3.Connection,
+    fov_id: int,
+    channel_id: int,
+    keep_run_id: int,
+) -> int:
+    """Delete particles from previous threshold runs on a FOV+channel.
+
+    When a new threshold mask overwrites the old one, particles from
+    prior runs become stale (their mask no longer exists on disk).
+    This deletes those orphaned particles and their summary measurements.
+
+    Args:
+        conn: Database connection.
+        fov_id: FOV whose particles to clean up.
+        channel_id: Threshold channel ID.
+        keep_run_id: The current threshold run ID to keep (not delete).
+
+    Returns:
+        Number of particles deleted.
+    """
+    batch_size = 900  # Stay well under SQLite's 999 limit
+
+    # Find old threshold run IDs for this channel (excluding the current one)
+    old_runs = conn.execute(
+        "SELECT id FROM threshold_runs WHERE channel_id = ? AND id != ?",
+        (channel_id, keep_run_id),
+    ).fetchall()
+    if not old_runs:
+        return 0
+    old_run_ids = [r[0] for r in old_runs]
+
+    # Find cell IDs in this FOV
+    cell_rows = conn.execute(
+        "SELECT id FROM cells WHERE fov_id = ?", (fov_id,),
+    ).fetchall()
+    if not cell_rows:
+        return 0
+    cell_ids = [r[0] for r in cell_rows]
+
+    # Delete particles matching both: cell in this FOV AND old threshold run
+    total_deleted = 0
+    for batch_start in range(0, len(cell_ids), batch_size):
+        batch = cell_ids[batch_start:batch_start + batch_size]
+        cell_ph = ",".join("?" * len(batch))
+        run_ph = ",".join("?" * len(old_run_ids))
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM particles "
+            f"WHERE cell_id IN ({cell_ph}) AND threshold_run_id IN ({run_ph})",
+            batch + old_run_ids,
+        ).fetchone()[0]
+        if count > 0:
+            conn.execute(
+                f"DELETE FROM particles "
+                f"WHERE cell_id IN ({cell_ph}) AND threshold_run_id IN ({run_ph})",
+                batch + old_run_ids,
+            )
+            total_deleted += count
+
+    # Delete particle summary measurements for these cells on this channel
+    from percell3.measure.particle_analyzer import PARTICLE_SUMMARY_METRICS
+    metric_ph = ",".join("?" * len(PARTICLE_SUMMARY_METRICS))
+    for batch_start in range(0, len(cell_ids), batch_size):
+        batch = cell_ids[batch_start:batch_start + batch_size]
+        cell_ph = ",".join("?" * len(batch))
+        conn.execute(
+            f"DELETE FROM measurements "
+            f"WHERE cell_id IN ({cell_ph}) AND channel_id = ? "
+            f"AND metric IN ({metric_ph})",
+            batch + [channel_id] + list(PARTICLE_SUMMARY_METRICS),
+        )
+
+    if total_deleted > 0:
+        conn.commit()
+    return total_deleted
+
+
 def select_threshold_runs(conn: sqlite3.Connection) -> list[dict]:
     """Return all threshold runs as dicts."""
     rows = conn.execute(
@@ -1114,6 +1191,17 @@ def insert_fov_tag(conn: sqlite3.Connection, fov_id: int, tag_id: int) -> None:
         "INSERT OR IGNORE INTO fov_tags (fov_id, tag_id) VALUES (?, ?)",
         (fov_id, tag_id),
     )
+    conn.commit()
+
+
+def delete_fov_row(conn: sqlite3.Connection, fov_id: int) -> None:
+    """Delete a FOV row from the fovs table.
+
+    Caller must delete dependent rows (cells, particles, measurements)
+    before calling this. Rows in fov_status_cache and fov_tags are
+    removed automatically via ON DELETE CASCADE.
+    """
+    conn.execute("DELETE FROM fovs WHERE id = ?", (fov_id,))
     conn.commit()
 
 

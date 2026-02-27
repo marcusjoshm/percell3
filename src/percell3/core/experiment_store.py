@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.+()-]{0,254}$")
 
 
@@ -454,6 +457,42 @@ class ExperimentStore:
         self.update_fov_status_cache(fov_id)
         return count
 
+    def delete_fov(self, fov_id: int) -> None:
+        """Delete a FOV and all its data (cells, particles, zarr groups).
+
+        Cascade order:
+        1. Particles (via delete_particles_for_fov)
+        2. Cells + measurements + cell_tags (via delete_cells_for_fov)
+        3. Zarr groups (images, labels, masks)
+        4. FOV row (fov_status_cache/fov_tags cascade automatically)
+
+        Args:
+            fov_id: Database ID of the FOV to delete.
+
+        Raises:
+            ExperimentError: If the FOV does not exist.
+        """
+        import shutil
+
+        # Validate FOV exists
+        self.get_fov_by_id(fov_id)  # raises ExperimentError if not found
+
+        # 1. Delete particles
+        self.delete_particles_for_fov(fov_id)
+
+        # 2. Delete cells (cascades to measurements and cell_tags)
+        self.delete_cells_for_fov(fov_id)
+
+        # 3. Remove zarr groups
+        fov_group = zarr_io.fov_group_path(fov_id)
+        for zarr_root in (self.images_zarr_path, self.labels_zarr_path, self.masks_zarr_path):
+            group_dir = zarr_root / fov_group
+            if group_dir.exists():
+                shutil.rmtree(group_dir)
+
+        # 4. Delete FOV row (fov_status_cache, fov_tags cascade)
+        queries.delete_fov_row(self._conn, fov_id)
+
     def get_fov_segmentation_summary(self) -> dict[int, tuple[int, str | None]]:
         """Return segmentation status for all FOVs.
 
@@ -563,6 +602,18 @@ class ExperimentStore:
     # --- Masks ---
 
     def write_mask(self, fov_id: int, channel: str, mask: np.ndarray, threshold_run_id: int) -> None:
+        # Clean up particles from previous threshold runs on this FOV+channel.
+        # The mask file is one-per-channel so overwriting it orphans old particles.
+        ch = self.get_channel(channel)
+        deleted = queries.delete_stale_particles_for_fov_channel(
+            self._conn, fov_id, ch.id, keep_run_id=threshold_run_id,
+        )
+        if deleted > 0:
+            logger.info(
+                "Cleaned up %d stale particles for FOV %d channel %s",
+                deleted, fov_id, channel,
+            )
+
         fov_info = self.get_fov_by_id(fov_id)
         gp = zarr_io.mask_group_path(fov_id, channel)
         zarr_io.write_mask(

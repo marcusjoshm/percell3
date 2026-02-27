@@ -929,6 +929,38 @@ class TestDeleteCellsForFov:
         assert experiment.delete_cells_for_fov(fov_id) == 0
 
 
+class TestDeleteFov:
+    """Tests for ExperimentStore.delete_fov()."""
+
+    def test_deletes_fov_and_all_data(self, experiment_with_data):
+        store = experiment_with_data
+        fov = store.get_fovs()[0]
+        fov_id = fov.id
+
+        # Precondition: FOV exists with cells
+        assert store.get_cell_count(fov_id=fov_id) == 10
+
+        store.delete_fov(fov_id)
+
+        # FOV row gone
+        fovs = store.get_fovs()
+        assert all(f.id != fov_id for f in fovs)
+
+    def test_deletes_fov_with_no_cells(self, experiment):
+        experiment.add_condition("ctrl")
+        fov_id = experiment.add_fov("ctrl", width=32, height=32)
+        assert len(experiment.get_fovs()) == 1
+
+        experiment.delete_fov(fov_id)
+        assert len(experiment.get_fovs()) == 0
+
+    def test_raises_for_nonexistent_fov(self, experiment):
+        from percell3.core.exceptions import ExperimentError
+
+        with pytest.raises(ExperimentError):
+            experiment.delete_fov(9999)
+
+
 class TestGetFovSegmentationSummary:
     def test_with_segmented_fovs(self, experiment_with_data):
         store = experiment_with_data
@@ -1052,6 +1084,149 @@ class TestParticles:
         store.add_particles(particles)
         deleted = store.delete_particles_for_threshold_run(thr_id)
         assert deleted == 1
+
+
+class TestWriteMaskCleansStaleParticles:
+    """write_mask should delete particles from previous threshold runs."""
+
+    @pytest.fixture
+    def store_with_particles(self, experiment):
+        """Experiment with two threshold runs on the same channel+FOV."""
+        import numpy as np
+        from percell3.core.models import MeasurementRecord, ParticleRecord
+
+        experiment.add_channel("DAPI", role="nucleus")
+        experiment.add_channel("GFP", role="signal")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control", width=64, height=64)
+        seg_id = experiment.add_segmentation_run(channel="DAPI", model_name="cyto3")
+        cells = [
+            CellRecord(
+                fov_id=fov_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=32.0, centroid_y=32.0,
+                bbox_x=10, bbox_y=10, bbox_w=40, bbox_h=40,
+                area_pixels=1000.0,
+            ),
+        ]
+        cell_ids = experiment.add_cells(cells)
+
+        # First threshold run → creates particles
+        old_run = experiment.add_threshold_run(channel="GFP", method="otsu")
+        old_particles = [
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=old_run, label_value=1,
+                centroid_x=20.0, centroid_y=20.0,
+                bbox_x=15, bbox_y=15, bbox_w=10, bbox_h=10,
+                area_pixels=50.0,
+            ),
+            ParticleRecord(
+                cell_id=cell_ids[0], threshold_run_id=old_run, label_value=2,
+                centroid_x=35.0, centroid_y=35.0,
+                bbox_x=30, bbox_y=30, bbox_w=10, bbox_h=10,
+                area_pixels=40.0,
+            ),
+        ]
+        experiment.add_particles(old_particles)
+
+        # Add particle summary measurements from old run
+        experiment.add_measurements([
+            MeasurementRecord(
+                cell_id=cell_ids[0],
+                channel_id=experiment.get_channel("GFP").id,
+                metric="particle_count", value=2.0,
+            ),
+            MeasurementRecord(
+                cell_id=cell_ids[0],
+                channel_id=experiment.get_channel("GFP").id,
+                metric="total_particle_area", value=90.0,
+            ),
+        ])
+
+        # Second (new) threshold run
+        new_run = experiment.add_threshold_run(channel="GFP", method="otsu")
+
+        return experiment, cell_ids, fov_id, old_run, new_run
+
+    def test_write_mask_deletes_old_particles(self, store_with_particles):
+        import numpy as np
+
+        store, cell_ids, fov_id, old_run, new_run = store_with_particles
+
+        # Verify old particles exist
+        df = store.get_particles(threshold_run_id=old_run)
+        assert len(df) == 2
+
+        # Write new mask — should delete old particles
+        mask = np.zeros((64, 64), dtype=np.uint8)
+        mask[20:30, 20:30] = 255
+        store.write_mask(fov_id, "GFP", mask, new_run)
+
+        # Old particles should be gone
+        df = store.get_particles(threshold_run_id=old_run)
+        assert len(df) == 0
+
+    def test_write_mask_deletes_old_summary_measurements(self, store_with_particles):
+        import numpy as np
+
+        store, cell_ids, fov_id, old_run, new_run = store_with_particles
+
+        # Verify old summary measurements exist
+        df = store.get_measurements(
+            metrics=["particle_count", "total_particle_area"],
+        )
+        assert len(df) == 2
+
+        # Write new mask — should also delete old summary measurements
+        mask = np.zeros((64, 64), dtype=np.uint8)
+        store.write_mask(fov_id, "GFP", mask, new_run)
+
+        df = store.get_measurements(
+            metrics=["particle_count", "total_particle_area"],
+        )
+        assert len(df) == 0
+
+    def test_write_mask_preserves_other_fov_particles(self, store_with_particles):
+        """Particles on a different FOV should not be affected."""
+        import numpy as np
+        from percell3.core.models import ParticleRecord
+
+        store, cell_ids, fov_id, old_run, new_run = store_with_particles
+
+        # Add a second FOV with its own particles on the same threshold run
+        fov_id2 = store.add_fov("control", display_name="fov2", width=64, height=64)
+        seg_id = store.get_segmentation_runs()[0]["id"]
+        cells2 = [
+            CellRecord(
+                fov_id=fov_id2, segmentation_id=seg_id, label_value=1,
+                centroid_x=32.0, centroid_y=32.0,
+                bbox_x=10, bbox_y=10, bbox_w=40, bbox_h=40,
+                area_pixels=1000.0,
+            ),
+        ]
+        cell_ids2 = store.add_cells(cells2)
+        store.add_particles([
+            ParticleRecord(
+                cell_id=cell_ids2[0], threshold_run_id=old_run, label_value=1,
+                centroid_x=20.0, centroid_y=20.0,
+                bbox_x=15, bbox_y=15, bbox_w=10, bbox_h=10,
+                area_pixels=30.0,
+            ),
+        ])
+
+        # Write new mask for FOV 1 only
+        mask = np.zeros((64, 64), dtype=np.uint8)
+        store.write_mask(fov_id, "GFP", mask, new_run)
+
+        # FOV 1 old particles cleaned
+        df1 = store.get_particles(threshold_run_id=old_run)
+        fov1_remaining = [
+            r for _, r in df1.iterrows() if r["cell_id"] in cell_ids
+        ]
+        assert len(fov1_remaining) == 0
+
+        # FOV 2 particles preserved
+        df2 = store.get_particles(cell_ids=cell_ids2)
+        assert len(df2) == 1
 
 
 class TestThresholdRuns:
