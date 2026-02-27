@@ -133,6 +133,7 @@ def _launch(
 
     from percell3.segment.viewer.bg_subtraction_widget import BGSubtractionWidget
     from percell3.segment.viewer.cellpose_widget import CellposeWidget
+    from percell3.segment.viewer.copy_labels_widget import CopyLabelsWidget
     from percell3.segment.viewer.edge_removal_widget import EdgeRemovalWidget
     from percell3.segment.viewer.edit_widget import EditWidget
 
@@ -154,6 +155,11 @@ def _launch(
     bg_sub_w = BGSubtractionWidget(viewer, store, fov_id, channel_names)
     viewer.window.add_dock_widget(
         bg_sub_w.widget, name="BG Subtraction", area="right",
+    )
+
+    copy_w = CopyLabelsWidget(viewer, store, fov_id, channel_names)
+    viewer.window.add_dock_widget(
+        copy_w.widget, name="Copy Labels", area="right",
     )
 
     # --- Block until viewer closes ---
