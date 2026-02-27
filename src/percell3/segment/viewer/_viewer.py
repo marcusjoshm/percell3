@@ -53,6 +53,27 @@ def _channel_colormap(ch: ChannelConfig) -> str:
     return "gray"
 
 
+_EXTRA_COLORMAPS = (
+    "nipy_spectral", "Spectral", "rainbow", "coolwarm",
+    "gnuplot", "jet", "cividis",
+)
+
+
+def _register_extra_colormaps() -> None:
+    """Register matplotlib colormaps with napari's colormap registry."""
+    try:
+        from napari.utils.colormaps import AVAILABLE_COLORMAPS, ensure_colormap
+    except ImportError:
+        return
+
+    for name in _EXTRA_COLORMAPS:
+        if name not in AVAILABLE_COLORMAPS:
+            try:
+                AVAILABLE_COLORMAPS[name] = ensure_colormap(name)
+            except (KeyError, ValueError):
+                pass
+
+
 def _launch(
     store: ExperimentStore,
     fov_id: int,
@@ -87,6 +108,10 @@ def _launch(
     if not selected_channels:
         raise ValueError(f"No matching channels found for: {channels}")
 
+    # Register extra matplotlib colormaps with napari so they appear
+    # in the layer control dropdown for all layers.
+    _register_extra_colormaps()
+
     # --- Create viewer ---
     viewer = napari.Viewer(
         title=f"PerCell 3 \u2014 {fov_info.display_name} ({fov_info.condition})"
@@ -106,6 +131,7 @@ def _launch(
     # --- Add dock widgets ---
     channel_names = [ch.name for ch in selected_channels]
 
+    from percell3.segment.viewer.bg_subtraction_widget import BGSubtractionWidget
     from percell3.segment.viewer.cellpose_widget import CellposeWidget
     from percell3.segment.viewer.edge_removal_widget import EdgeRemovalWidget
     from percell3.segment.viewer.edit_widget import EditWidget
@@ -123,6 +149,11 @@ def _launch(
     edit_w = EditWidget(viewer)
     viewer.window.add_dock_widget(
         edit_w.widget, name="Edit Labels", area="right",
+    )
+
+    bg_sub_w = BGSubtractionWidget(viewer, store, fov_id, channel_names)
+    viewer.window.add_dock_widget(
+        bg_sub_w.widget, name="BG Subtraction", area="right",
     )
 
     # --- Block until viewer closes ---
