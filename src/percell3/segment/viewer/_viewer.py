@@ -130,6 +130,7 @@ def _launch(
 
     # --- Add dock widgets ---
     channel_names = [ch.name for ch in selected_channels]
+    window_menu = viewer.window.window_menu
 
     from percell3.segment.viewer.bg_subtraction_widget import BGSubtractionWidget
     from percell3.segment.viewer.cellpose_widget import CellposeWidget
@@ -140,26 +141,31 @@ def _launch(
     cellpose_w = CellposeWidget(viewer, store, fov_id, channel_names)
     viewer.window.add_dock_widget(
         cellpose_w.widget, name="Cellpose", area="right",
+        menu=window_menu,
     )
 
     cleanup_w = EdgeRemovalWidget(viewer, store, fov_id)
     viewer.window.add_dock_widget(
         cleanup_w.widget, name="Label Cleanup", area="right",
+        menu=window_menu,
     )
 
     edit_w = EditWidget(viewer)
     viewer.window.add_dock_widget(
         edit_w.widget, name="Edit Labels", area="right",
+        menu=window_menu,
     )
 
     bg_sub_w = BGSubtractionWidget(viewer, store, fov_id, channel_names)
     viewer.window.add_dock_widget(
         bg_sub_w.widget, name="BG Subtraction", area="right",
+        menu=window_menu,
     )
 
     copy_w = CopyLabelsWidget(viewer, store, fov_id, channel_names)
     viewer.window.add_dock_widget(
         copy_w.widget, name="Copy Labels", area="right",
+        menu=window_menu,
     )
 
     # --- Block until viewer closes ---
