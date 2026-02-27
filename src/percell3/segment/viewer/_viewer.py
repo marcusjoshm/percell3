@@ -135,6 +135,7 @@ def _launch(
     from percell3.segment.viewer.bg_subtraction_widget import BGSubtractionWidget
     from percell3.segment.viewer.cellpose_widget import CellposeWidget
     from percell3.segment.viewer.copy_labels_widget import CopyLabelsWidget
+    from percell3.segment.viewer.copy_mask_widget import CopyMaskWidget
     from percell3.segment.viewer.edge_removal_widget import EdgeRemovalWidget
     from percell3.segment.viewer.edit_widget import EditWidget
 
@@ -165,6 +166,12 @@ def _launch(
     copy_w = CopyLabelsWidget(viewer, store, fov_id, channel_names)
     viewer.window.add_dock_widget(
         copy_w.widget, name="Copy Labels", area="right",
+        menu=window_menu,
+    )
+
+    copy_mask_w = CopyMaskWidget(viewer, store, fov_id, channel_names)
+    viewer.window.add_dock_widget(
+        copy_mask_w.widget, name="Copy Mask", area="right",
         menu=window_menu,
     )
 
