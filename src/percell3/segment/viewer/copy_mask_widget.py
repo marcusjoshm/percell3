@@ -132,7 +132,7 @@ class CopyMaskWidget:
             return
 
         try:
-            copy_mask_to_fov(
+            run_id, particle_count = copy_mask_to_fov(
                 self._store, source_fov_id, target_fov_id, channel,
             )
         except KeyError as exc:
@@ -153,13 +153,14 @@ class CopyMaskWidget:
             return
 
         self._status_label.setText(
-            f"Copied {channel} mask from {source_name} to {target_name}"
+            f"Copied {channel} mask from {source_name} to {target_name} "
+            f"({particle_count} particles)"
         )
         self._status_label.setStyleSheet("color: green;")
         logger.info(
-            "Copied %s mask from FOV %d (%s) to FOV %d (%s)",
+            "Copied %s mask from FOV %d (%s) to FOV %d (%s), %d particles",
             channel, source_fov_id, source_name,
-            target_fov_id, target_name,
+            target_fov_id, target_name, particle_count,
         )
 
 
@@ -168,26 +169,29 @@ def copy_mask_to_fov(
     source_fov_id: int,
     target_fov_id: int,
     channel: str,
-) -> int:
-    """Copy a threshold mask from one FOV to another.
+) -> tuple[int, int]:
+    """Copy a threshold mask from one FOV to another and extract particles.
 
     Reads the source mask, creates a new threshold run on the target FOV,
-    and writes the mask. The ``write_mask`` method handles cleanup of any
-    stale particles on the target.
+    writes the mask, then runs particle analysis on the target so that
+    measurements can be performed. The ``write_mask`` method handles cleanup
+    of any stale particles on the target.
 
     Args:
         store: An open ExperimentStore.
         source_fov_id: Source FOV database ID (must have a mask for this channel).
-        target_fov_id: Target FOV database ID.
+        target_fov_id: Target FOV database ID (must have labels and cells).
         channel: Channel name whose mask to copy.
 
     Returns:
-        The new threshold run ID on the target FOV.
+        Tuple of (threshold_run_id, particle_count).
 
     Raises:
         KeyError: If the source FOV has no mask for the given channel.
         ValueError: If source mask dimensions don't match target FOV.
     """
+    from percell3.measure.particle_analyzer import ParticleAnalyzer
+
     # Read source mask (raises KeyError if none exists)
     source_mask = store.read_mask(source_fov_id, channel)
 
@@ -210,8 +214,27 @@ def copy_mask_to_fov(
     # Write mask (handles stale particle cleanup automatically)
     store.write_mask(target_fov_id, channel, source_mask, run_id)
 
+    # Extract particles from the copied mask so measurements work.
+    # This mirrors what the thresholding pipeline does after writing a mask.
+    particle_count = 0
+    cells_df = store.get_cells(fov_id=target_fov_id)
+    if not cells_df.empty:
+        cell_ids = cells_df["id"].tolist()
+        analyzer = ParticleAnalyzer()
+        result = analyzer.analyze_fov(
+            store, target_fov_id, channel, run_id, cell_ids,
+        )
+        if result.particles:
+            store.add_particles(result.particles)
+        if result.summary_measurements:
+            store.add_measurements(result.summary_measurements)
+        store.write_particle_labels(
+            target_fov_id, channel, result.particle_label_image,
+        )
+        particle_count = result.total_particles
+
     logger.info(
-        "Copied %s mask from FOV %d to FOV %d (run_id=%d)",
-        channel, source_fov_id, target_fov_id, run_id,
+        "Copied %s mask from FOV %d to FOV %d (run_id=%d, %d particles)",
+        channel, source_fov_id, target_fov_id, run_id, particle_count,
     )
-    return run_id
+    return run_id, particle_count
