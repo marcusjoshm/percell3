@@ -39,6 +39,7 @@ class CopyMaskWidget:
             QGroupBox,
             QLabel,
             QPushButton,
+            QSpinBox,
             QVBoxLayout,
             QWidget,
         )
@@ -96,6 +97,16 @@ class CopyMaskWidget:
         ch_group.setLayout(ch_layout)
         layout.addWidget(ch_group)
 
+        # --- Min particle area ---
+        area_group = QGroupBox("Min Particle Area (px)")
+        area_layout = QVBoxLayout()
+        self._min_area_spin = QSpinBox()
+        self._min_area_spin.setRange(1, 1000)
+        self._min_area_spin.setValue(5)
+        area_layout.addWidget(self._min_area_spin)
+        area_group.setLayout(area_layout)
+        layout.addWidget(area_group)
+
         # --- Apply button ---
         self._apply_btn = QPushButton("Copy Mask")
         self._apply_btn.setStyleSheet(
@@ -131,9 +142,12 @@ class CopyMaskWidget:
             self._status_label.setStyleSheet("color: red;")
             return
 
+        min_area = self._min_area_spin.value()
+
         try:
             run_id, particle_count = copy_mask_to_fov(
                 self._store, source_fov_id, target_fov_id, channel,
+                min_particle_area=min_area,
             )
         except KeyError as exc:
             self._status_label.setText(f"No mask found: {exc}")
@@ -169,6 +183,7 @@ def copy_mask_to_fov(
     source_fov_id: int,
     target_fov_id: int,
     channel: str,
+    min_particle_area: int = 5,
 ) -> tuple[int, int]:
     """Copy a threshold mask from one FOV to another and extract particles.
 
@@ -182,6 +197,7 @@ def copy_mask_to_fov(
         source_fov_id: Source FOV database ID (must have a mask for this channel).
         target_fov_id: Target FOV database ID (must have labels and cells).
         channel: Channel name whose mask to copy.
+        min_particle_area: Minimum particle area in pixels (default: 5).
 
     Returns:
         Tuple of (threshold_run_id, particle_count).
@@ -220,7 +236,7 @@ def copy_mask_to_fov(
     cells_df = store.get_cells(fov_id=target_fov_id)
     if not cells_df.empty:
         cell_ids = cells_df["id"].tolist()
-        analyzer = ParticleAnalyzer()
+        analyzer = ParticleAnalyzer(min_particle_area=min_particle_area)
         result = analyzer.analyze_fov(
             store, target_fov_id, channel, run_id, cell_ids,
         )

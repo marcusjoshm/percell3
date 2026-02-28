@@ -864,13 +864,13 @@ class ExperimentStore:
         cell_count = row["cnt"] if row else 0
         seg_model = (row["seg_model"] or "") if row else ""
 
-        # Measured channels (whole_cell scope, excluding particle_ metrics)
+        # Measured channels (whole_cell scope, excluding particle summary metrics)
         wc_rows = conn.execute(
             "SELECT DISTINCT ch.name FROM measurements m "
             "JOIN cells c ON m.cell_id = c.id "
             "JOIN channels ch ON m.channel_id = ch.id "
             "WHERE c.fov_id = ? AND m.scope = 'whole_cell' "
-            "AND m.metric NOT LIKE 'particle_%' "
+            "AND m.metric NOT LIKE '%particle%' "
             "ORDER BY ch.name",
             (fov_id,),
         ).fetchall()

@@ -218,3 +218,23 @@ class TestCopyMaskToFov:
         target_mask = store.read_mask(target_fov_id, "GFP")
         source_mask = store.read_mask(source_fov_id, "GFP")
         np.testing.assert_array_equal(target_mask, source_mask)
+
+    def test_min_particle_area_respected(self, tmp_path: Path) -> None:
+        """Custom min_particle_area filters out small particles."""
+        store, source_fov_id = _create_experiment_with_mask(tmp_path)
+        target_fov_id = _create_target_with_labels(store)
+
+        # Use a very large min_area to filter everything out
+        _, count_large = copy_mask_to_fov(
+            store, source_fov_id, target_fov_id, "GFP",
+            min_particle_area=9999,
+        )
+        assert count_large == 0, "Large min_area should filter all particles"
+
+        # Create another target for min_area=1
+        target2 = _create_target_with_labels(store, display_name="target2")
+        _, count_small = copy_mask_to_fov(
+            store, source_fov_id, target2, "GFP",
+            min_particle_area=1,
+        )
+        assert count_small > 0, "min_area=1 should keep particles"
