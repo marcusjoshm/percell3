@@ -24,7 +24,7 @@ def grouper_experiment(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP", role="signal")
     store.add_condition("control")
     fov_id = store.add_fov("control", width=256, height=256)
-    seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
+    seg_id = store.add_segmentation_run(fov_id=fov_id, channel="DAPI", model_name="cyto3")
 
     # 30 cells with bimodal mean_intensity: 15 low (~50), 15 high (~200)
     rng = np.random.default_rng(42)
@@ -64,7 +64,7 @@ def few_cells_experiment(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP")
     store.add_condition("control")
     fov_id = store.add_fov("control", width=64, height=64)
-    seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
+    seg_id = store.add_segmentation_run(fov_id=fov_id, channel="DAPI", model_name="cyto3")
 
     cells = [
         CellRecord(
@@ -186,7 +186,7 @@ class TestCellGrouper:
         store.add_channel("GFP")
         store.add_condition("control")
         fov_id = store.add_fov("control", width=64, height=64)
-        seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
+        seg_id = store.add_segmentation_run(fov_id=fov_id, channel="DAPI", model_name="cyto3")
         store.add_cells([CellRecord(
             fov_id=fov_id, segmentation_id=seg_id, label_value=1,
             centroid_x=10, centroid_y=10,

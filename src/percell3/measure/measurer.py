@@ -70,8 +70,16 @@ class Measurer:
             if cells_df.empty:
                 return 0
 
+        # Resolve segmentation run
+        if segmentation_run_id is None:
+            seg_runs = store.list_segmentation_runs(fov_id)
+            if not seg_runs:
+                logger.info("No segmentation runs for fov_id=%d — skipping", fov_id)
+                return 0
+            segmentation_run_id = seg_runs[0].id
+
         # Read label image once
-        labels = store.read_labels(fov_id)
+        labels = store.read_labels(fov_id, segmentation_run_id)
 
         all_records: list[MeasurementRecord] = []
 
@@ -96,6 +104,7 @@ class Measurer:
         fov_id: int,
         channel: str,
         metrics: list[str] | None = None,
+        segmentation_run_id: int | None = None,
     ) -> list[MeasurementRecord]:
         """Measure specific cells on a specific channel (preview, no DB write).
 
@@ -105,6 +114,7 @@ class Measurer:
             fov_id: FOV database ID.
             channel: Channel name.
             metrics: Metric names (default: all).
+            segmentation_run_id: Which segmentation to use (default: latest).
 
         Returns:
             List of MeasurementRecords (not written to DB).
@@ -119,7 +129,12 @@ class Measurer:
         if cells_df.empty:
             return []
 
-        labels = store.read_labels(fov_id)
+        if segmentation_run_id is None:
+            seg_runs = store.list_segmentation_runs(fov_id)
+            if not seg_runs:
+                return []
+            segmentation_run_id = seg_runs[0].id
+        labels = store.read_labels(fov_id, segmentation_run_id)
         ch_info = store.get_channel(channel)
         image = store.read_image_numpy(fov_id, channel)
 
@@ -136,6 +151,7 @@ class Measurer:
         threshold_run_id: int,
         scopes: list[str],
         metrics: list[str] | None = None,
+        segmentation_run_id: int | None = None,
     ) -> int:
         """Measure cells using a threshold mask to define inside/outside regions.
 
@@ -171,8 +187,15 @@ class Measurer:
             logger.info("No cells found for fov_id=%d — skipping", fov_id)
             return 0
 
-        labels = store.read_labels(fov_id)
-        thresh_mask = store.read_mask(fov_id, threshold_channel)
+        # Resolve segmentation run
+        if segmentation_run_id is None:
+            seg_runs = store.list_segmentation_runs(fov_id)
+            if not seg_runs:
+                return 0
+            segmentation_run_id = seg_runs[0].id
+
+        labels = store.read_labels(fov_id, segmentation_run_id)
+        thresh_mask = store.read_mask(fov_id, threshold_channel, threshold_run_id)
         # Normalize mask to boolean (stored as uint8 0/255)
         thresh_bool = thresh_mask > 0
 

@@ -69,6 +69,7 @@ class ParticleAnalyzer:
         channel: str,
         threshold_run_id: int,
         cell_ids: list[int],
+        segmentation_run_id: int | None = None,
     ) -> ParticleAnalysisResult:
         """Analyze particles within threshold mask for cells in a FOV.
 
@@ -94,8 +95,14 @@ class ParticleAnalyzer:
         from skimage.measure import regionprops
 
         # Read data
-        labels = store.read_labels(fov_id)
-        threshold_mask = store.read_mask(fov_id, channel)
+        if segmentation_run_id is None:
+            # Legacy fallback: use the first seg run on this FOV
+            seg_runs = store.list_segmentation_runs(fov_id)
+            if not seg_runs:
+                raise ValueError(f"No segmentation runs found for FOV {fov_id}")
+            segmentation_run_id = seg_runs[0].id
+        labels = store.read_labels(fov_id, segmentation_run_id)
+        threshold_mask = store.read_mask(fov_id, channel, threshold_run_id)
         channel_image = store.read_image_numpy(fov_id, channel)
 
         # Convert mask: uint8 (0/255) -> bool
@@ -140,7 +147,7 @@ class ParticleAnalyzer:
             if not np.any(particle_mask):
                 # No particles — record zero counts
                 all_summaries.extend(
-                    self._zero_summaries(cell_id, channel_id)
+                    self._zero_summaries(cell_id, channel_id, threshold_run_id)
                 )
                 continue
 
@@ -209,7 +216,7 @@ class ParticleAnalyzer:
 
             # Per-cell summaries
             all_summaries.extend(
-                self._cell_summaries(cell_id, channel_id, cell_particles, cell_area)
+                self._cell_summaries(cell_id, channel_id, cell_particles, cell_area, threshold_run_id)
             )
 
         return ParticleAnalysisResult(
@@ -222,18 +229,18 @@ class ParticleAnalyzer:
         )
 
     def _zero_summaries(
-        self, cell_id: int, channel_id: int,
+        self, cell_id: int, channel_id: int, threshold_run_id: int,
     ) -> list[MeasurementRecord]:
         """Create summary measurements for a cell with no particles."""
         return [
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_count", value=0.0),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_area", value=0.0),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_area", value=0.0),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="max_particle_area", value=0.0),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_coverage_fraction", value=0.0),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_mean_intensity", value=0.0),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_integrated_intensity", value=0.0),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_integrated_intensity", value=0.0),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_count", value=0.0, threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_area", value=0.0, threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_area", value=0.0, threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="max_particle_area", value=0.0, threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_coverage_fraction", value=0.0, threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_mean_intensity", value=0.0, threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_integrated_intensity", value=0.0, threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_integrated_intensity", value=0.0, threshold_run_id=threshold_run_id),
         ]
 
     def _cell_summaries(
@@ -242,10 +249,11 @@ class ParticleAnalyzer:
         channel_id: int,
         particles: list[ParticleRecord],
         cell_area: float,
+        threshold_run_id: int,
     ) -> list[MeasurementRecord]:
         """Create summary measurements for a cell's particles."""
         if not particles:
-            return self._zero_summaries(cell_id, channel_id)
+            return self._zero_summaries(cell_id, channel_id, threshold_run_id)
 
         # Store areas in pixels (converted to um2 at export time)
         areas = [p.area_pixels for p in particles]
@@ -256,12 +264,12 @@ class ParticleAnalyzer:
         intensities_integ = [p.integrated_intensity for p in particles if p.integrated_intensity is not None]
 
         return [
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_count", value=float(len(particles))),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_area", value=float(total_area)),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_area", value=float(np.mean(areas))),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="max_particle_area", value=float(max(areas))),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_coverage_fraction", value=float(coverage)),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_mean_intensity", value=float(np.mean(intensities_mean)) if intensities_mean else 0.0),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_integrated_intensity", value=float(np.mean(intensities_integ)) if intensities_integ else 0.0),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_integrated_intensity", value=float(sum(intensities_integ)) if intensities_integ else 0.0),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_count", value=float(len(particles)), threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_area", value=float(total_area), threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_area", value=float(np.mean(areas)), threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="max_particle_area", value=float(max(areas)), threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_coverage_fraction", value=float(coverage), threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_mean_intensity", value=float(np.mean(intensities_mean)) if intensities_mean else 0.0, threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_integrated_intensity", value=float(np.mean(intensities_integ)) if intensities_integ else 0.0, threshold_run_id=threshold_run_id),
+            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_integrated_intensity", value=float(sum(intensities_integ)) if intensities_integ else 0.0, threshold_run_id=threshold_run_id),
         ]

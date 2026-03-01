@@ -92,6 +92,14 @@ class TestEstimateBackgroundGaussian:
         _, info = estimate_background_gaussian(data, n_bins=100)
         assert len(info["hist"]) == 100
 
+    def test_returns_float_from_bin_center(self) -> None:
+        """Background estimate is the Gaussian peak bin center (a float)."""
+        rng = np.random.default_rng(42)
+        data = rng.poisson(lam=50, size=1000).astype(np.float64)
+        bg_value, _ = estimate_background_gaussian(data)
+        assert isinstance(bg_value, float)
+        assert bg_value > 0
+
 
 # ---------------------------------------------------------------------------
 # compute_background_ring

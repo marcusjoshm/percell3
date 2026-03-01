@@ -35,8 +35,6 @@ def prism_experiment(tmp_path: Path) -> ExperimentStore:
     store.add_condition("HS")
     store.add_bio_rep("N2")  # N1 is auto-created
 
-    # Segmentation run
-    seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
     dapi_ch = store.get_channel("DAPI")
     gfp_ch = store.get_channel("GFP")
 
@@ -56,6 +54,11 @@ def prism_experiment(tmp_path: Path) -> ExperimentStore:
                 )
                 store.write_image(fov_id, "DAPI", img)
                 store.write_image(fov_id, "GFP", img)
+
+                # Per-FOV segmentation run
+                seg_id = store.add_segmentation_run(
+                    fov_id=fov_id, channel="DAPI", model_name="cyto3",
+                )
 
                 # Different cell counts: Control gets 3 cells/FOV, HS gets 2
                 n_cells = 3 if cond == "Control" else 2

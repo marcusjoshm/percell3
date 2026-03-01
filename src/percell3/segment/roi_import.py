@@ -94,7 +94,8 @@ class RoiImporter:
         fov_info = store.get_fov_by_id(fov_id)
 
         run_id = store.add_segmentation_run(
-            channel, source, {"source": source, "imported": True}
+            fov_id=fov_id, channel=channel, model_name=source,
+            parameters={"source": source, "imported": True},
         )
 
         store_labels_and_cells(store, labels_int32, fov_info, run_id)
@@ -155,7 +156,10 @@ class RoiImporter:
         if "model_path" in seg_data:
             params["model_path"] = str(seg_data["model_path"])
 
-        run_id = store.add_segmentation_run(channel, "cellpose-gui", params)
+        run_id = store.add_segmentation_run(
+            fov_id=fov_id, channel=channel, model_name="cellpose-gui",
+            parameters=params,
+        )
 
         store_labels_and_cells(store, masks, fov_info, run_id)
         return run_id

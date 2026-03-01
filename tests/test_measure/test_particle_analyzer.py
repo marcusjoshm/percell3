@@ -30,7 +30,7 @@ def particle_experiment(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP", role="signal")
     store.add_condition("control")
     fov_id = store.add_fov("control", width=64, height=64, pixel_size_um=0.5)
-    seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
+    seg_id = store.add_segmentation_run(fov_id=fov_id, channel="DAPI", model_name="cyto3")
 
     # Label image
     labels = np.zeros((64, 64), dtype=np.int32)
@@ -54,7 +54,7 @@ def particle_experiment(tmp_path: Path) -> ExperimentStore:
     mask[8:14, 8:14] = True   # Blob A
     mask[16:22, 16:22] = True # Blob B
     mask[40:48, 40:48] = True # Blob in cell 2
-    thr_id = store.add_threshold_run(channel="GFP", method="otsu")
+    thr_id = store.add_threshold_run(fov_id=fov_id, channel="GFP", method="otsu")
     store.write_mask(fov_id, "GFP", mask.astype(np.uint8), thr_id)
 
     # Cells
@@ -79,6 +79,7 @@ def particle_experiment(tmp_path: Path) -> ExperimentStore:
 
     # Store test data on fixture
     store._test_fov_id = fov_id
+    store._test_seg_id = seg_id
     store._test_cell_ids = cell_ids
     store._test_thr_id = thr_id
 
@@ -97,6 +98,7 @@ class TestParticleAnalyzer:
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
             threshold_run_id=thr_id, cell_ids=cell_ids,
+            segmentation_run_id=store._test_seg_id,
         )
 
         assert isinstance(result, ParticleAnalysisResult)
@@ -111,6 +113,7 @@ class TestParticleAnalyzer:
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
+            segmentation_run_id=store._test_seg_id,
         )
 
         # Check particle attributes
@@ -132,6 +135,7 @@ class TestParticleAnalyzer:
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
+            segmentation_run_id=store._test_seg_id,
         )
 
         label_vals = [p.label_value for p in result.particles]
@@ -144,6 +148,7 @@ class TestParticleAnalyzer:
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
+            segmentation_run_id=store._test_seg_id,
         )
 
         pli = result.particle_label_image
@@ -160,6 +165,7 @@ class TestParticleAnalyzer:
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
+            segmentation_run_id=store._test_seg_id,
         )
 
         # 3 cells * 8 metrics = 24 summary measurements
@@ -178,6 +184,7 @@ class TestParticleAnalyzer:
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=cell_ids,
+            segmentation_run_id=store._test_seg_id,
         )
 
         # Find summary for cell 3
@@ -195,6 +202,7 @@ class TestParticleAnalyzer:
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
+            segmentation_run_id=store._test_seg_id,
         )
         assert result.total_particles == 0
 
@@ -207,6 +215,7 @@ class TestParticleAnalyzer:
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=cell_ids,
+            segmentation_run_id=store._test_seg_id,
         )
 
         cell1_particles = [p for p in result.particles if p.cell_id == cell_ids[0]]
@@ -223,6 +232,7 @@ class TestParticleAnalyzer:
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=cell_ids,
+            segmentation_run_id=store._test_seg_id,
         )
 
         # Cell 1: area=400 (20x20), 2 blobs of ~36 pixels each
@@ -243,6 +253,7 @@ class TestParticleAnalyzer:
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
             threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
+            segmentation_run_id=store._test_seg_id,
         )
 
         for p in result.particles:

@@ -102,6 +102,7 @@ def launch_threshold_viewer(
     group_name: str,
     fov_name: str,
     initial_threshold: float | None = None,
+    gaussian_sigma: float | None = None,
 ) -> ThresholdDecision:
     """Open napari with live threshold preview for a cell group.
 
@@ -110,12 +111,17 @@ def launch_threshold_viewer(
     - Threshold preview overlay (updates live with ROI changes)
     - Dock widget with Accept/Skip/Skip Remaining buttons
 
+    When ``gaussian_sigma`` is set, the viewer displays the smoothed image
+    so the visual preview matches the threshold computation.
+
     Args:
         group_image: 2D image with non-group cells zeroed.
         cell_mask: Boolean mask of group cell pixels.
         group_name: Display name (e.g., "g1 (mean=52.3)").
         fov_name: FOV name for display.
         initial_threshold: Pre-computed Otsu value (or None to compute).
+        gaussian_sigma: Gaussian smoothing sigma. If set, the displayed
+            image is smoothed to match the threshold computation.
 
     Returns:
         ThresholdDecision with accepted=True/False, threshold value, and ROI.
@@ -132,10 +138,17 @@ def launch_threshold_viewer(
             "Set DISPLAY or WAYLAND_DISPLAY."
         )
 
+    # Apply Gaussian smoothing so the displayed image matches the threshold
+    from percell3.measure.thresholding import apply_gaussian_smoothing
+
+    display_image = apply_gaussian_smoothing(group_image, gaussian_sigma)
+
     # Compute initial threshold if not provided
     if initial_threshold is None:
         try:
-            initial_threshold = compute_masked_otsu(group_image, cell_mask)
+            initial_threshold = compute_masked_otsu(
+                group_image, cell_mask, gaussian_sigma=gaussian_sigma,
+            )
         except ValueError:
             initial_threshold = 0.0
 
@@ -150,13 +163,13 @@ def launch_threshold_viewer(
         title=f"Threshold QC \u2014 {fov_name} / {group_name}",
     )
 
-    # Add image layer
-    viewer.add_image(group_image, name="group_image", colormap="gray")
+    # Add image layer (smoothed when gaussian_sigma is set)
+    viewer.add_image(display_image, name="group_image", colormap="gray")
 
     # Add threshold preview (yellow colormap)
     from napari.utils.colormaps import DirectLabelColormap
 
-    preview = (group_image > initial_threshold) & cell_mask
+    preview = (display_image > initial_threshold) & cell_mask
     yellow_cmap = DirectLabelColormap(
         color_dict={0: "transparent", 1: "yellow", None: "transparent"},
     )
@@ -178,13 +191,16 @@ def launch_threshold_viewer(
         """Recompute Otsu and update preview layer."""
         roi_rects = _extract_rois(shapes_layer)
         try:
-            thresh = compute_masked_otsu(group_image, cell_mask, roi=roi_rects or None)
+            thresh = compute_masked_otsu(
+                group_image, cell_mask, roi=roi_rects or None,
+                gaussian_sigma=gaussian_sigma,
+            )
         except ValueError:
             thresh = state["threshold"]
 
         state["threshold"] = thresh
         state["roi"] = roi_rects or None
-        new_preview = (group_image > thresh) & cell_mask
+        new_preview = (display_image > thresh) & cell_mask
         preview_layer.data = new_preview.astype(np.int32)
 
     def _extract_rois(shapes_lyr) -> list[tuple[int, int, int, int]]:
@@ -218,7 +234,7 @@ def launch_threshold_viewer(
 
     def _refresh_label() -> None:
         thresh_label.setText(f"Threshold: {state['threshold']:.1f}")
-        positive = np.sum((group_image > state["threshold"]) & cell_mask)
+        positive = np.sum((display_image > state["threshold"]) & cell_mask)
         total = np.sum(cell_mask)
         frac = positive / total if total > 0 else 0
         info_label.setText(

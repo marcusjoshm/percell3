@@ -155,6 +155,42 @@ class TestBuildSurface:
         assert faces.min() >= 0
         assert faces.max() < n_verts
 
+    def test_log_z_compresses_dynamic_range(self) -> None:
+        """log_z=True compresses the Z range compared to linear."""
+        height = np.array(
+            [[1, 10], [100, 1000]], dtype=np.float32,
+        )
+        color = np.zeros((2, 2), dtype=np.float32)
+
+        verts_lin, _, _ = build_surface(height, color, z_scale=1.0, log_z=False)
+        verts_log, _, _ = build_surface(height, color, z_scale=1.0, log_z=True)
+
+        # Both should normalize to [0, 1] * z_scale, but the distribution differs.
+        # In log mode, the lower values get proportionally higher Z values,
+        # so the standard deviation of Z should be larger (less concentrated at 0).
+        z_lin = verts_lin[:, 2]
+        z_log = verts_log[:, 2]
+
+        # Both span [0, z_scale]
+        assert z_lin.max() == pytest.approx(1.0, abs=1e-5)
+        assert z_log.max() == pytest.approx(1.0, abs=1e-5)
+
+        # Log compresses: the minimum non-zero value should be higher in log
+        nonzero_lin = z_lin[z_lin > 0].min()
+        nonzero_log = z_log[z_log > 0].min()
+        assert nonzero_log > nonzero_lin
+
+    def test_log_z_handles_zeros(self) -> None:
+        """log_z=True works with zero values (log1p(0) = 0)."""
+        height = np.array([[0, 100], [0, 100]], dtype=np.float32)
+        color = np.zeros((2, 2), dtype=np.float32)
+
+        verts, _, _ = build_surface(height, color, log_z=True)
+        assert np.all(np.isfinite(verts))
+        # Zero stays at zero after log1p
+        z = verts[:, 2]
+        assert z.min() == pytest.approx(0.0)
+
     def test_vertex_row_col_coordinates(self) -> None:
         """Vertex row/col values span the expected grid range."""
         H, W = 5, 7

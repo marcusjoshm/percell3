@@ -328,7 +328,8 @@ class CellposeWidget:
                 run_params["nucleus_channel"] = params["nucleus_channel"]
 
             run_id = self._store.add_segmentation_run(
-                params["primary_channel"], params["model_name"], run_params,
+                fov_id=fov_info.id, channel=params["primary_channel"],
+                model_name=params["model_name"], parameters=run_params,
             )
 
             cell_count = store_labels_and_cells(

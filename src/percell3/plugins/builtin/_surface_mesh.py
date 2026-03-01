@@ -16,6 +16,7 @@ def build_surface(
     color: np.ndarray,
     z_scale: float = 50.0,
     sigma: float = 0.0,
+    log_z: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build napari Surface tuple from two 2D arrays.
 
@@ -24,6 +25,7 @@ def build_surface(
         color: (H, W) array whose intensity defines vertex color values.
         z_scale: Vertical exaggeration factor applied to normalized height.
         sigma: Gaussian smoothing sigma for the height channel (0 = none).
+        log_z: If True, apply log1p transform to height before normalization.
 
     Returns:
         Tuple of (vertices, faces, values) for ``viewer.add_surface()``:
@@ -58,6 +60,10 @@ def build_surface(
     # Smooth before mesh construction
     if sigma > 0:
         h = gaussian_filter(h, sigma=sigma)
+
+    # Log transform (log1p handles zeros gracefully)
+    if log_z:
+        h = np.log1p(h)
 
     # Normalize to [0, 1]
     h_min, h_max = h.min(), h.max()

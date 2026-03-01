@@ -208,8 +208,20 @@ def copy_mask_to_fov(
     """
     from percell3.measure.particle_analyzer import ParticleAnalyzer
 
+    # Resolve latest threshold run for source FOV + channel
+    all_thr_runs = store.get_threshold_runs()
+    source_thr_runs = [
+        tr for tr in all_thr_runs
+        if tr.channel == channel and tr.fov_id == source_fov_id
+    ]
+    if not source_thr_runs:
+        raise KeyError(
+            f"No threshold run for channel '{channel}' on FOV {source_fov_id}"
+        )
+    source_thr_id = source_thr_runs[-1].id
+
     # Read source mask (raises KeyError if none exists)
-    source_mask = store.read_mask(source_fov_id, channel)
+    source_mask = store.read_mask(source_fov_id, channel, source_thr_id)
 
     # Validate dimensions match target FOV
     target_info = store.get_fov_by_id(target_fov_id)
@@ -225,7 +237,10 @@ def copy_mask_to_fov(
         "method": "mask_copy",
         "source_fov_id": source_fov_id,
     }
-    run_id = store.add_threshold_run(channel, "mask_copy", parameters)
+    run_id = store.add_threshold_run(
+        fov_id=target_fov_id, channel=channel,
+        method="mask_copy", parameters=parameters,
+    )
 
     # Write mask (handles stale particle cleanup automatically)
     store.write_mask(target_fov_id, channel, source_mask, run_id)
@@ -245,7 +260,7 @@ def copy_mask_to_fov(
         if result.summary_measurements:
             store.add_measurements(result.summary_measurements)
         store.write_particle_labels(
-            target_fov_id, channel, result.particle_label_image,
+            target_fov_id, channel, result.particle_label_image, run_id,
         )
         particle_count = result.total_particles
 

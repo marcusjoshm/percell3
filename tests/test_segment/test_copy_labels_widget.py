@@ -40,7 +40,10 @@ def _create_experiment_with_labels(tmp_path: Path) -> tuple[ExperimentStore, int
 
     from percell3.segment.roi_import import store_labels_and_cells
 
-    seg_run_id = store.add_segmentation_run("DAPI", "mock", {"diameter": 30.0})
+    seg_run_id = store.add_segmentation_run(
+        fov_id=fov_id, channel="DAPI", model_name="mock",
+        parameters={"diameter": 30.0},
+    )
     store_labels_and_cells(store, labels, store.get_fov_by_id(fov_id), seg_run_id)
 
     return store, fov_id
@@ -87,8 +90,11 @@ class TestCopyLabelsToFov:
         )
 
         # Verify labels were actually written
-        target_labels = store.read_labels(target_fov_id)
-        source_labels = store.read_labels(source_fov_id)
+        # Resolve run IDs for reading labels
+        src_seg = store.list_segmentation_runs(source_fov_id)
+        tgt_seg = store.list_segmentation_runs(target_fov_id)
+        target_labels = store.read_labels(target_fov_id, tgt_seg[-1].id)
+        source_labels = store.read_labels(source_fov_id, src_seg[-1].id)
         np.testing.assert_array_equal(target_labels, source_labels)
         assert cell_count == 2
 
@@ -133,7 +139,10 @@ class TestCopyLabelsToFov:
 
         from percell3.segment.roi_import import store_labels_and_cells
 
-        old_run_id = store.add_segmentation_run("DAPI", "mock", {})
+        old_run_id = store.add_segmentation_run(
+            fov_id=target_fov_id, channel="DAPI", model_name="mock",
+            parameters={},
+        )
         store_labels_and_cells(
             store, old_labels, store.get_fov_by_id(target_fov_id), old_run_id,
         )
@@ -145,8 +154,10 @@ class TestCopyLabelsToFov:
 
         assert cell_count == 2
         # Labels should now match source
-        target_labels = store.read_labels(target_fov_id)
-        source_labels = store.read_labels(source_fov_id)
+        tgt_seg = store.list_segmentation_runs(target_fov_id)
+        src_seg = store.list_segmentation_runs(source_fov_id)
+        target_labels = store.read_labels(target_fov_id, tgt_seg[-1].id)
+        source_labels = store.read_labels(source_fov_id, src_seg[-1].id)
         np.testing.assert_array_equal(target_labels, source_labels)
 
     def test_segmentation_run_provenance(self, tmp_path: Path) -> None:
@@ -163,6 +174,6 @@ class TestCopyLabelsToFov:
         )
 
         # Find the run we just created
-        runs = store.get_segmentation_runs()
-        new_run = next(r for r in runs if r["id"] == run_id)
-        assert new_run["model_name"] == "label_copy"
+        runs = store.list_segmentation_runs(target_fov_id)
+        new_run = next(r for r in runs if r.id == run_id)
+        assert new_run.model_name == "label_copy"

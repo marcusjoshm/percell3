@@ -190,8 +190,14 @@ def copy_labels_to_fov(
     """
     from percell3.segment.roi_import import store_labels_and_cells
 
+    # Resolve source segmentation run to read labels
+    src_seg_runs = store.list_segmentation_runs(source_fov_id)
+    if not src_seg_runs:
+        raise KeyError(f"No segmentation runs for source FOV {source_fov_id}")
+    src_seg_run_id = src_seg_runs[-1].id
+
     # Read source labels (raises KeyError if none exist)
-    source_labels = store.read_labels(source_fov_id)
+    source_labels = store.read_labels(source_fov_id, src_seg_run_id)
 
     # Validate dimensions match target FOV
     target_info = store.get_fov_by_id(target_fov_id)
@@ -207,7 +213,10 @@ def copy_labels_to_fov(
         "method": "label_copy",
         "source_fov_id": source_fov_id,
     }
-    run_id = store.add_segmentation_run(channel, "label_copy", parameters)
+    run_id = store.add_segmentation_run(
+        fov_id=target_fov_id, channel=channel,
+        model_name="label_copy", parameters=parameters,
+    )
 
     # Write labels and extract cells
     cell_count = store_labels_and_cells(

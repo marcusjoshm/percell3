@@ -97,13 +97,18 @@ class TestSegmentationEngine:
         assert result.fovs_processed == 2
         assert result.cell_count > 0
 
-        # Verify labels in zarr
+        # Verify labels in zarr — per-FOV runs, find run IDs from fov_stats
         fov_id1, fov_id2 = store._fov_ids
-        labels_1 = store.read_labels(fov_id1)
+        runs1 = store.list_segmentation_runs(fov_id1)
+        runs2 = store.list_segmentation_runs(fov_id2)
+        assert len(runs1) == 1
+        assert len(runs2) == 1
+
+        labels_1 = store.read_labels(fov_id1, runs1[0].id)
         assert labels_1.shape == (128, 128)
         assert labels_1.dtype == np.int32
 
-        labels_2 = store.read_labels(fov_id2)
+        labels_2 = store.read_labels(fov_id2, runs2[0].id)
         assert labels_2.shape == (128, 128)
 
         # Verify cells in SQLite
@@ -154,7 +159,9 @@ class TestSegmentationEngine:
 
         assert result.fovs_processed == 1
         # Only the filtered FOV should have labels
-        labels = store.read_labels(fovs[0].id)
+        runs = store.list_segmentation_runs(fovs[0].id)
+        assert len(runs) == 1
+        labels = store.read_labels(fovs[0].id, runs[0].id)
         assert labels.max() > 0
 
     def test_condition_filtering(
@@ -184,23 +191,31 @@ class TestSegmentationEngine:
 
         # Labels should still be stored (all zeros)
         fov_id1 = store._fov_ids[0]
-        labels = store.read_labels(fov_id1)
+        runs = store.list_segmentation_runs(fov_id1)
+        assert len(runs) == 1
+        labels = store.read_labels(fov_id1, runs[0].id)
         assert labels.max() == 0
 
-    def test_resegmentation_replaces_cells(
+    def test_resegmentation_creates_new_runs(
         self, experiment_with_fovs: ExperimentStore
     ) -> None:
-        """Re-segmentation should create a new run_id and replace old cells."""
+        """Re-segmentation should create new per-FOV runs; old runs preserved."""
         store = experiment_with_fovs
         engine = SegmentationEngine(segmenter=MockSegmenter())
 
         result1 = engine.run(store, channel="DAPI")
         result2 = engine.run(store, channel="DAPI")
 
-        assert result2.run_id > result1.run_id
-        # Re-segmentation replaces old cells, so only run2's cells remain
+        # Each FOV now has 2 runs
+        fov_id1, fov_id2 = store._fov_ids
+        runs1 = store.list_segmentation_runs(fov_id1)
+        runs2 = store.list_segmentation_runs(fov_id2)
+        assert len(runs1) == 2
+        assert len(runs2) == 2
+
+        # Total cells = both runs' cells (old runs untouched)
         total_cells = store.get_cell_count()
-        assert total_cells == result2.cell_count
+        assert total_cells == result1.cell_count + result2.cell_count
 
     def test_cell_count_matches_db(
         self, experiment_with_fovs: ExperimentStore
@@ -249,12 +264,14 @@ class TestSegmentationEngine:
 
         result = engine.run(store, channel="DAPI", model="cyto3", diameter=60)
 
-        runs = store.get_segmentation_runs()
-        assert len(runs) >= 1
-        run = [r for r in runs if r["id"] == result.run_id][0]
-        assert run["model_name"] == "cyto3"
-        assert run["channel"] == "DAPI"
-        assert run["parameters"]["diameter"] == 60.0
+        # Per-FOV runs — check the last FOV's run
+        fov_id2 = store._fov_ids[1]
+        runs = store.list_segmentation_runs(fov_id2)
+        assert len(runs) == 1
+        run = runs[0]
+        assert run.model_name == "cyto3"
+        assert run.channel == "DAPI"
+        assert run.parameters["diameter"] == 60.0
 
     def test_elapsed_seconds_positive(
         self, experiment_with_fovs: ExperimentStore
@@ -270,15 +287,18 @@ class TestSegmentationEngine:
     def test_cell_count_updated_in_run(
         self, experiment_with_fovs: ExperimentStore
     ) -> None:
-        """Segmentation run cell_count should be updated after processing."""
+        """Each per-FOV segmentation run cell_count should be updated."""
         store = experiment_with_fovs
         engine = SegmentationEngine(segmenter=MockSegmenter())
 
         result = engine.run(store, channel="DAPI")
 
-        runs = store.get_segmentation_runs()
-        run = [r for r in runs if r["id"] == result.run_id][0]
-        assert run["cell_count"] == result.cell_count
+        # Each FOV's run should have its own cell_count
+        fov_id1, fov_id2 = store._fov_ids
+        runs1 = store.list_segmentation_runs(fov_id1)
+        runs2 = store.list_segmentation_runs(fov_id2)
+        total = runs1[0].cell_count + runs2[0].cell_count
+        assert total == result.cell_count
 
     def test_memory_error_propagates(
         self, experiment_with_fovs: ExperimentStore

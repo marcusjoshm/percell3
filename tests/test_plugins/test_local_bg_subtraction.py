@@ -37,8 +37,11 @@ def _create_bg_sub_experiment(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP")
     store.add_condition("control")
 
-    seg_run_id = store.add_segmentation_run("DAPI", "mock", {"diameter": 30.0})
     fov_id = store.add_fov("control", width=80, height=80, pixel_size_um=0.65)
+    seg_run_id = store.add_segmentation_run(
+        fov_id=fov_id, channel="DAPI", model_name="mock",
+        parameters={"diameter": 30.0},
+    )
 
     # DAPI image
     dapi = np.full((80, 80), 50, dtype=np.uint16)
@@ -80,7 +83,10 @@ def _create_bg_sub_experiment(tmp_path: Path) -> ExperimentStore:
     cell_ids = store.add_cells(cells)
 
     # Threshold run + mask + particle labels for GFP
-    tr_id = store.add_threshold_run("GFP", "otsu", {"threshold_value": 100.0})
+    tr_id = store.add_threshold_run(
+        fov_id=fov_id, channel="GFP", method="otsu",
+        parameters={"threshold_value": 100.0},
+    )
 
     # Binary threshold mask
     mask = np.zeros((80, 80), dtype=np.uint8)
@@ -92,7 +98,7 @@ def _create_bg_sub_experiment(tmp_path: Path) -> ExperimentStore:
     particle_labels = np.zeros((80, 80), dtype=np.int32)
     particle_labels[18:22, 18:22] = 1
     particle_labels[58:62, 58:62] = 2
-    store.write_particle_labels(fov_id, "GFP", particle_labels)
+    store.write_particle_labels(fov_id, "GFP", particle_labels, tr_id)
 
     store._test_fov_id = fov_id
     store._test_cell_ids = cell_ids
@@ -147,8 +153,10 @@ class TestLocalBGSubtractionValidation:
         store = ExperimentStore.create(tmp_path / "nothresh.percell")
         store.add_channel("GFP")
         store.add_condition("control")
-        seg_id = store.add_segmentation_run("GFP", "mock", {})
         fov_id = store.add_fov("control", width=32, height=32)
+        seg_id = store.add_segmentation_run(
+            fov_id=fov_id, channel="GFP", model_name="mock", parameters={},
+        )
         labels = np.zeros((32, 32), dtype=np.int32)
         labels[5:15, 5:15] = 1
         store.write_labels(fov_id, labels, seg_id)
@@ -282,7 +290,10 @@ class TestLocalBGSubtractionRun:
         store = _create_bg_sub_experiment(tmp_path)
 
         # Add a DAPI threshold run + mask for exclusion
-        tr_id = store.add_threshold_run("DAPI", "otsu", {"threshold_value": 40.0})
+        tr_id = store.add_threshold_run(
+            fov_id=store._test_fov_id, channel="DAPI", method="otsu",
+            parameters={"threshold_value": 40.0},
+        )
         excl_mask = np.zeros((80, 80), dtype=np.uint8)
         excl_mask[15:25, 15:25] = 255  # overlapping with cell 1 region
         store.write_mask(store._test_fov_id, "DAPI", excl_mask, tr_id)

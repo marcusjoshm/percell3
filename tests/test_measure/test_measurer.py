@@ -190,7 +190,10 @@ class TestMeasureFovMasked:
         store = measure_experiment
         fov_id = store._test_fov_ids["fov_1"]
         # Add a threshold run
-        run_id = store.add_threshold_run("GFP", "manual", {"value": 50.0})
+        run_id = store.add_threshold_run(
+            fov_id=fov_id, channel="GFP", method="manual",
+            parameters={"value": 50.0},
+        )
 
         # Create mask: top-left quadrant is True
         mask = np.zeros((64, 64), dtype=np.uint8)

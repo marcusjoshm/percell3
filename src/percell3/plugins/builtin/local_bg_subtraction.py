@@ -152,10 +152,10 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
         max_background = params.get("max_background")
         do_export_csv = params.get("export_csv", True)
 
-        # Find the most recent threshold run for the particle channel
-        threshold_runs = store.get_threshold_runs()
+        # Validate that at least one threshold run exists for the particle channel
+        all_threshold_runs = store.get_threshold_runs()
         particle_runs = [
-            tr for tr in threshold_runs if tr["channel"] == particle_channel
+            tr for tr in all_threshold_runs if tr.channel == particle_channel
         ]
         if not particle_runs:
             raise RuntimeError(
@@ -182,10 +182,20 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
         for fov_idx, fov_id in enumerate(fov_ids):
             fov_info = store.get_fov_by_id(fov_id)
 
+            # Resolve per-FOV run IDs
+            seg_runs = store.list_segmentation_runs(fov_id)
+            seg_run_id = seg_runs[0].id if seg_runs else None
+            fov_thr_runs = [tr for tr in particle_runs if tr.fov_id == fov_id]
+            thr_run_id = fov_thr_runs[-1].id if fov_thr_runs else None
+
+            if seg_run_id is None or thr_run_id is None:
+                warnings.append(f"Skipped FOV {fov_id}: missing seg or threshold run")
+                continue
+
             # Read images for this FOV
             try:
-                cell_labels = store.read_labels(fov_id)
-                particle_labels = store.read_particle_labels(fov_id, particle_channel)
+                cell_labels = store.read_labels(fov_id, seg_run_id)
+                particle_labels = store.read_particle_labels(fov_id, particle_channel, thr_run_id)
                 measurement_image = store.read_image_numpy(fov_id, meas_channel)
             except Exception as exc:
                 logger.warning(
@@ -214,8 +224,13 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
             exclusion_mask = None
             if exclusion_channel:
                 try:
-                    excl_raw = store.read_mask(fov_id, exclusion_channel)
-                    exclusion_mask = excl_raw > 0
+                    excl_thr_runs = [
+                        tr for tr in all_threshold_runs
+                        if tr.channel == exclusion_channel and tr.fov_id == fov_id
+                    ]
+                    if excl_thr_runs:
+                        excl_raw = store.read_mask(fov_id, exclusion_channel, excl_thr_runs[-1].id)
+                        exclusion_mask = excl_raw > 0
                 except Exception:
                     logger.debug(
                         "No exclusion mask for FOV %s channel %s, proceeding without",

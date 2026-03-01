@@ -1440,8 +1440,8 @@ class ExperimentStore:
             thr_id = df["threshold_run_id"].iloc[0]
             if thr_id is not None:
                 for run in self.get_threshold_runs():
-                    if run["id"] == int(thr_id):
-                        threshold_channel = run["channel"]
+                    if run.id == int(thr_id):
+                        threshold_channel = run.channel
                         break
 
         # Initialise result columns to 0
@@ -1468,8 +1468,14 @@ class ExperimentStore:
             except Exception:
                 continue
 
+            # Resolve per-FOV segmentation run to read labels
+            seg_runs = self.list_segmentation_runs(fov_id)
+            if not seg_runs:
+                continue
+            seg_run_id = seg_runs[0].id
+
             try:
-                labels = self.read_labels(fov_id)
+                labels = self.read_labels(fov_id, seg_run_id)
             except Exception:
                 continue
 
@@ -1477,8 +1483,15 @@ class ExperimentStore:
             threshold_mask = None
             if threshold_channel:
                 try:
-                    raw = self.read_mask(fov_id, threshold_channel)
-                    threshold_mask = raw > 0
+                    # Resolve threshold run for this FOV + channel
+                    fov_thr_runs = [
+                        tr for tr in self.get_threshold_runs()
+                        if tr.channel == threshold_channel and tr.fov_id == fov_id
+                    ]
+                    if fov_thr_runs:
+                        thr_run_id = fov_thr_runs[-1].id
+                        raw = self.read_mask(fov_id, threshold_channel, thr_run_id)
+                        threshold_mask = raw > 0
                 except Exception:
                     pass
 

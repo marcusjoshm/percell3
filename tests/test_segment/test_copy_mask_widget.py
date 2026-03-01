@@ -40,7 +40,10 @@ def _create_experiment_with_mask(tmp_path: Path) -> tuple[ExperimentStore, int]:
     # Write labels and cells
     labels = np.zeros((40, 40), dtype=np.int32)
     labels[5:25, 5:25] = 1  # One cell covering the mask region
-    seg_run_id = store.add_segmentation_run("DAPI", "mock", {"diameter": 30.0})
+    seg_run_id = store.add_segmentation_run(
+        fov_id=fov_id, channel="DAPI", model_name="mock",
+        parameters={"diameter": 30.0},
+    )
     store.write_labels(fov_id, labels, seg_run_id)
     store.delete_cells_for_fov(fov_id)
     cells = [
@@ -57,7 +60,10 @@ def _create_experiment_with_mask(tmp_path: Path) -> tuple[ExperimentStore, int]:
     store.update_segmentation_run_cell_count(seg_run_id, 1)
 
     # Write a threshold mask on GFP
-    tr_id = store.add_threshold_run("GFP", "otsu", {"threshold_value": 100.0})
+    tr_id = store.add_threshold_run(
+        fov_id=fov_id, channel="GFP", method="otsu",
+        parameters={"threshold_value": 100.0},
+    )
     mask = np.zeros((40, 40), dtype=np.uint8)
     mask[12:18, 12:18] = 255  # One bright region inside cell
     store.write_mask(fov_id, "GFP", mask, tr_id)
@@ -85,7 +91,10 @@ def _create_target_with_labels(
     # Same labels and cells as source
     labels = np.zeros((40, 40), dtype=np.int32)
     labels[5:25, 5:25] = 1
-    seg_run_id = store.add_segmentation_run("DAPI", "label_copy", {})
+    seg_run_id = store.add_segmentation_run(
+        fov_id=target_fov_id, channel="DAPI", model_name="label_copy",
+        parameters={},
+    )
     store.write_labels(target_fov_id, labels, seg_run_id)
     store.delete_cells_for_fov(target_fov_id)
     cells = [
@@ -122,9 +131,15 @@ class TestCopyMaskToFov:
         )
 
         assert run_id > 0
+        # Resolve source threshold run to read source mask
+        src_thr_runs = [
+            tr for tr in store.get_threshold_runs()
+            if tr.channel == "GFP" and tr.fov_id == source_fov_id
+        ]
+        src_thr_id = src_thr_runs[0].id
         # Verify mask was written to target
-        target_mask = store.read_mask(target_fov_id, "GFP")
-        source_mask = store.read_mask(source_fov_id, "GFP")
+        target_mask = store.read_mask(target_fov_id, "GFP", run_id)
+        source_mask = store.read_mask(source_fov_id, "GFP", src_thr_id)
         np.testing.assert_array_equal(target_mask, source_mask)
 
     def test_particles_extracted_after_copy(self, tmp_path: Path) -> None:
@@ -138,8 +153,14 @@ class TestCopyMaskToFov:
 
         assert particle_count > 0, "Particles should be extracted from copied mask"
 
+        # Resolve target threshold run for reading particle labels
+        tgt_thr_runs = [
+            tr for tr in store.get_threshold_runs()
+            if tr.channel == "GFP" and tr.fov_id == target_fov_id
+        ]
+        tgt_thr_id = tgt_thr_runs[-1].id
         # Verify particle label image exists
-        particle_labels = store.read_particle_labels(target_fov_id, "GFP")
+        particle_labels = store.read_particle_labels(target_fov_id, "GFP", tgt_thr_id)
         assert particle_labels.max() > 0, "Particle label image should have particles"
 
     def test_error_on_no_source_mask(self, tmp_path: Path) -> None:
@@ -174,16 +195,23 @@ class TestCopyMaskToFov:
         target_fov_id = _create_target_with_labels(store)
 
         # Give target its own mask first
-        old_tr_id = store.add_threshold_run("GFP", "manual", {})
+        old_tr_id = store.add_threshold_run(
+            fov_id=target_fov_id, channel="GFP", method="manual",
+            parameters={},
+        )
         old_mask = np.ones((40, 40), dtype=np.uint8) * 128
         store.write_mask(target_fov_id, "GFP", old_mask, old_tr_id)
 
         # Copy source mask to target
-        copy_mask_to_fov(store, source_fov_id, target_fov_id, "GFP")
+        new_run_id, _ = copy_mask_to_fov(store, source_fov_id, target_fov_id, "GFP")
 
         # Target should now have source's mask
-        target_mask = store.read_mask(target_fov_id, "GFP")
-        source_mask = store.read_mask(source_fov_id, "GFP")
+        target_mask = store.read_mask(target_fov_id, "GFP", new_run_id)
+        src_thr_runs = [
+            tr for tr in store.get_threshold_runs()
+            if tr.channel == "GFP" and tr.fov_id == source_fov_id
+        ]
+        source_mask = store.read_mask(source_fov_id, "GFP", src_thr_runs[0].id)
         np.testing.assert_array_equal(target_mask, source_mask)
 
     def test_threshold_run_provenance(self, tmp_path: Path) -> None:
@@ -196,8 +224,8 @@ class TestCopyMaskToFov:
         )
 
         runs = store.get_threshold_runs()
-        new_run = next(r for r in runs if r["id"] == run_id)
-        assert new_run["method"] == "mask_copy"
+        new_run = next(r for r in runs if r.id == run_id)
+        assert new_run.method == "mask_copy"
 
     def test_no_particles_without_cells(self, tmp_path: Path) -> None:
         """If target has no cells, mask is copied but particle count is 0."""
@@ -209,14 +237,18 @@ class TestCopyMaskToFov:
             display_name="empty_target",
         )
 
-        _, particle_count = copy_mask_to_fov(
+        run_id, particle_count = copy_mask_to_fov(
             store, source_fov_id, target_fov_id, "GFP",
         )
 
         assert particle_count == 0
         # Mask should still be written
-        target_mask = store.read_mask(target_fov_id, "GFP")
-        source_mask = store.read_mask(source_fov_id, "GFP")
+        target_mask = store.read_mask(target_fov_id, "GFP", run_id)
+        src_thr_runs = [
+            tr for tr in store.get_threshold_runs()
+            if tr.channel == "GFP" and tr.fov_id == source_fov_id
+        ]
+        source_mask = store.read_mask(source_fov_id, "GFP", src_thr_runs[0].id)
         np.testing.assert_array_equal(target_mask, source_mask)
 
     def test_min_particle_area_respected(self, tmp_path: Path) -> None:

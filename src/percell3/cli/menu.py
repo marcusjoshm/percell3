@@ -374,6 +374,8 @@ def _make_plugin_runner(registry, plugin_name: str):
     def handler(state: MenuState) -> None:
         if plugin_name == "local_bg_subtraction":
             _run_bg_subtraction(state, registry)
+        elif plugin_name == "split_halo_condensate_analysis":
+            _run_condensate_analysis(state, registry)
         else:
             # Generic plugin runner for future plugins
             _run_generic_plugin(state, registry, plugin_name)
@@ -434,7 +436,7 @@ def _run_bg_subtraction(state: MenuState, registry) -> None:
     # Step 2: Particle mask channel
     # Find channels with threshold runs (i.e., particle masks exist)
     threshold_runs = store.get_threshold_runs()
-    particle_channels = sorted({tr["channel"] for tr in threshold_runs})
+    particle_channels = sorted({tr.channel for tr in threshold_runs})
     if not particle_channels:
         console.print("\n[red]No particle masks found.[/red]")
         console.print("[dim]Run 'Grouped intensity thresholding' first to generate particle masks.[/dim]")
@@ -544,6 +546,176 @@ def _run_bg_subtraction(state: MenuState, registry) -> None:
         console.print(f"  CSV files exported:")
         for key, path in csv_outputs.items():
             condition = key.removeprefix("csv_")
+            console.print(f"    {condition}: {path}")
+    for w in result.warnings:
+        console.print(f"  [yellow]Warning: {w}[/yellow]")
+    console.print()
+
+
+def _run_condensate_analysis(state: MenuState, registry) -> None:
+    """Interactive handler for split-Halo condensate analysis plugin."""
+    store = state.require_experiment()
+
+    plugin = registry.get_plugin("split_halo_condensate_analysis")
+    errors = plugin.validate(store)
+    if errors:
+        console.print(f"\n[red]Cannot run condensate analysis:[/red]")
+        for e in errors:
+            console.print(f"  - {e}")
+        return
+
+    channels = store.get_channels()
+    ch_names = [ch.name for ch in channels]
+
+    # Step 1: Measurement channel
+    console.print("\n[bold]Step 1: Measurement Channel[/bold]")
+    console.print("  [dim]Select the channel to measure intensities from.[/dim]\n")
+    meas_channel = numbered_select_one(ch_names, "Measurement channel")
+
+    # Step 2: Particle mask channel
+    threshold_runs = store.get_threshold_runs()
+    particle_channels = sorted({tr.channel for tr in threshold_runs})
+    if not particle_channels:
+        console.print("\n[red]No particle masks found.[/red]")
+        console.print("[dim]Run 'Grouped intensity thresholding' first to generate particle masks.[/dim]")
+        return
+
+    console.print("\n[bold]Step 2: Particle Mask[/bold]")
+    console.print("  [dim]Select the thresholded particle mask defining granules.[/dim]\n")
+    particle_channel = numbered_select_one(particle_channels, "Particle mask")
+
+    # Step 3: Exclusion mask (optional)
+    other_particle_channels = [c for c in particle_channels if c != particle_channel]
+    exclusion_channel = None
+    if other_particle_channels:
+        console.print("\n[bold]Step 3: Exclusion Mask (optional)[/bold]")
+        console.print("  [dim]Exclude another mask's particles from the background ring.[/dim]\n")
+        choices = ["(none)"] + other_particle_channels
+        choice = numbered_select_one(choices, "Exclusion mask")
+        if choice != "(none)":
+            exclusion_channel = choice
+    else:
+        console.print("\n[bold]Step 3: Exclusion Mask[/bold]")
+        console.print("  [dim]No other particle masks available — skipping.[/dim]")
+
+    # Step 4: Ring dilation (granule BG ring)
+    console.print("\n[bold]Step 4: Granule Ring Dilation[/bold]")
+    console.print("  [dim]Dilation for background ring around each granule.[/dim]")
+    ring_str = menu_prompt("Ring dilation pixels", default="5")
+    try:
+        ring_dilation_pixels = int(ring_str)
+    except ValueError:
+        console.print("[yellow]Invalid number, using default of 5.[/yellow]")
+        ring_dilation_pixels = 5
+
+    # Step 5: Exclusion dilation (dilute phase exclusion zone)
+    console.print("\n[bold]Step 5: Dilute Phase Exclusion Dilation[/bold]")
+    console.print("  [dim]Dilation applied to particle mask to define the exclusion zone around granules.[/dim]")
+    excl_str = menu_prompt("Exclusion dilation pixels", default="5")
+    try:
+        exclusion_dilation_pixels = int(excl_str)
+    except ValueError:
+        console.print("[yellow]Invalid number, using default of 5.[/yellow]")
+        exclusion_dilation_pixels = 5
+
+    # Step 6: Normalization channel (optional)
+    console.print("\n[bold]Step 6: Normalization Channel (optional)[/bold]")
+    console.print("  [dim]Report mean intensity from another channel inside each particle/dilute region.[/dim]\n")
+    norm_choices = ["(none)"] + ch_names
+    norm_choice = numbered_select_one(norm_choices, "Normalization channel")
+    normalization_channel = None if norm_choice == "(none)" else norm_choice
+
+    # Step 7: Save derived images
+    console.print("\n[bold]Step 7: Save Derived Images[/bold]")
+    console.print("  [dim]Create condensed_phase and dilute_phase FOV images for surface plot visualization.[/dim]\n")
+    save_images = numbered_select_one(["Yes", "No"], "Save derived images?") == "Yes"
+
+    # Step 8: FOV selection
+    console.print("\n[bold]Step 8: Select FOVs[/bold]")
+    all_fovs = store.get_fovs()
+    seg_summary = store.get_fov_segmentation_summary()
+    fovs_with_cells = [f for f in all_fovs if seg_summary.get(f.id, (0, None))[0] > 0]
+
+    # Exclude any previously created derived FOVs
+    fovs_with_cells = [
+        f for f in fovs_with_cells
+        if not f.display_name.startswith(("condensed_phase_", "dilute_phase_"))
+    ]
+
+    if not fovs_with_cells:
+        console.print("[red]No FOVs with segmented cells.[/red]")
+        return
+
+    _show_fov_status_table(fovs_with_cells, seg_summary)
+    if len(fovs_with_cells) == 1:
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].display_name})[/dim]")
+        selected_fovs = fovs_with_cells
+    else:
+        selected_fovs = _select_fovs_from_table(fovs_with_cells)
+
+    cell_ids = []
+    for fov in selected_fovs:
+        cells_df = store.get_cells(fov_id=fov.id)
+        cell_ids.extend(cells_df["id"].tolist())
+
+    # Step 9: Confirmation
+    console.print(f"\n[bold]Condensate analysis settings:[/bold]")
+    console.print(f"  Measurement:          {meas_channel}")
+    console.print(f"  Particle mask:        {particle_channel}")
+    console.print(f"  Exclusion:            {exclusion_channel or '(none)'}")
+    console.print(f"  Ring dilation:        {ring_dilation_pixels} px")
+    console.print(f"  Exclusion dilation:   {exclusion_dilation_pixels} px")
+    console.print(f"  Normalization:        {normalization_channel or '(none)'}")
+    console.print(f"  Save derived images:  {'Yes' if save_images else 'No'}")
+    console.print(f"  FOVs:                 {len(selected_fovs)} selected")
+
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
+        console.print("[yellow]Condensate analysis cancelled.[/yellow]")
+        return
+
+    # Step 10: Run with progress
+    parameters = {
+        "measurement_channel": meas_channel,
+        "particle_channel": particle_channel,
+        "exclusion_channel": exclusion_channel,
+        "ring_dilation_pixels": ring_dilation_pixels,
+        "exclusion_dilation_pixels": exclusion_dilation_pixels,
+        "normalization_channel": normalization_channel,
+        "save_images": save_images,
+    }
+
+    with make_progress() as progress:
+        task = progress.add_task("Condensate analysis...", total=len(selected_fovs))
+
+        def on_progress(current, total, fov_name):
+            progress.update(task, total=total, completed=current,
+                            description=f"Processing {fov_name}")
+
+        result = registry.run_plugin(
+            "split_halo_condensate_analysis", store,
+            cell_ids=cell_ids, parameters=parameters,
+            progress_callback=on_progress,
+        )
+
+    # Step 11: Summary
+    console.print(f"\n[green]Condensate analysis complete[/green]")
+    console.print(f"  Cells processed: {result.cells_processed}")
+    console.print(f"  Particles measured: {result.measurements_written}")
+    granule_csvs = {
+        k: v for k, v in result.custom_outputs.items() if k.startswith("csv_granule_")
+    }
+    dilute_csvs = {
+        k: v for k, v in result.custom_outputs.items() if k.startswith("csv_dilute_")
+    }
+    if granule_csvs:
+        console.print(f"  Granule CSV files:")
+        for key, path in granule_csvs.items():
+            condition = key.removeprefix("csv_granule_")
+            console.print(f"    {condition}: {path}")
+    if dilute_csvs:
+        console.print(f"  Dilute phase CSV files:")
+        for key, path in dilute_csvs.items():
+            condition = key.removeprefix("csv_dilute_")
             console.print(f"    {condition}: {path}")
     for w in result.warnings:
         console.print(f"  [yellow]Warning: {w}[/yellow]")
@@ -1429,16 +1601,16 @@ def _measure_masked(store, channels, all_fovs, scopes: list[str]) -> None:
         return
 
     # Group threshold runs by channel, pick most recent per channel
-    runs_by_channel: dict[str, dict] = {}
+    runs_by_channel: dict[str, object] = {}
     for run in threshold_runs:
-        runs_by_channel[run["channel"]] = run  # last wins = most recent
+        runs_by_channel[run.channel] = run  # last wins = most recent
 
     # Select threshold channel
     thresh_channels = list(runs_by_channel.keys())
     console.print("\n[bold]Threshold channels available:[/bold]")
     threshold_channel = numbered_select_one(thresh_channels, "Threshold channel")
     selected_run = runs_by_channel[threshold_channel]
-    threshold_run_id = selected_run["id"]
+    threshold_run_id = selected_run.id
 
     # Select measurement channels
     ch_names = [ch.name for ch in channels]
@@ -1523,6 +1695,7 @@ def _threshold_fov(
     grouping_channel: str,
     grouping_metric: str,
     gaussian_sigma: float | None = None,
+    min_particle_area: int = 5,
 ) -> tuple[int, int]:
     """Run grouping + threshold QC + particle analysis for one FOV.
 
@@ -1533,6 +1706,7 @@ def _threshold_fov(
         grouping_channel: Channel used for GMM grouping metric.
         grouping_metric: Metric name for grouping (e.g. mean_intensity).
         gaussian_sigma: Optional Gaussian sigma for pre-threshold smoothing.
+        min_particle_area: Minimum particle area in pixels for filtering.
 
     Returns:
         (fovs_processed, total_particles) — 1 or 0 for fovs_processed.
@@ -1545,7 +1719,7 @@ def _threshold_fov(
 
     grouper = CellGrouper()
     engine = ThresholdEngine()
-    analyzer = ParticleAnalyzer()
+    analyzer = ParticleAnalyzer(min_particle_area=min_particle_area)
 
     fov_id = fov_info.id
     total_particles = 0
@@ -1571,7 +1745,9 @@ def _threshold_fov(
         console.print(f"    {tag}: {n_cells} cells (mean={mean:.1f})")
 
     # Read images and labels for this FOV
-    labels = store.read_labels(fov_id)
+    seg_runs = store.list_segmentation_runs(fov_id)
+    seg_run_id = seg_runs[0].id if seg_runs else None
+    labels = store.read_labels(fov_id, seg_run_id)
     image = store.read_image_numpy(fov_id, threshold_channel)
 
     accepted_groups: list[tuple[str, list[int], int]] = []  # (tag, cell_ids, run_id)
@@ -1625,6 +1801,7 @@ def _threshold_fov(
                 group_name=group_display,
                 fov_name=fov_info.display_name,
                 initial_threshold=initial_thresh,
+                gaussian_sigma=gaussian_sigma,
             )
         except (ImportError, RuntimeError) as exc:
             console.print(f"  [red]napari error:[/red] {exc}")
@@ -1662,7 +1839,7 @@ def _threshold_fov(
         accepted_groups.append((tag_name, group_cell_ids, result.threshold_run_id))
 
         # Accumulate this group's mask into the combined mask
-        group_written = store.read_mask(fov_id, threshold_channel)
+        group_written = store.read_mask(fov_id, threshold_channel, result.threshold_run_id)
         combined_mask |= (group_written > 0)
 
     # Write combined mask from all accepted groups
@@ -1714,6 +1891,7 @@ def _threshold_fov(
         store.write_particle_labels(
             fov_id, threshold_channel,
             combined_particle_labels,
+            last_run_id,
         )
     else:
         console.print(f"  [dim]No groups accepted — skipping particle analysis.[/dim]")
@@ -1814,12 +1992,27 @@ def _apply_threshold(state: MenuState) -> None:
             console.print(f"[red]Invalid sigma: {sigma_str}[/red]")
             return
 
+    # 5b. Minimum particle area
+    min_particle_area = 5
+    area_str = menu_prompt(
+        "Minimum particle area in pixels (blank = 5)", default="5",
+    )
+    try:
+        min_particle_area = int(area_str)
+        if min_particle_area < 1:
+            console.print("[red]Min area must be >= 1.[/red]")
+            return
+    except ValueError:
+        console.print(f"[red]Invalid number: {area_str}[/red]")
+        return
+
     # 6. Confirmation
     console.print(f"\n[bold]Thresholding settings:[/bold]")
     console.print(f"  Grouping:    {grouping_channel} / {grouping_metric}")
     console.print(f"  Threshold:   {threshold_channel} (Otsu)")
     if gaussian_sigma:
         console.print(f"  Smoothing:   Gaussian sigma={gaussian_sigma}")
+    console.print(f"  Min particle: {min_particle_area} px")
     console.print(f"  FOVs:        {len(selected_fovs)} selected")
 
     if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
@@ -1838,6 +2031,7 @@ def _apply_threshold(state: MenuState) -> None:
         processed, particles = _threshold_fov(
             store, fov_info, threshold_channel, grouping_channel, grouping_metric,
             gaussian_sigma=gaussian_sigma,
+            min_particle_area=min_particle_area,
         )
         fovs_processed += processed
         total_particles += particles
@@ -2150,6 +2344,7 @@ def _edit_menu(state: MenuState) -> None:
         MenuItem("3", "Rename FOV", "Rename a field of view", _rename_fov),
         MenuItem("4", "Rename channel", "Rename a channel", _rename_channel),
         MenuItem("5", "Rename bio-rep", "Rename a biological replicate", _rename_bio_rep),
+        MenuItem("6", "Delete FOV", "Remove FOV(s) and all associated data", _delete_fov),
     ], state).run()
     raise _MenuCancel()
 
@@ -2213,6 +2408,34 @@ def _rename_bio_rep(state: MenuState) -> None:
     new_name = menu_prompt(f"New name for '{old}'")
     store.rename_bio_rep(old, new_name)
     console.print(f"[green]Bio-rep '{old}' → '{new_name}'[/green]")
+
+
+def _delete_fov(state: MenuState) -> None:
+    """Interactively delete FOV(s) and all associated data."""
+    store = state.require_experiment()
+    fovs = store.get_fovs()
+    if not fovs:
+        console.print("[dim]No FOVs found.[/dim]")
+        return
+    fov_names = [f.display_name for f in fovs]
+    console.print(f"\n[bold]FOVs ({len(fov_names)}):[/bold]")
+    selected_names = numbered_select_many(fov_names, "FOVs to delete")
+    selected_fovs = [f for f in fovs if f.display_name in selected_names]
+
+    console.print(f"\n[yellow]This will permanently delete {len(selected_fovs)} FOV(s) "
+                  "and all associated cells, measurements, particles, and images.[/yellow]")
+    for f in selected_fovs:
+        console.print(f"  - {f.display_name}")
+
+    if numbered_select_one(["No", "Yes"], "\nConfirm deletion?") != "Yes":
+        console.print("[dim]Deletion cancelled.[/dim]")
+        return
+
+    for f in selected_fovs:
+        store.delete_fov(f.id)
+        console.print(f"  [red]Deleted:[/red] {f.display_name}")
+
+    console.print(f"\n[green]{len(selected_fovs)} FOV(s) deleted.[/green]")
 
 
 def _export_csv(state: MenuState) -> None:
@@ -2500,6 +2723,20 @@ def _particle_workflow(state: MenuState) -> None:
             console.print(f"[red]Invalid sigma: {sigma_str}[/red]")
             return
 
+    # --- Step 4b: Minimum particle area ---
+    wf_min_particle_area = 5
+    area_str = menu_prompt(
+        "Minimum particle area in pixels (blank = 5)", default="5",
+    )
+    try:
+        wf_min_particle_area = int(area_str)
+        if wf_min_particle_area < 1:
+            console.print("[red]Min area must be >= 1.[/red]")
+            return
+    except ValueError:
+        console.print(f"[red]Invalid number: {area_str}[/red]")
+        return
+
     # --- Step 5: Export directory ---
     console.print("\n[bold]Step 5: Export[/bold]")
     output_str = _prompt_path("Output directory for Prism export", mode="dir", title="Select Prism export directory")
@@ -2534,6 +2771,7 @@ def _particle_workflow(state: MenuState) -> None:
     console.print(f"  Threshold:      {', '.join(threshold_channels)} (Otsu)")
     if gaussian_sigma:
         console.print(f"  Smoothing:      Gaussian sigma={gaussian_sigma}")
+    console.print(f"  Min particle:   {wf_min_particle_area} px")
     console.print(f"  Grouping:       {grouping_channel} / {grouping_metric}")
     console.print(f"  Measurement:    all channels")
     console.print(f"  Export:         {out_dir} (Prism format)")
@@ -2644,6 +2882,7 @@ def _particle_workflow(state: MenuState) -> None:
             processed, particles = _threshold_fov(
                 store, fov_info, thr_channel, grouping_channel, grouping_metric,
                 gaussian_sigma=gaussian_sigma,
+                min_particle_area=wf_min_particle_area,
             )
             fovs_thresholded += processed
             total_particles += particles

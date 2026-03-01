@@ -40,7 +40,10 @@ def experiment_with_segmentation(tmp_path: Path) -> ExperimentStore:
     labels[10:30, 10:30] = 1  # Cell 1
     labels[35:55, 35:55] = 2  # Cell 2
 
-    run_id = store.add_segmentation_run("DAPI", "cpsam", {"model": "cpsam"})
+    run_id = store.add_segmentation_run(
+        fov_id=fov_id, channel="DAPI", model_name="cpsam",
+        parameters={"model": "cpsam"},
+    )
     store.write_labels(fov_id, labels, run_id)
 
     from percell3.segment.label_processor import extract_cells
@@ -188,12 +191,12 @@ class TestSaveEditedLabels:
         edited[35:55, 35:55] = 2
 
         fov_info = _get_fov_info(store)
-        save_edited_labels(
+        run_id = save_edited_labels(
             store, fov_info, edited,
             parent_run_id=1, channel="DAPI",
         )
 
-        read_back = store.read_labels(store._test_fov_id)
+        read_back = store.read_labels(store._test_fov_id, run_id)
         np.testing.assert_array_equal(read_back, edited)
 
     def test_cell_count_matches_unique_labels(
@@ -215,8 +218,8 @@ class TestSaveEditedLabels:
         )
 
         runs = experiment_with_segmentation.get_segmentation_runs()
-        new_run = [r for r in runs if r["id"] == run_id][0]
-        assert new_run["cell_count"] == 3
+        new_run = [r for r in runs if r.id == run_id][0]
+        assert new_run.cell_count == 3
 
     def test_cell_properties_correct(
         self, experiment_with_segmentation: ExperimentStore,
@@ -256,8 +259,8 @@ class TestSaveEditedLabels:
         )
 
         runs = experiment_with_segmentation.get_segmentation_runs()
-        new_run = [r for r in runs if r["id"] == run_id][0]
-        assert new_run["cell_count"] == 0
+        new_run = [r for r in runs if r.id == run_id][0]
+        assert new_run.cell_count == 0
 
     def test_provenance_metadata_stored(
         self, experiment_with_segmentation: ExperimentStore,
@@ -276,10 +279,10 @@ class TestSaveEditedLabels:
         )
 
         runs = experiment_with_segmentation.get_segmentation_runs()
-        new_run = [r for r in runs if r["id"] == run_id][0]
-        assert new_run["model_name"] == "napari_edit"
+        new_run = [r for r in runs if r.id == run_id][0]
+        assert new_run.model_name == "napari_edit"
 
-        params = new_run["parameters"]
+        params = new_run.parameters
         if isinstance(params, str):
             import json
             params = json.loads(params)
@@ -334,8 +337,8 @@ class TestSaveEditedLabels:
         )
 
         runs = experiment_no_segmentation.get_segmentation_runs()
-        new_run = [r for r in runs if r["id"] == run_id][0]
-        params = new_run["parameters"]
+        new_run = [r for r in runs if r.id == run_id][0]
+        params = new_run.parameters
         if isinstance(params, str):
             import json
             params = json.loads(params)

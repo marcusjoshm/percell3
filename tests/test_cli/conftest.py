@@ -55,9 +55,11 @@ def experiment_with_particles(experiment_with_data: ExperimentStore) -> Experime
     store = experiment_with_data
 
     # Add segmentation run and cells
-    seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
     fovs = store.get_fovs(condition="control")
     fov_id = fovs[0].id
+    seg_id = store.add_segmentation_run(
+        fov_id=fov_id, channel="DAPI", model_name="cyto3",
+    )
 
     cells = [
         CellRecord(
@@ -82,7 +84,9 @@ def experiment_with_particles(experiment_with_data: ExperimentStore) -> Experime
     store.add_measurements(measurements)
 
     # Add threshold run and particles
-    thr_id = store.add_threshold_run(channel="GFP", method="otsu")
+    thr_id = store.add_threshold_run(
+        fov_id=fov_id, channel="GFP", method="otsu",
+    )
 
     particles = [
         ParticleRecord(
@@ -175,13 +179,17 @@ def experiment_with_particle_images(tmp_path: Path) -> ExperimentStore:
     labels = np.zeros((64, 64), dtype=np.int32)
     labels[15:30, 5:20] = 1
     labels[30:45, 20:35] = 2
-    seg_id = store.add_segmentation_run(channel="DAPI", model_name="cyto3")
+    seg_id = store.add_segmentation_run(
+        fov_id=fov_id, channel="DAPI", model_name="cyto3",
+    )
     store.write_labels(fov_id, labels, seg_id)
 
     # Threshold mask — only the bright spot
     mask = np.zeros((64, 64), dtype=np.uint8)
     mask[18:26, 8:16] = 1
-    thr_id = store.add_threshold_run(channel="GFP", method="otsu")
+    thr_id = store.add_threshold_run(
+        fov_id=fov_id, channel="GFP", method="otsu",
+    )
     store.write_mask(fov_id, "GFP", mask, thr_id)
 
     # Cells

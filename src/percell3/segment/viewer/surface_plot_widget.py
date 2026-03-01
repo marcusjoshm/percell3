@@ -16,8 +16,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Curated colormap list — kept minimal per institutional learnings.
-_COLORMAPS = ["viridis", "plasma", "magma", "inferno", "turbo", "hot", "gray"]
+# Curated colormap list for surface plot visualization.
+_COLORMAPS = [
+    "viridis", "plasma", "magma", "inferno", "turbo", "hot", "gray",
+    "nipy_spectral", "Spectral", "rainbow", "coolwarm", "gnuplot", "jet", "cividis",
+]
 
 # Slider defaults
 _Z_SCALE_DEFAULT = 50
@@ -50,6 +53,7 @@ class SurfacePlotWidget:
         channel_names: list[str],
     ) -> None:
         from qtpy.QtWidgets import (
+            QCheckBox,
             QComboBox,
             QGroupBox,
             QHBoxLayout,
@@ -140,6 +144,11 @@ class SurfacePlotWidget:
         row.addWidget(self._sigma_slider)
         row.addWidget(self._sigma_label)
         param_layout.addLayout(row)
+
+        # Log Z-axis checkbox
+        self._log_z_checkbox = QCheckBox("Log scale Z-axis")
+        self._log_z_checkbox.stateChanged.connect(self._on_log_z_changed)
+        param_layout.addWidget(self._log_z_checkbox)
 
         param_group.setLayout(param_layout)
         layout.addWidget(param_group)
@@ -257,10 +266,11 @@ class SurfacePlotWidget:
 
         z_scale = float(self._z_slider.value())
         sigma = self._sigma_slider.value() * 0.1
+        log_z = self._log_z_checkbox.isChecked()
 
         try:
             vertices, faces, values = build_surface(
-                height_roi, color_roi, z_scale=z_scale, sigma=sigma,
+                height_roi, color_roi, z_scale=z_scale, sigma=sigma, log_z=log_z,
             )
         except ValueError as exc:
             self._status_label.setText(f"Mesh error: {exc}")
@@ -323,6 +333,12 @@ class SurfacePlotWidget:
             return
         self._rebuild_surface()
 
+    def _on_log_z_changed(self) -> None:
+        """Rebuild mesh with log/linear Z-axis on checkbox toggle."""
+        if self._surface_layer is None:
+            return
+        self._rebuild_surface()
+
     def _rebuild_surface(self) -> None:
         """Rebuild the mesh from cached ROI data with current parameters."""
         from percell3.plugins.builtin._surface_mesh import build_surface
@@ -332,6 +348,7 @@ class SurfacePlotWidget:
 
         z_scale = float(self._z_slider.value())
         sigma = self._sigma_slider.value() * 0.1
+        log_z = self._log_z_checkbox.isChecked()
 
         try:
             vertices, faces, values = build_surface(
@@ -339,6 +356,7 @@ class SurfacePlotWidget:
                 self._cached_color_roi,
                 z_scale=z_scale,
                 sigma=sigma,
+                log_z=log_z,
             )
         except ValueError:
             return

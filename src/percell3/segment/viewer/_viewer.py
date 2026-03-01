@@ -231,20 +231,20 @@ def _load_label_layer(
         The hash is a SHA-256 hex digest used for change detection without
         keeping a full copy of the label array in memory.
     """
-    runs = store.get_segmentation_runs()
+    runs = store.list_segmentation_runs(fov_id)
 
     # Pick the most recent run (highest id)
     parent_run_id: int | None = None
     seg_channel: str | None = None
     if runs:
-        latest = max(runs, key=lambda r: r["id"])
-        parent_run_id = latest["id"]
-        seg_channel = latest.get("channel")
+        latest = max(runs, key=lambda r: r.id)
+        parent_run_id = latest.id
+        seg_channel = latest.channel
 
     # Try to read existing labels
     original_hash: str | None = None
     try:
-        labels = store.read_labels(fov_id)
+        labels = store.read_labels(fov_id, parent_run_id)
         original_hash = hashlib.sha256(labels.tobytes()).hexdigest()
         viewer.add_labels(labels, name="segmentation", opacity=0.5)
     except KeyError:
@@ -267,18 +267,18 @@ def _load_mask_layers(
     fov_id: int,
 ) -> None:
     """Load threshold mask layers for channels that have threshold runs."""
-    runs = store.get_threshold_runs()
+    runs = store.get_threshold_runs(fov_id=fov_id)
     if not runs:
         return
 
     # One mask per unique channel (use the latest run for each)
-    channel_runs: dict[str, dict] = {}
+    channel_runs: dict[str, object] = {}
     for run in runs:
-        channel_runs[run["channel"]] = run
+        channel_runs[run.channel] = run
 
     for channel, run in channel_runs.items():
         try:
-            mask = store.read_mask(fov_id, channel)
+            mask = store.read_mask(fov_id, channel, run.id)
         except KeyError:
             continue
 
@@ -338,7 +338,10 @@ def save_edited_labels(
         "parent_run_id": parent_run_id,
         "channel": channel,
     }
-    run_id = store.add_segmentation_run(channel, "napari_edit", parameters)
+    run_id = store.add_segmentation_run(
+        fov_id=fov_info.id, channel=channel,
+        model_name="napari_edit", parameters=parameters,
+    )
 
     # Write labels, extract cells, update count
     try:

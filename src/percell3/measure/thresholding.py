@@ -110,7 +110,10 @@ class ThresholdEngine:
             parameters["manual_value"] = float(manual_value)
         if gaussian_sigma is not None and gaussian_sigma > 0:
             parameters["gaussian_sigma"] = float(gaussian_sigma)
-        run_id = store.add_threshold_run(channel, method, parameters)
+        run_id = store.add_threshold_run(
+            fov_id=fov_id, channel=channel, method=method,
+            parameters=parameters,
+        )
 
         # Write mask to masks.zarr
         store.write_mask(fov_id, channel, mask.astype(np.uint8), run_id)
@@ -191,7 +194,10 @@ class ThresholdEngine:
         if gaussian_sigma is not None and gaussian_sigma > 0:
             parameters["gaussian_sigma"] = float(gaussian_sigma)
 
-        run_id = store.add_threshold_run(channel, "otsu", parameters)
+        run_id = store.add_threshold_run(
+            fov_id=fov_id, channel=channel, method="otsu",
+            parameters=parameters,
+        )
 
         # Write mask
         store.write_mask(fov_id, channel, mask.astype(np.uint8), run_id)

@@ -19,24 +19,31 @@ def measure_experiment(tmp_path: Path) -> ExperimentStore:
         - Condition: "control"
         - FOVs: 2 FOVs (64x64)
         - Channels: "DAPI" (segmentation), "GFP" (measurement)
-        - Each FOV has a label image with 2 cells and corresponding cell records.
+        - Each FOV has its own segmentation run, label image, and 2 cell records.
 
     Cell 1: label=1, bbox (10,10,20,20) — filled with value 100 in GFP
     Cell 2: label=2, bbox (40,40,20,20) — filled with value 200 in GFP
 
     Access fov_ids via store._test_fov_ids dict (keyed "fov_1", "fov_2").
+    Access seg_run_ids via store._test_seg_ids dict (keyed "fov_1", "fov_2").
     """
     store = ExperimentStore.create(tmp_path / "test.percell")
     store.add_channel("DAPI", role="segmentation")
     store.add_channel("GFP")
     store.add_condition("control")
 
-    seg_run_id = store.add_segmentation_run("DAPI", "mock", {"diameter": 30.0})
-
     fov_ids = {}
+    seg_ids = {}
     for key in ("fov_1", "fov_2"):
         fov_id = store.add_fov("control", width=64, height=64, pixel_size_um=0.65)
         fov_ids[key] = fov_id
+
+        # Per-FOV segmentation run
+        seg_run_id = store.add_segmentation_run(
+            fov_id=fov_id, channel="DAPI", model_name="mock",
+            parameters={"diameter": 30.0},
+        )
+        seg_ids[key] = seg_run_id
 
         # DAPI image — uniform background
         dapi = np.full((64, 64), 50, dtype=np.uint16)
@@ -75,6 +82,7 @@ def measure_experiment(tmp_path: Path) -> ExperimentStore:
         store.add_cells(cells)
 
     store._test_fov_ids = fov_ids
+    store._test_seg_ids = seg_ids
     yield store
     store.close()
 
@@ -93,7 +101,9 @@ def single_fov_experiment(tmp_path: Path) -> ExperimentStore:
     store.write_image(fov_id, "GFP", image)
 
     # Labels
-    seg_run_id = store.add_segmentation_run("GFP", "mock", {})
+    seg_run_id = store.add_segmentation_run(
+        fov_id=fov_id, channel="GFP", model_name="mock", parameters={},
+    )
     labels = np.zeros((32, 32), dtype=np.int32)
     labels[5:15, 5:15] = 1
     store.write_labels(fov_id, labels, seg_run_id)

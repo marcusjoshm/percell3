@@ -62,9 +62,9 @@ class TestImportLabels:
         labels[10:40, 10:40] = 1
         labels[50:80, 50:80] = 2
 
-        importer.import_labels(labels, store, store._test_fov_id, channel="manual")
+        run_id = importer.import_labels(labels, store, store._test_fov_id, channel="manual")
 
-        stored = store.read_labels(store._test_fov_id)
+        stored = store.read_labels(store._test_fov_id, run_id)
         np.testing.assert_array_equal(stored, labels)
 
     def test_non_integer_dtype_raises(
@@ -125,8 +125,8 @@ class TestImportLabels:
         )
 
         runs = store.get_segmentation_runs()
-        run = [r for r in runs if r["id"] == run_id][0]
-        assert run["model_name"] == "imagej"
+        run = [r for r in runs if r.id == run_id][0]
+        assert run.model_name == "imagej"
 
     def test_cell_count_updated_in_run(
         self, experiment_with_fov: ExperimentStore
@@ -144,8 +144,8 @@ class TestImportLabels:
         )
 
         runs = store.get_segmentation_runs()
-        run = [r for r in runs if r["id"] == run_id][0]
-        assert run["cell_count"] == 2
+        run = [r for r in runs if r.id == run_id][0]
+        assert run.cell_count == 2
 
     def test_invalid_fov_no_orphaned_data(
         self, experiment_with_fov: ExperimentStore
@@ -216,9 +216,9 @@ class TestImportCellposeSeg:
         )
 
         runs = store.get_segmentation_runs()
-        run = [r for r in runs if r["id"] == run_id][0]
-        assert run["model_name"] == "cellpose-gui"
-        assert run["parameters"]["diameter"] == 45.0
+        run = [r for r in runs if r.id == run_id][0]
+        assert run.model_name == "cellpose-gui"
+        assert run.parameters["diameter"] == 45.0
 
     def test_seg_npy_missing_masks_key_raises(
         self, experiment_with_fov: ExperimentStore, tmp_path: Path

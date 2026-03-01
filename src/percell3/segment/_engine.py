@@ -114,19 +114,24 @@ class SegmentationEngine:
                 f"condition={condition!r}, fovs={fovs!r}"
             )
 
-        # 5. Create segmentation run in DB
-        run_id = store.add_segmentation_run(
-            channel, params.model_name, params.to_dict()
-        )
-
-        # 6. Process each FOV (one at a time for memory streaming)
+        # 5. Process each FOV (one at a time for memory streaming)
         processor = LabelProcessor()
         total_cells = 0
         fovs_processed = 0
         total = len(all_fovs)
+        last_run_id: int | None = None
 
         for i, fov_info in enumerate(all_fovs):
             try:
+                # Create per-FOV segmentation run
+                run_id = store.add_segmentation_run(
+                    fov_id=fov_info.id,
+                    channel=channel,
+                    model_name=params.model_name,
+                    parameters=params.to_dict(),
+                )
+                last_run_id = run_id
+
                 # Read image
                 image = store.read_image_numpy(fov_info.id, channel)
 
@@ -164,17 +169,12 @@ class SegmentationEngine:
                     fov_info.pixel_size_um,
                 )
 
-                # Delete existing cells for this FOV (re-segmentation)
-                deleted = store.delete_cells_for_fov(fov_info.id)
-                if deleted > 0:
-                    logger.info(
-                        "Replaced %d existing cells for FOV %s",
-                        deleted, fov_info.display_name,
-                    )
-
-                # Insert cells into DB
+                # Insert cells into DB (new run = new cells; old runs untouched)
                 if cells:
                     store.add_cells(cells)
+
+                # Update cell count for this run
+                store.update_segmentation_run_cell_count(run_id, len(cells))
 
                 total_cells += len(cells)
                 fovs_processed += 1
@@ -182,6 +182,7 @@ class SegmentationEngine:
                 fov_stats.append({
                     "fov": fov_info.display_name,
                     "cell_count": len(cells),
+                    "run_id": run_id,
                     "status": "ok",
                 })
 
@@ -210,13 +211,10 @@ class SegmentationEngine:
             if progress_callback:
                 progress_callback(i + 1, total, fov_info.display_name)
 
-        # 7. Update cell count in segmentation run
-        store.update_segmentation_run_cell_count(run_id, total_cells)
-
         elapsed = time.monotonic() - start
 
         return SegmentationResult(
-            run_id=run_id,
+            run_id=last_run_id or 0,
             cell_count=total_cells,
             fovs_processed=fovs_processed,
             warnings=warnings,

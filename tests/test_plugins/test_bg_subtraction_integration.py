@@ -24,9 +24,6 @@ def _build_synthetic_experiment(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP")
     store.add_condition("control")
 
-    seg_run_id = store.add_segmentation_run("DAPI", "mock", {"diameter": 30.0})
-    tr_id = store.add_threshold_run("GFP", "otsu", {"threshold_value": 150.0})
-
     rng = np.random.default_rng(123)
 
     fov_ids = []
@@ -34,6 +31,15 @@ def _build_synthetic_experiment(tmp_path: Path) -> ExperimentStore:
     for _ in range(2):
         fov_id = store.add_fov("control", width=100, height=100, pixel_size_um=0.65)
         fov_ids.append(fov_id)
+
+        seg_run_id = store.add_segmentation_run(
+            fov_id=fov_id, channel="DAPI", model_name="mock",
+            parameters={"diameter": 30.0},
+        )
+        tr_id = store.add_threshold_run(
+            fov_id=fov_id, channel="GFP", method="otsu",
+            parameters={"threshold_value": 150.0},
+        )
 
         # DAPI — uniform
         dapi = np.full((100, 100), 50, dtype=np.uint16)
@@ -81,7 +87,7 @@ def _build_synthetic_experiment(tmp_path: Path) -> ExperimentStore:
         particle_labels = np.zeros((100, 100), dtype=np.int32)
         particle_labels[15:25, 15:25] = 1
         particle_labels[65:75, 65:75] = 2
-        store.write_particle_labels(fov_id, "GFP", particle_labels)
+        store.write_particle_labels(fov_id, "GFP", particle_labels, tr_id)
 
     store._test_fov_ids = fov_ids
     store._test_cell_ids = all_cell_ids
@@ -147,9 +153,12 @@ class TestBGSubtractionIntegration:
         """Exclusion mask should work through the full pipeline."""
         store = _build_synthetic_experiment(tmp_path)
 
-        # Add DAPI threshold with exclusion mask
-        tr_dapi = store.add_threshold_run("DAPI", "otsu", {"threshold_value": 45.0})
+        # Add DAPI threshold with exclusion mask on each FOV
         for fov_id in store._test_fov_ids:
+            tr_dapi = store.add_threshold_run(
+                fov_id=fov_id, channel="DAPI", method="otsu",
+                parameters={"threshold_value": 45.0},
+            )
             excl_mask = np.zeros((100, 100), dtype=np.uint8)
             excl_mask[10:20, 10:20] = 255  # overlaps with cell 1 particle region
             store.write_mask(fov_id, "DAPI", excl_mask, tr_dapi)
@@ -178,10 +187,13 @@ class TestBGSubtractionIntegration:
         store.add_channel("GFP")
         store.add_condition("control")
 
-        seg_id = store.add_segmentation_run("DAPI", "mock", {})
-        tr_id = store.add_threshold_run("GFP", "otsu", {})
-
         fov_id = store.add_fov("control", width=50, height=50)
+        seg_id = store.add_segmentation_run(
+            fov_id=fov_id, channel="DAPI", model_name="mock", parameters={},
+        )
+        tr_id = store.add_threshold_run(
+            fov_id=fov_id, channel="GFP", method="otsu", parameters={},
+        )
 
         # Images
         store.write_image(fov_id, "DAPI", np.full((50, 50), 50, dtype=np.uint16))
@@ -200,7 +212,7 @@ class TestBGSubtractionIntegration:
 
         # Empty threshold mask and particle labels (no particles)
         store.write_mask(fov_id, "GFP", np.zeros((50, 50), dtype=np.uint8), tr_id)
-        store.write_particle_labels(fov_id, "GFP", np.zeros((50, 50), dtype=np.int32))
+        store.write_particle_labels(fov_id, "GFP", np.zeros((50, 50), dtype=np.int32), tr_id)
 
         registry = PluginRegistry()
         registry.discover()

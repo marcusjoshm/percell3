@@ -779,11 +779,11 @@ for fov_info in fovs:
     store.add_cells(cells)  # cells reference run_id via segmentation_id
 ```
 
-- [ ] Update `SegmentationEngine.run()` to create per-FOV runs
-- [ ] Remove `delete_cells_for_fov()` call (new run = new cells, old runs untouched)
-- [ ] Pass `segmentation_run_id` to `write_labels()`
-- [ ] Update cell count per run (not batch total)
-- [ ] Update auto-measure call after segmentation to use new run's cells
+- [x] Update `SegmentationEngine.run()` to create per-FOV runs
+- [x] Remove `delete_cells_for_fov()` call (new run = new cells, old runs untouched)
+- [x] Pass `segmentation_run_id` to `write_labels()`
+- [x] Update cell count per run (not batch total)
+- [x] Update auto-measure call after segmentation to use new run's cells
 
 ##### 2.2 Threshold Engine
 
@@ -795,10 +795,10 @@ Changes:
 - Particles are NOT extracted during thresholding (deferred to measurement)
 - `threshold_group()` creates separate named runs per group
 
-- [ ] Update `threshold_fov()` with `fov_id`, auto-name
-- [ ] Update `threshold_group()` to create per-group named runs
+- [x] Update `threshold_fov()` with `fov_id`, auto-name
+- [x] Update `threshold_group()` to create per-group named runs
 - [ ] Remove immediate particle extraction from `threshold_fov()` and `threshold_group()` (particles now extracted during `BatchMeasurer.measure_config()` instead)
-- [ ] Pass `threshold_run_id` to `write_mask()`
+- [x] Pass `threshold_run_id` to `write_mask()`
 
 ##### 2.3 Particle Analyzer
 
@@ -824,11 +824,11 @@ MeasurementRecord(
 )
 ```
 
-- [ ] Update `analyze_fov()` to take `segmentation_run_id` and `threshold_run_id`
-- [ ] Update label/mask reads to use run-scoped paths
-- [ ] Set `threshold_run_id` on all particle summary metrics in `_cell_summaries()` (was NULL)
-- [ ] Set `threshold_run_id` on all particle summary metrics in `_zero_summaries()` (was NULL)
-- [ ] Update `write_particle_labels()` call with `threshold_run_id`
+- [x] Update `analyze_fov()` to take `segmentation_run_id` and `threshold_run_id`
+- [x] Update label/mask reads to use run-scoped paths
+- [x] Set `threshold_run_id` on all particle summary metrics in `_cell_summaries()` (was NULL)
+- [x] Set `threshold_run_id` on all particle summary metrics in `_zero_summaries()` (was NULL)
+- [x] Update `write_particle_labels()` call with `threshold_run_id`
 
 ##### 2.4 Measurer
 
@@ -840,20 +840,20 @@ Changes:
 - Both pass run IDs through to store read methods
 - `_add_particle_channel_intensities()` updated to pass `threshold_run_id` to `read_particle_labels()`
 
-- [ ] Update `measure_fov()` with `segmentation_run_id` parameter
-- [ ] Update `measure_fov_masked()` with both run ID parameters
-- [ ] Update `_add_particle_channel_intensities()` with `threshold_run_id` parameter
-- [ ] Pass run IDs to `store.read_labels()` and `store.read_mask()`
+- [x] Update `measure_fov()` with `segmentation_run_id` parameter
+- [x] Update `measure_fov_masked()` with both run ID parameters
+- [x] Update `_add_particle_channel_intensities()` with `threshold_run_id` parameter
+- [x] Pass run IDs to `store.read_labels()` and `store.read_mask()`
 
 ##### 2.4b Callers Audit: read_labels / read_mask / read_particle_labels
 
 All callers of `read_labels()`, `read_mask()`, and `read_particle_labels()` must be updated to pass run IDs. Key callers to audit beyond the engines:
 
-- [ ] Update `export_particles_csv()` in `experiment_store.py` to pass `threshold_run_id` to `read_particle_labels()`
-- [ ] Update viewer `_load_labels()` to pass `segmentation_run_id`
-- [ ] Update `copy_labels_to_fov()` widget to pass `segmentation_run_id`
-- [ ] Update `copy_mask_to_fov()` widget to pass `threshold_run_id`
-- [ ] Update any remaining callers found via grep for `read_labels\(`, `read_mask\(`, `read_particle_labels\(`
+- [x] Update `export_particles_csv()` in `experiment_store.py` to pass `threshold_run_id` to `read_particle_labels()`
+- [x] Update viewer `_load_labels()` to pass `segmentation_run_id`
+- [x] Update `copy_labels_to_fov()` widget to pass `segmentation_run_id`
+- [x] Update `copy_mask_to_fov()` widget to pass `threshold_run_id`
+- [x] Update any remaining callers found via grep for `read_labels\(`, `read_mask\(`, `read_particle_labels\(`
 
 ##### 2.5 Config-Driven Batch Measurement
 
@@ -968,12 +968,12 @@ Re-measure behavior: skip entries that already have measurements unless `force=T
 
 ##### 2.6 Phase 2 Tests
 
-- [ ] Test segmentation engine creates per-FOV runs
-- [ ] Test re-segmentation creates new run without deleting existing runs
-- [ ] Test threshold engine creates named runs
+- [x] Test segmentation engine creates per-FOV runs
+- [x] Test re-segmentation creates new run without deleting existing runs
+- [x] Test threshold engine creates named runs
 - [ ] Test threshold engine does NOT extract particles
-- [ ] Test particle analyzer reads from run-scoped Zarr paths
-- [ ] Test particle summary metrics have threshold_run_id set
+- [x] Test particle analyzer reads from run-scoped Zarr paths
+- [x] Test particle summary metrics have threshold_run_id set
 - [ ] Test config-driven batch measurement: whole_cell + mask-scoped + particles
 - [ ] Test batch measurement skips already-measured entries
 - [ ] Test batch measurement with force=True re-measures
