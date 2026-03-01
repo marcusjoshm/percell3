@@ -171,56 +171,29 @@ def copy_labels_to_fov(
 ) -> tuple[int, int]:
     """Copy segmentation labels from one FOV to another.
 
-    Reads the source label image, creates a new segmentation run on the
-    target FOV, writes the labels, and extracts cells via
-    ``store_labels_and_cells()``.
+    Delegates to ``store.copy_segmentation_to_fov()``.
 
     Args:
         store: An open ExperimentStore.
         source_fov_id: Source FOV database ID (must have labels).
         target_fov_id: Target FOV database ID.
-        channel: Channel name for the new segmentation run.
+        channel: Channel name (used to resolve the source run).
 
     Returns:
         Tuple of (segmentation_run_id, cell_count).
 
     Raises:
-        KeyError: If the source FOV has no labels in zarr.
+        KeyError: If the source FOV has no segmentation runs.
         ValueError: If source label dimensions don't match target FOV.
     """
-    from percell3.segment.roi_import import store_labels_and_cells
-
-    # Resolve source segmentation run to read labels
+    # Resolve latest segmentation run for source FOV
     src_seg_runs = store.list_segmentation_runs(source_fov_id)
     if not src_seg_runs:
         raise KeyError(f"No segmentation runs for source FOV {source_fov_id}")
     src_seg_run_id = src_seg_runs[-1].id
 
-    # Read source labels (raises KeyError if none exist)
-    source_labels = store.read_labels(source_fov_id, src_seg_run_id)
-
-    # Validate dimensions match target FOV
-    target_info = store.get_fov_by_id(target_fov_id)
-    expected_shape = (target_info.height, target_info.width)
-    if source_labels.shape != expected_shape:
-        raise ValueError(
-            f"Dimension mismatch: source labels are {source_labels.shape} "
-            f"but target FOV is {expected_shape}"
-        )
-
-    # Create segmentation run with provenance
-    parameters = {
-        "method": "label_copy",
-        "source_fov_id": source_fov_id,
-    }
-    run_id = store.add_segmentation_run(
-        fov_id=target_fov_id, channel=channel,
-        model_name="label_copy", parameters=parameters,
-    )
-
-    # Write labels and extract cells
-    cell_count = store_labels_and_cells(
-        store, source_labels, target_info, run_id,
+    run_id, cell_count = store.copy_segmentation_to_fov(
+        src_seg_run_id, target_fov_id,
     )
 
     logger.info(

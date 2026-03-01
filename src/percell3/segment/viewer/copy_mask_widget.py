@@ -185,87 +185,38 @@ def copy_mask_to_fov(
     channel: str,
     min_particle_area: int = 5,
 ) -> tuple[int, int]:
-    """Copy a threshold mask from one FOV to another and extract particles.
+    """Copy a threshold mask from one FOV to another.
 
-    Reads the source mask, creates a new threshold run on the target FOV,
-    writes the mask, then runs particle analysis on the target so that
-    measurements can be performed. The ``write_mask`` method handles cleanup
-    of any stale particles on the target.
+    Delegates to ``store.copy_threshold_to_fov()`` for the mask copy.
+    Particles are deferred to the measurement step — this function
+    returns 0 for particle_count.
 
     Args:
         store: An open ExperimentStore.
         source_fov_id: Source FOV database ID (must have a mask for this channel).
-        target_fov_id: Target FOV database ID (must have labels and cells).
+        target_fov_id: Target FOV database ID.
         channel: Channel name whose mask to copy.
-        min_particle_area: Minimum particle area in pixels (default: 5).
+        min_particle_area: Deprecated, ignored. Particles are deferred to measurement.
 
     Returns:
-        Tuple of (threshold_run_id, particle_count).
+        Tuple of (threshold_run_id, particle_count). particle_count is always 0.
 
     Raises:
         KeyError: If the source FOV has no mask for the given channel.
         ValueError: If source mask dimensions don't match target FOV.
     """
-    from percell3.measure.particle_analyzer import ParticleAnalyzer
-
     # Resolve latest threshold run for source FOV + channel
-    all_thr_runs = store.get_threshold_runs()
-    source_thr_runs = [
-        tr for tr in all_thr_runs
-        if tr.channel == channel and tr.fov_id == source_fov_id
-    ]
+    source_thr_runs = store.list_threshold_runs(source_fov_id, channel=channel)
     if not source_thr_runs:
         raise KeyError(
             f"No threshold run for channel '{channel}' on FOV {source_fov_id}"
         )
     source_thr_id = source_thr_runs[-1].id
 
-    # Read source mask (raises KeyError if none exists)
-    source_mask = store.read_mask(source_fov_id, channel, source_thr_id)
-
-    # Validate dimensions match target FOV
-    target_info = store.get_fov_by_id(target_fov_id)
-    expected_shape = (target_info.height, target_info.width)
-    if source_mask.shape != expected_shape:
-        raise ValueError(
-            f"Dimension mismatch: source mask is {source_mask.shape} "
-            f"but target FOV is {expected_shape}"
-        )
-
-    # Create threshold run with provenance
-    parameters = {
-        "method": "mask_copy",
-        "source_fov_id": source_fov_id,
-    }
-    run_id = store.add_threshold_run(
-        fov_id=target_fov_id, channel=channel,
-        method="mask_copy", parameters=parameters,
-    )
-
-    # Write mask (handles stale particle cleanup automatically)
-    store.write_mask(target_fov_id, channel, source_mask, run_id)
-
-    # Extract particles from the copied mask so measurements work.
-    # This mirrors what the thresholding pipeline does after writing a mask.
-    particle_count = 0
-    cells_df = store.get_cells(fov_id=target_fov_id)
-    if not cells_df.empty:
-        cell_ids = cells_df["id"].tolist()
-        analyzer = ParticleAnalyzer(min_particle_area=min_particle_area)
-        result = analyzer.analyze_fov(
-            store, target_fov_id, channel, run_id, cell_ids,
-        )
-        if result.particles:
-            store.add_particles(result.particles)
-        if result.summary_measurements:
-            store.add_measurements(result.summary_measurements)
-        store.write_particle_labels(
-            target_fov_id, channel, result.particle_label_image, run_id,
-        )
-        particle_count = result.total_particles
+    run_id = store.copy_threshold_to_fov(source_thr_id, target_fov_id)
 
     logger.info(
-        "Copied %s mask from FOV %d to FOV %d (run_id=%d, %d particles)",
-        channel, source_fov_id, target_fov_id, run_id, particle_count,
+        "Copied %s mask from FOV %d to FOV %d (run_id=%d, particles deferred)",
+        channel, source_fov_id, target_fov_id, run_id,
     )
-    return run_id, particle_count
+    return run_id, 0

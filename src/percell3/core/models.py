@@ -81,6 +81,16 @@ class ThresholdRunInfo:
 
 
 @dataclass(frozen=True)
+class DeleteImpact:
+    """Summary of what will be deleted when a run is removed."""
+
+    cells: int = 0
+    measurements: int = 0
+    particles: int = 0
+    config_entries: int = 0
+
+
+@dataclass(frozen=True)
 class MeasurementConfigInfo:
     """Metadata for a measurement configuration."""
 

@@ -1007,10 +1007,10 @@ Copy segmentation flow:
 4. Re-analyze label image: extract cell properties (centroids, areas, bboxes)
 5. Insert cell records referencing new run
 
-- [ ] Implement `copy_segmentation_to_fov()` with cell re-analysis
-- [ ] Implement `copy_threshold_to_fov()` (mask only, particles deferred)
-- [ ] Record provenance in run parameters JSON (`source_fov_id`, `source_run_id`)
-- [ ] Auto-generate name (`copy_from_fov{n}`) with collision handling
+- [x] Implement `copy_segmentation_to_fov()` with cell re-analysis
+- [x] Implement `copy_threshold_to_fov()` (mask only, particles deferred)
+- [x] Record provenance in run parameters JSON (`source_fov_id`, `source_run_id`)
+- [x] Auto-generate name (`copy_from_fov{n}`) with collision handling
 
 ##### 3.2 Mask Combine Operations
 
@@ -1029,17 +1029,17 @@ Constraints:
 - Parameters JSON records source run IDs
 - Mask is written, particles are NOT extracted (deferred to measurement)
 
-- [ ] Implement `combine_threshold_runs()` for union and intersect
-- [ ] Validate same-FOV, same-channel constraint
-- [ ] Record provenance in parameters JSON
-- [ ] Auto-generate name (`union_name1_name2`) with collision handling
+- [x] Implement `combine_threshold_runs()` for union and intersect
+- [x] Validate same-FOV, same-channel constraint
+- [x] Record provenance in parameters JSON
+- [x] Auto-generate name (`union_name1_name2`) with collision handling
 
 ##### 3.3 Delete Operations
 
 Already covered in Phase 1 (`delete_segmentation_run`, `delete_threshold_run`). Phase 3 adds:
 
-- [ ] User confirmation prompt (Y/N with impact summary: "This will delete 42 cells, 1200 measurements, 156 particles")
-- [ ] Zarr cleanup verification (log warning if Zarr group doesn't exist)
+- [x] User confirmation prompt (Y/N with impact summary: "This will delete 42 cells, 1200 measurements, 156 particles")
+- [x] Zarr cleanup verification (log warning if Zarr group doesn't exist)
 
 ##### 3.4 Multi-File Export
 
@@ -1066,17 +1066,17 @@ Directory structure:
 
 If `config_id` is None, use active config. Each CSV includes provenance columns.
 
-- [ ] Implement `export_measurements()` with directory tree creation
-- [ ] Write `whole_cell_measurements.csv` per segmentation run
-- [ ] Write `mask_measurements.csv` per threshold run
-- [ ] Write `particles.csv` per threshold run
-- [ ] Write `summary/segmentation_runs.csv` with run metadata
-- [ ] Write `summary/threshold_runs.csv` with run metadata
-- [ ] Add provenance columns (`fov_name`, `segmentation_run`, `threshold_run`)
-- [ ] Sanitize run names for filesystem safety
-- [ ] Update existing `export_csv()` to accept optional `config_id` parameter (or deprecate)
-- [ ] Update existing `export_prism_csv()` to accept optional `config_id` parameter (Prism format is important for biology use case)
-- [ ] Update existing `export_particles_csv()` to require run IDs (its `read_labels()` call at line 1264 also needs `segmentation_run_id`)
+- [x] Implement `export_measurements()` with directory tree creation
+- [x] Write `whole_cell_measurements.csv` per segmentation run
+- [x] Write `mask_measurements.csv` per threshold run
+- [x] Write `particles.csv` per threshold run
+- [x] Write `summary/segmentation_runs.csv` with run metadata
+- [x] Write `summary/threshold_runs.csv` with run metadata
+- [x] Add provenance columns (`fov_name`, `segmentation_run`, `threshold_run`)
+- [x] Sanitize run names for filesystem safety
+- [x] Update existing `export_csv()` to accept optional `config_id` parameter (or deprecate)
+- [x] Update existing `export_prism_csv()` to accept optional `config_id` parameter (Prism format is important for biology use case)
+- [x] Update existing `export_particles_csv()` to require run IDs (its `read_labels()` call at line 1264 also needs `segmentation_run_id`)
 
 > **Research Insight — Existing Export Methods (spec-flow-analyzer gap 21):**
 >
@@ -1097,16 +1097,16 @@ If `config_id` is None, use active config. Each CSV includes provenance columns.
 
 ##### 3.5 Phase 3 Tests
 
-- [ ] Test copy segmentation: labels copied, cells recomputed, provenance recorded
-- [ ] Test copy segmentation: existing runs on target preserved
-- [ ] Test copy threshold: mask copied, particles deferred
-- [ ] Test combine union: pixel-level OR
-- [ ] Test combine intersect: pixel-level AND
-- [ ] Test combine: same-FOV/channel validation
-- [ ] Test multi-file export directory structure
-- [ ] Test export CSV provenance columns
-- [ ] Test export with active config filtering
-- [ ] Test export with filesystem-unsafe run names (sanitized)
+- [x] Test copy segmentation: labels copied, cells recomputed, provenance recorded
+- [x] Test copy segmentation: existing runs on target preserved
+- [x] Test copy threshold: mask copied, particles deferred
+- [x] Test combine union: pixel-level OR
+- [x] Test combine intersect: pixel-level AND
+- [x] Test combine: same-FOV/channel validation
+- [x] Test multi-file export directory structure
+- [x] Test export CSV provenance columns
+- [x] Test export with active config filtering
+- [x] Test export with filesystem-unsafe run names (sanitized)
 
 ---
 

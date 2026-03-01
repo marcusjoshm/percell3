@@ -11,13 +11,14 @@ from percell3.core.exceptions import (
     SchemaVersionError,
 )
 from percell3.core.experiment_store import ExperimentStore
-from percell3.core.models import CellRecord, ChannelConfig, FovInfo, MeasurementRecord
+from percell3.core.models import CellRecord, ChannelConfig, DeleteImpact, FovInfo, MeasurementRecord
 
 __all__ = [
     "ExperimentStore",
     "ChannelConfig",
     "FovInfo",
     "CellRecord",
+    "DeleteImpact",
     "MeasurementRecord",
     "BioRepNotFoundError",
     "ExperimentError",

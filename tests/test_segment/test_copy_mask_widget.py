@@ -142,8 +142,8 @@ class TestCopyMaskToFov:
         source_mask = store.read_mask(source_fov_id, "GFP", src_thr_id)
         np.testing.assert_array_equal(target_mask, source_mask)
 
-    def test_particles_extracted_after_copy(self, tmp_path: Path) -> None:
-        """Particles are extracted from the copied mask so measurements work."""
+    def test_particles_deferred_after_copy(self, tmp_path: Path) -> None:
+        """Particles are deferred to measurement — not extracted during copy."""
         store, source_fov_id = _create_experiment_with_mask(tmp_path)
         target_fov_id = _create_target_with_labels(store)
 
@@ -151,17 +151,7 @@ class TestCopyMaskToFov:
             store, source_fov_id, target_fov_id, "GFP",
         )
 
-        assert particle_count > 0, "Particles should be extracted from copied mask"
-
-        # Resolve target threshold run for reading particle labels
-        tgt_thr_runs = [
-            tr for tr in store.get_threshold_runs()
-            if tr.channel == "GFP" and tr.fov_id == target_fov_id
-        ]
-        tgt_thr_id = tgt_thr_runs[-1].id
-        # Verify particle label image exists
-        particle_labels = store.read_particle_labels(target_fov_id, "GFP", tgt_thr_id)
-        assert particle_labels.max() > 0, "Particle label image should have particles"
+        assert particle_count == 0, "Particles should be deferred to measurement"
 
     def test_error_on_no_source_mask(self, tmp_path: Path) -> None:
         """Raise KeyError if source FOV has no mask for the channel."""
@@ -251,22 +241,13 @@ class TestCopyMaskToFov:
         source_mask = store.read_mask(source_fov_id, "GFP", src_thr_runs[0].id)
         np.testing.assert_array_equal(target_mask, source_mask)
 
-    def test_min_particle_area_respected(self, tmp_path: Path) -> None:
-        """Custom min_particle_area filters out small particles."""
+    def test_min_particle_area_ignored(self, tmp_path: Path) -> None:
+        """min_particle_area is ignored — particles are deferred to measurement."""
         store, source_fov_id = _create_experiment_with_mask(tmp_path)
         target_fov_id = _create_target_with_labels(store)
 
-        # Use a very large min_area to filter everything out
-        _, count_large = copy_mask_to_fov(
+        _, count = copy_mask_to_fov(
             store, source_fov_id, target_fov_id, "GFP",
-            min_particle_area=9999,
-        )
-        assert count_large == 0, "Large min_area should filter all particles"
-
-        # Create another target for min_area=1
-        target2 = _create_target_with_labels(store, display_name="target2")
-        _, count_small = copy_mask_to_fov(
-            store, source_fov_id, target2, "GFP",
             min_particle_area=1,
         )
-        assert count_small > 0, "min_area=1 should keep particles"
+        assert count == 0, "Particles should always be deferred"
