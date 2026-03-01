@@ -314,6 +314,7 @@ def _analyze_menu(state: MenuState) -> None:
     Menu("ANALYZE", [
         MenuItem("1", "Measure channels", "Measure fluorescence intensities per cell", _measure_channels),
         MenuItem("2", "Grouped intensity thresholding", "Otsu thresholding and particle detection", _apply_threshold),
+        MenuItem("3", "Config management", "Manage measurement configurations", _config_management_menu),
     ], state).run()
     raise _MenuCancel()
 
@@ -1248,6 +1249,373 @@ def _select_fovs_from_table(fovs: list) -> list:
         return [fovs[i - 1] for i in indices]
 
 
+def _config_management_menu(state: MenuState) -> None:
+    """Measurement configuration management sub-menu."""
+    Menu("CONFIG MANAGEMENT", [
+        MenuItem("1", "Show active config", "Display the active measurement configuration", _show_active_config),
+        MenuItem("2", "Auto-create config", "Create config from latest runs per FOV", _auto_create_config),
+        MenuItem("3", "Apply seg run to all FOVs", "Use one seg run for all FOVs in config", _apply_seg_run_to_all),
+        MenuItem("4", "Apply seg run to condition", "Use one seg run for FOVs in a condition", _apply_seg_run_to_condition),
+        MenuItem("5", "Edit individual FOV config", "Add/remove entries for a single FOV", _edit_fov_config),
+        MenuItem("6", "List/switch configs", "View all configs and set active", _list_switch_configs),
+        MenuItem("7", "Delete config", "Delete a measurement configuration", _delete_config),
+    ], state).run()
+    raise _MenuCancel()
+
+
+def _show_active_config(state: MenuState) -> None:
+    """Display the active measurement config with a summary table."""
+    from rich.table import Table
+
+    store = state.require_experiment()
+    active_id = store.get_active_measurement_config_id()
+    if active_id is None:
+        console.print("\n[yellow]No active measurement config.[/yellow]")
+        console.print("[dim]Use 'Auto-create config' to generate one from latest runs.[/dim]")
+        return
+
+    config = store.get_measurement_config(active_id)
+    entries = store.get_measurement_config_entries(active_id)
+
+    console.print(f"\n[bold]Active config:[/bold] {config.name} (ID {config.id})")
+    console.print(f"  Created: {config.created_at}")
+    console.print(f"  Entries: {config.entry_count}")
+
+    if not entries:
+        console.print("  [dim]No entries.[/dim]")
+        return
+
+    table = Table(title="Config Entries")
+    table.add_column("#", style="dim")
+    table.add_column("FOV")
+    table.add_column("Seg Run")
+    table.add_column("Threshold Run")
+
+    fovs = {f.id: f for f in store.get_fovs()}
+    for i, entry in enumerate(entries, 1):
+        fov = fovs.get(entry.fov_id)
+        fov_name = fov.display_name if fov else f"FOV #{entry.fov_id}"
+
+        seg_runs = store.list_segmentation_runs(entry.fov_id)
+        seg_run = next((r for r in seg_runs if r.id == entry.segmentation_run_id), None)
+        seg_name = seg_run.name if seg_run else f"#{entry.segmentation_run_id}"
+
+        thr_name = "(none)"
+        if entry.threshold_run_id is not None:
+            thr_runs = store.list_threshold_runs(fov_id=entry.fov_id)
+            thr_run = next((r for r in thr_runs if r.id == entry.threshold_run_id), None)
+            thr_name = f"{thr_run.channel}/{thr_run.name}" if thr_run else f"#{entry.threshold_run_id}"
+
+        table.add_row(str(i), fov_name, seg_name, thr_name)
+
+    console.print(table)
+
+
+def _auto_create_config(state: MenuState) -> None:
+    """Auto-create a default config from latest runs per FOV."""
+    store = state.require_experiment()
+
+    try:
+        config_id = store.auto_create_default_config()
+    except ValueError as e:
+        console.print(f"[red]Cannot create config:[/red] {e}")
+        return
+
+    config = store.get_measurement_config(config_id)
+    console.print(f"\n[green]Created config '{config.name}' with {config.entry_count} entries.[/green]")
+    console.print(f"  Set as active config.")
+
+
+def _apply_seg_run_to_all(state: MenuState) -> None:
+    """Create/update config applying one seg run to all FOVs."""
+    store = state.require_experiment()
+
+    # Pick a FOV to source the seg run from
+    fovs = store.get_fovs()
+    if not fovs:
+        console.print("[red]No FOVs found.[/red]")
+        return
+
+    # Collect all seg runs across all FOVs
+    all_seg_runs = []
+    for fov in fovs:
+        for run in store.list_segmentation_runs(fov.id):
+            fov_info = next(f for f in fovs if f.id == fov.id)
+            all_seg_runs.append((run, fov_info))
+
+    if not all_seg_runs:
+        console.print("[red]No segmentation runs found.[/red]")
+        return
+
+    # Display seg runs and let user choose
+    run_labels = [
+        f"{fov.display_name} / {run.name} ({run.cell_count} cells)"
+        for run, fov in all_seg_runs
+    ]
+    console.print("\n[bold]Select seg run to apply to all FOVs:[/bold]")
+    console.print("[dim]Note: the selected run's labels will be copied to FOVs that lack them.[/dim]\n")
+    selected_label = numbered_select_one(run_labels, "Seg run")
+    idx = run_labels.index(selected_label)
+    selected_run, _ = all_seg_runs[idx]
+
+    # Create config
+    config_name = menu_prompt("Config name", default="all_fovs_config")
+    try:
+        config_id = store.create_measurement_config(config_name)
+    except Exception as e:
+        console.print(f"[red]Error creating config:[/red] {e}")
+        return
+
+    entries_added = 0
+    for fov in fovs:
+        # Find matching seg run on this FOV (same name), or use the source run
+        local_seg_runs = store.list_segmentation_runs(fov.id)
+        local_match = next((r for r in local_seg_runs if r.name == selected_run.name), None)
+        if local_match:
+            seg_id = local_match.id
+        elif local_seg_runs:
+            seg_id = local_seg_runs[-1].id
+        else:
+            continue
+
+        thr_runs = store.list_threshold_runs(fov_id=fov.id)
+        if thr_runs:
+            for tr in thr_runs:
+                store.add_measurement_config_entry(config_id, fov.id, seg_id, tr.id)
+                entries_added += 1
+        else:
+            store.add_measurement_config_entry(config_id, fov.id, seg_id, None)
+            entries_added += 1
+
+    console.print(f"\n[green]Config '{config_name}' created with {entries_added} entries.[/green]")
+
+
+def _apply_seg_run_to_condition(state: MenuState) -> None:
+    """Apply a seg run name to all FOVs in a specific condition."""
+    store = state.require_experiment()
+
+    conditions = store.get_conditions()
+    if not conditions:
+        console.print("[red]No conditions found.[/red]")
+        return
+
+    console.print("\n[bold]Select condition:[/bold]")
+    condition = numbered_select_one(conditions, "Condition")
+
+    # Get FOVs in this condition
+    fovs = [f for f in store.get_fovs() if f.condition == condition]
+    if not fovs:
+        console.print(f"[red]No FOVs in condition '{condition}'.[/red]")
+        return
+
+    # Collect seg runs from these FOVs
+    seg_runs = []
+    for fov in fovs:
+        for run in store.list_segmentation_runs(fov.id):
+            seg_runs.append((run, fov))
+    if not seg_runs:
+        console.print("[red]No segmentation runs in this condition.[/red]")
+        return
+
+    run_labels = [
+        f"{fov.display_name} / {run.name} ({run.cell_count} cells)"
+        for run, fov in seg_runs
+    ]
+    console.print("\n[bold]Select seg run to apply:[/bold]")
+    selected_label = numbered_select_one(run_labels, "Seg run")
+    idx = run_labels.index(selected_label)
+    selected_run, _ = seg_runs[idx]
+
+    # Check active config exists; if not, auto-create first
+    active_id = store.get_active_measurement_config_id()
+    if active_id is None:
+        console.print("[yellow]No active config — creating default first...[/yellow]")
+        try:
+            active_id = store.auto_create_default_config()
+        except ValueError as e:
+            console.print(f"[red]Cannot create config:[/red] {e}")
+            return
+
+    # Update entries for FOVs in this condition
+    entries = store.get_measurement_config_entries(active_id)
+    updated = 0
+    for fov in fovs:
+        local_seg_runs = store.list_segmentation_runs(fov.id)
+        local_match = next((r for r in local_seg_runs if r.name == selected_run.name), None)
+        if not local_match:
+            continue
+
+        # Remove old entries for this FOV
+        fov_entries = [e for e in entries if e.fov_id == fov.id]
+        for e in fov_entries:
+            store.remove_measurement_config_entry(e.id)
+
+        # Add new entries with the selected seg run
+        thr_runs = store.list_threshold_runs(fov_id=fov.id)
+        if thr_runs:
+            for tr in thr_runs:
+                store.add_measurement_config_entry(active_id, fov.id, local_match.id, tr.id)
+                updated += 1
+        else:
+            store.add_measurement_config_entry(active_id, fov.id, local_match.id, None)
+            updated += 1
+
+    console.print(f"\n[green]Updated {updated} entries in active config.[/green]")
+
+
+def _edit_fov_config(state: MenuState) -> None:
+    """Edit config entries for a single FOV."""
+    store = state.require_experiment()
+
+    active_id = store.get_active_measurement_config_id()
+    if active_id is None:
+        console.print("[yellow]No active config. Create one first.[/yellow]")
+        return
+
+    fovs = store.get_fovs()
+    fov_names = [f.display_name for f in fovs]
+    console.print("\n[bold]Select FOV to edit:[/bold]")
+    selected_name = numbered_select_one(fov_names, "FOV")
+    fov = next(f for f in fovs if f.display_name == selected_name)
+
+    # Show current entries for this FOV
+    entries = store.get_measurement_config_entries(active_id)
+    fov_entries = [e for e in entries if e.fov_id == fov.id]
+
+    if fov_entries:
+        console.print(f"\n[bold]Current entries for {fov.display_name}:[/bold]")
+        for i, e in enumerate(fov_entries, 1):
+            seg_runs = store.list_segmentation_runs(fov.id)
+            seg_run = next((r for r in seg_runs if r.id == e.segmentation_run_id), None)
+            seg_name = seg_run.name if seg_run else f"#{e.segmentation_run_id}"
+            thr_name = "(none)"
+            if e.threshold_run_id is not None:
+                thr_runs = store.list_threshold_runs(fov_id=fov.id)
+                thr_run = next((r for r in thr_runs if r.id == e.threshold_run_id), None)
+                thr_name = f"{thr_run.channel}/{thr_run.name}" if thr_run else f"#{e.threshold_run_id}"
+            console.print(f"  [{i}] Seg: {seg_name} | Thr: {thr_name}")
+
+    # Options
+    console.print("\n[bold]Actions:[/bold]")
+    action = numbered_select_one(
+        ["Add entry", "Remove entry", "Replace all entries"],
+        "Action",
+    )
+
+    if action == "Add entry":
+        seg_runs = store.list_segmentation_runs(fov.id)
+        if not seg_runs:
+            console.print("[red]No segmentation runs for this FOV.[/red]")
+            return
+        seg_names = [f"{r.name} ({r.cell_count} cells)" for r in seg_runs]
+        seg_choice = numbered_select_one(seg_names, "Seg run")
+        seg_run = seg_runs[seg_names.index(seg_choice)]
+
+        thr_runs = store.list_threshold_runs(fov_id=fov.id)
+        thr_run_id = None
+        if thr_runs:
+            thr_options = ["(none)"] + [f"{r.channel}/{r.name}" for r in thr_runs]
+            thr_choice = numbered_select_one(thr_options, "Threshold run")
+            if thr_choice != "(none)":
+                thr_run = thr_runs[thr_options.index(thr_choice) - 1]
+                thr_run_id = thr_run.id
+
+        store.add_measurement_config_entry(active_id, fov.id, seg_run.id, thr_run_id)
+        console.print("[green]Entry added.[/green]")
+
+    elif action == "Remove entry":
+        if not fov_entries:
+            console.print("[dim]No entries to remove.[/dim]")
+            return
+        entry_labels = []
+        for e in fov_entries:
+            seg_runs = store.list_segmentation_runs(fov.id)
+            seg_run = next((r for r in seg_runs if r.id == e.segmentation_run_id), None)
+            seg_name = seg_run.name if seg_run else f"#{e.segmentation_run_id}"
+            entry_labels.append(f"Seg: {seg_name} | Thr: #{e.threshold_run_id or 'none'}")
+        selected_label = numbered_select_one(entry_labels, "Entry to remove")
+        idx = entry_labels.index(selected_label)
+        store.remove_measurement_config_entry(fov_entries[idx].id)
+        console.print("[green]Entry removed.[/green]")
+
+    elif action == "Replace all entries":
+        for e in fov_entries:
+            store.remove_measurement_config_entry(e.id)
+
+        seg_runs = store.list_segmentation_runs(fov.id)
+        if not seg_runs:
+            console.print("[red]No segmentation runs for this FOV.[/red]")
+            return
+        seg_names = [f"{r.name} ({r.cell_count} cells)" for r in seg_runs]
+        seg_choice = numbered_select_one(seg_names, "Seg run")
+        seg_run = seg_runs[seg_names.index(seg_choice)]
+
+        thr_runs = store.list_threshold_runs(fov_id=fov.id)
+        if thr_runs:
+            for tr in thr_runs:
+                store.add_measurement_config_entry(active_id, fov.id, seg_run.id, tr.id)
+        else:
+            store.add_measurement_config_entry(active_id, fov.id, seg_run.id, None)
+        console.print("[green]Entries replaced.[/green]")
+
+
+def _list_switch_configs(state: MenuState) -> None:
+    """List all configs and optionally switch the active one."""
+    store = state.require_experiment()
+
+    configs = store.list_measurement_configs()
+    if not configs:
+        console.print("\n[dim]No measurement configs exist.[/dim]")
+        return
+
+    active_id = store.get_active_measurement_config_id()
+
+    console.print("\n[bold]Measurement Configurations:[/bold]")
+    labels = []
+    for c in configs:
+        marker = " [green](active)[/green]" if c.id == active_id else ""
+        labels.append(f"{c.name} ({c.entry_count} entries){marker}")
+
+    for i, label in enumerate(labels, 1):
+        console.print(f"  \\[{i}] {label}")
+
+    if len(configs) > 1 or (configs and configs[0].id != active_id):
+        raw = menu_prompt("Set active (number, or blank to keep)")
+        if raw:
+            try:
+                idx = int(raw) - 1
+                if 0 <= idx < len(configs):
+                    store.set_active_measurement_config(configs[idx].id)
+                    console.print(f"[green]Active config set to '{configs[idx].name}'.[/green]")
+                else:
+                    console.print("[red]Invalid number.[/red]")
+            except ValueError:
+                console.print("[red]Invalid input.[/red]")
+
+
+def _delete_config(state: MenuState) -> None:
+    """Delete a measurement configuration."""
+    store = state.require_experiment()
+
+    configs = store.list_measurement_configs()
+    if not configs:
+        console.print("\n[dim]No configs to delete.[/dim]")
+        return
+
+    labels = [f"{c.name} ({c.entry_count} entries)" for c in configs]
+    console.print("\n[bold]Select config to delete:[/bold]")
+    selected = numbered_select_one(labels, "Config")
+    idx = labels.index(selected)
+    config = configs[idx]
+
+    if numbered_select_one(["No", "Yes"], f"Delete config '{config.name}'?") != "Yes":
+        console.print("[dim]Deletion cancelled.[/dim]")
+        return
+
+    store.delete_measurement_config(config.id)
+    console.print(f"[green]Config '{config.name}' deleted.[/green]")
+
+
 def _segment_cells(state: MenuState) -> None:
     """Interactively run cell segmentation with table-first FOV selection."""
     store = state.require_experiment()
@@ -1398,12 +1766,30 @@ def _segment_cells(state: MenuState) -> None:
     console.print(f"  Total cells found: {result.cell_count}")
     console.print(f"  Elapsed: {result.elapsed_seconds:.1f}s")
 
+    # Show run names per FOV
+    for stat in result.fov_stats:
+        if stat.get("status") == "ok" and stat.get("run_id"):
+            fov_name = stat["fov"]
+            run_id = stat["run_id"]
+            seg_runs = store.list_segmentation_runs(
+                next(f.id for f in selected_fovs if f.display_name == fov_name)
+            )
+            run = next((r for r in seg_runs if r.id == run_id), None)
+            if run:
+                console.print(f"  {fov_name}: run [cyan]{run.name}[/cyan] ({stat['cell_count']} cells)")
+
     if result.warnings:
         console.print(f"\n[yellow]Warnings ({len(result.warnings)}):[/yellow]")
         for w in result.warnings:
             console.print(f"  [dim]- {w}[/dim]")
 
     # Auto-measure all channels on the just-segmented FOVs
+    # Build map of FOV name → seg run ID from the result stats
+    fov_run_map: dict[str, int] = {}
+    for stat in result.fov_stats:
+        if stat.get("status") == "ok" and stat.get("run_id"):
+            fov_run_map[stat["fov"]] = stat["run_id"]
+
     if result.cell_count > 0:
         try:
             all_channels = store.get_channels()
@@ -1420,10 +1806,12 @@ def _segment_cells(state: MenuState) -> None:
                     "Measuring...", total=len(selected_fovs),
                 )
                 for ai, fov_info in enumerate(selected_fovs):
+                    seg_run_id = fov_run_map.get(fov_info.display_name)
                     count = auto_measurer.measure_fov(
                         store,
                         fov_id=fov_info.id,
                         channels=ch_names,
+                        segmentation_run_id=seg_run_id,
                     )
                     total_auto += count
                     auto_progress.update(
@@ -1502,6 +1890,19 @@ def _measure_channels(state: MenuState) -> None:
     if cell_count == 0:
         console.print("[red]No cells found.[/red] Run segmentation first.")
         return
+
+    # Auto-create measurement config if none exists
+    active_config_id = store.get_active_measurement_config_id()
+    if active_config_id is None:
+        try:
+            config_id = store.auto_create_default_config()
+            config = store.get_measurement_config(config_id)
+            console.print(
+                f"[dim]Auto-created measurement config '{config.name}' "
+                f"with {config.entry_count} entries.[/dim]"
+            )
+        except ValueError:
+            pass  # No seg runs — config not needed for whole-cell measurement
 
     while True:
         # Mode selection
@@ -1696,6 +2097,7 @@ def _threshold_fov(
     grouping_metric: str,
     gaussian_sigma: float | None = None,
     min_particle_area: int = 5,
+    segmentation_run_id: int | None = None,
 ) -> tuple[int, int]:
     """Run grouping + threshold QC + particle analysis for one FOV.
 
@@ -1707,6 +2109,7 @@ def _threshold_fov(
         grouping_metric: Metric name for grouping (e.g. mean_intensity).
         gaussian_sigma: Optional Gaussian sigma for pre-threshold smoothing.
         min_particle_area: Minimum particle area in pixels for filtering.
+        segmentation_run_id: Which segmentation run to use (default: latest).
 
     Returns:
         (fovs_processed, total_particles) — 1 or 0 for fovs_processed.
@@ -1745,8 +2148,11 @@ def _threshold_fov(
         console.print(f"    {tag}: {n_cells} cells (mean={mean:.1f})")
 
     # Read images and labels for this FOV
-    seg_runs = store.list_segmentation_runs(fov_id)
-    seg_run_id = seg_runs[0].id if seg_runs else None
+    if segmentation_run_id is None:
+        seg_runs = store.list_segmentation_runs(fov_id)
+        seg_run_id = seg_runs[-1].id if seg_runs else None
+    else:
+        seg_run_id = segmentation_run_id
     labels = store.read_labels(fov_id, seg_run_id)
     image = store.read_image_numpy(fov_id, threshold_channel)
 
@@ -1836,6 +2242,11 @@ def _threshold_fov(
             f"threshold={result.threshold_value:.1f}, "
             f"positive={result.positive_fraction:.1%}"
         )
+        # Show threshold run name
+        thr_runs = store.list_threshold_runs(fov_id=fov_id, channel=threshold_channel)
+        thr_run = next((r for r in thr_runs if r.id == result.threshold_run_id), None)
+        if thr_run:
+            console.print(f"  Threshold run: [cyan]{thr_run.name}[/cyan]")
         accepted_groups.append((tag_name, group_cell_ids, result.threshold_run_id))
 
         # Accumulate this group's mask into the combined mask
@@ -2019,7 +2430,14 @@ def _apply_threshold(state: MenuState) -> None:
         console.print("[yellow]Thresholding cancelled.[/yellow]")
         return
 
-    # 6. Run per-FOV
+    # 6. Resolve segmentation run per FOV (use latest)
+    fov_seg_map: dict[int, int] = {}
+    for fov_info in selected_fovs:
+        seg_runs = store.list_segmentation_runs(fov_info.id)
+        if seg_runs:
+            fov_seg_map[fov_info.id] = seg_runs[-1].id
+
+    # 7. Run per-FOV
     total_particles = 0
     fovs_processed = 0
     skip_remaining_fovs = False
@@ -2032,6 +2450,7 @@ def _apply_threshold(state: MenuState) -> None:
             store, fov_info, threshold_channel, grouping_channel, grouping_metric,
             gaussian_sigma=gaussian_sigma,
             min_particle_area=min_particle_area,
+            segmentation_run_id=fov_seg_map.get(fov_info.id),
         )
         fovs_processed += processed
         total_particles += particles
@@ -2345,6 +2764,9 @@ def _edit_menu(state: MenuState) -> None:
         MenuItem("4", "Rename channel", "Rename a channel", _rename_channel),
         MenuItem("5", "Rename bio-rep", "Rename a biological replicate", _rename_bio_rep),
         MenuItem("6", "Delete FOV", "Remove FOV(s) and all associated data", _delete_fov),
+        MenuItem("7", "Manage segmentation runs", "List, rename, or delete seg runs", _manage_seg_runs),
+        MenuItem("8", "Manage threshold runs", "List, rename, or delete threshold runs", _manage_thr_runs),
+        MenuItem("9", "Combine masks", "Create new mask from union/intersect of existing masks", _combine_masks),
     ], state).run()
     raise _MenuCancel()
 
@@ -2436,6 +2858,194 @@ def _delete_fov(state: MenuState) -> None:
         console.print(f"  [red]Deleted:[/red] {f.display_name}")
 
     console.print(f"\n[green]{len(selected_fovs)} FOV(s) deleted.[/green]")
+
+
+def _manage_seg_runs(state: MenuState) -> None:
+    """Manage segmentation runs: list, rename, delete."""
+    store = state.require_experiment()
+
+    # Select FOV
+    fovs = store.get_fovs()
+    if not fovs:
+        console.print("[dim]No FOVs found.[/dim]")
+        return
+
+    fov_names = [f.display_name for f in fovs]
+    console.print("\n[bold]Select FOV:[/bold]")
+    selected_name = numbered_select_one(fov_names, "FOV")
+    fov = next(f for f in fovs if f.display_name == selected_name)
+
+    seg_runs = store.list_segmentation_runs(fov.id)
+    if not seg_runs:
+        console.print(f"[dim]No segmentation runs for {fov.display_name}.[/dim]")
+        return
+
+    console.print(f"\n[bold]Segmentation runs for {fov.display_name}:[/bold]")
+    for i, run in enumerate(seg_runs, 1):
+        console.print(
+            f"  \\[{i}] {run.name} — {run.cell_count} cells, "
+            f"model={run.model_name}, created={run.created_at}"
+        )
+
+    action = numbered_select_one(["Rename", "Delete", "Back"], "Action")
+
+    if action == "Rename":
+        run_labels = [f"{r.name} ({r.cell_count} cells)" for r in seg_runs]
+        selected_label = numbered_select_one(run_labels, "Run to rename")
+        idx = run_labels.index(selected_label)
+        run = seg_runs[idx]
+        new_name = menu_prompt(f"New name for '{run.name}'")
+        try:
+            store.rename_segmentation_run(run.id, new_name)
+            console.print(f"[green]Run '{run.name}' → '{new_name}'[/green]")
+        except Exception as e:
+            console.print(f"[red]Rename failed:[/red] {e}")
+
+    elif action == "Delete":
+        run_labels = [f"{r.name} ({r.cell_count} cells)" for r in seg_runs]
+        selected_label = numbered_select_one(run_labels, "Run to delete")
+        idx = run_labels.index(selected_label)
+        run = seg_runs[idx]
+
+        # Show impact
+        impact = store.get_segmentation_run_impact(run.id)
+        console.print(f"\n[yellow]Deleting '{run.name}' will remove:[/yellow]")
+        console.print(f"  Cells: {impact.cells}")
+        console.print(f"  Measurements: {impact.measurements}")
+        console.print(f"  Particles: {impact.particles}")
+        console.print(f"  Config entries: {impact.config_entries}")
+
+        if numbered_select_one(["No", "Yes"], "Confirm deletion?") != "Yes":
+            console.print("[dim]Deletion cancelled.[/dim]")
+            return
+
+        store.delete_segmentation_run(run.id)
+        console.print(f"[green]Segmentation run '{run.name}' deleted.[/green]")
+
+
+def _manage_thr_runs(state: MenuState) -> None:
+    """Manage threshold runs: list, rename, delete."""
+    store = state.require_experiment()
+
+    # Select FOV
+    fovs = store.get_fovs()
+    if not fovs:
+        console.print("[dim]No FOVs found.[/dim]")
+        return
+
+    fov_names = [f.display_name for f in fovs]
+    console.print("\n[bold]Select FOV:[/bold]")
+    selected_name = numbered_select_one(fov_names, "FOV")
+    fov = next(f for f in fovs if f.display_name == selected_name)
+
+    thr_runs = store.list_threshold_runs(fov_id=fov.id)
+    if not thr_runs:
+        console.print(f"[dim]No threshold runs for {fov.display_name}.[/dim]")
+        return
+
+    console.print(f"\n[bold]Threshold runs for {fov.display_name}:[/bold]")
+    for i, run in enumerate(thr_runs, 1):
+        console.print(
+            f"  \\[{i}] {run.channel}/{run.name} — method={run.method}, "
+            f"threshold={run.threshold_value}, created={run.created_at}"
+        )
+
+    action = numbered_select_one(["Rename", "Delete", "Back"], "Action")
+
+    if action == "Rename":
+        run_labels = [f"{r.channel}/{r.name}" for r in thr_runs]
+        selected_label = numbered_select_one(run_labels, "Run to rename")
+        idx = run_labels.index(selected_label)
+        run = thr_runs[idx]
+        new_name = menu_prompt(f"New name for '{run.name}'")
+        try:
+            store.rename_threshold_run(run.id, new_name)
+            console.print(f"[green]Run '{run.name}' → '{new_name}'[/green]")
+        except Exception as e:
+            console.print(f"[red]Rename failed:[/red] {e}")
+
+    elif action == "Delete":
+        run_labels = [f"{r.channel}/{r.name}" for r in thr_runs]
+        selected_label = numbered_select_one(run_labels, "Run to delete")
+        idx = run_labels.index(selected_label)
+        run = thr_runs[idx]
+
+        # Show impact
+        impact = store.get_threshold_run_impact(run.id)
+        console.print(f"\n[yellow]Deleting '{run.channel}/{run.name}' will remove:[/yellow]")
+        console.print(f"  Measurements: {impact.measurements}")
+        console.print(f"  Particles: {impact.particles}")
+        console.print(f"  Config entries: {impact.config_entries}")
+
+        if numbered_select_one(["No", "Yes"], "Confirm deletion?") != "Yes":
+            console.print("[dim]Deletion cancelled.[/dim]")
+            return
+
+        store.delete_threshold_run(run.id)
+        console.print(f"[green]Threshold run '{run.channel}/{run.name}' deleted.[/green]")
+
+
+def _combine_masks(state: MenuState) -> None:
+    """Combine threshold runs via union or intersect."""
+    store = state.require_experiment()
+
+    # Select FOV
+    fovs = store.get_fovs()
+    if not fovs:
+        console.print("[dim]No FOVs found.[/dim]")
+        return
+
+    fov_names = [f.display_name for f in fovs]
+    console.print("\n[bold]Select FOV:[/bold]")
+    selected_name = numbered_select_one(fov_names, "FOV")
+    fov = next(f for f in fovs if f.display_name == selected_name)
+
+    thr_runs = store.list_threshold_runs(fov_id=fov.id)
+    if len(thr_runs) < 2:
+        console.print("[red]Need at least 2 threshold runs to combine.[/red]")
+        return
+
+    # Group by channel and let user pick channel
+    channels = sorted({r.channel for r in thr_runs})
+    if len(channels) > 1:
+        console.print("\n[bold]Select channel:[/bold]")
+        channel = numbered_select_one(channels, "Channel")
+        thr_runs = [r for r in thr_runs if r.channel == channel]
+    else:
+        channel = channels[0]
+
+    if len(thr_runs) < 2:
+        console.print(f"[red]Need at least 2 threshold runs on channel '{channel}'.[/red]")
+        return
+
+    # Select runs to combine
+    run_labels = [f"{r.name} (method={r.method})" for r in thr_runs]
+    console.print(f"\n[bold]Select threshold runs to combine ({channel}):[/bold]")
+    selected_labels = numbered_select_many(run_labels, "Runs (space-separated, or 'all')")
+    selected_runs = [thr_runs[run_labels.index(l)] for l in selected_labels]
+
+    if len(selected_runs) < 2:
+        console.print("[red]Select at least 2 runs.[/red]")
+        return
+
+    # Operation
+    operation = numbered_select_one(["union", "intersect"], "Combine operation")
+
+    # Optional name
+    default_name = f"{operation}_{'_'.join(r.name for r in selected_runs[:3])}"
+    name = menu_prompt("Run name", default=default_name)
+
+    run_ids = [r.id for r in selected_runs]
+    try:
+        new_run_id = store.combine_threshold_runs(run_ids, operation, name=name)
+        console.print(f"\n[green]Combined mask created (run ID {new_run_id}).[/green]")
+        # Show the new run name
+        new_runs = store.list_threshold_runs(fov_id=fov.id, channel=channel)
+        new_run = next((r for r in new_runs if r.id == new_run_id), None)
+        if new_run:
+            console.print(f"  Name: [cyan]{new_run.name}[/cyan]")
+    except (ValueError, KeyError) as e:
+        console.print(f"[red]Combine failed:[/red] {e}")
 
 
 def _export_csv(state: MenuState) -> None:

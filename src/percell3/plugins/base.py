@@ -4,10 +4,31 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from percell3.core import ExperimentStore
+
+
+class InputKind(str, Enum):
+    """Kind of run input a plugin requires."""
+
+    SEGMENTATION = "segmentation"
+    THRESHOLD = "threshold"
+
+
+@dataclass(frozen=True)
+class PluginInputRequirement:
+    """Declares a run input that a plugin needs.
+
+    Attributes:
+        kind: Whether this is a segmentation or threshold run.
+        channel: Required channel name, or None for any channel.
+    """
+
+    kind: InputKind
+    channel: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +108,18 @@ class AnalysisPlugin(ABC):
         Returns:
             PluginResult summarizing the execution.
         """
+
+    def required_inputs(self) -> list[PluginInputRequirement]:
+        """Declare what run inputs this plugin needs.
+
+        Override in subclasses to specify segmentation and/or threshold
+        run requirements. The CLI/GUI will resolve matching runs from
+        the active measurement config.
+
+        Returns:
+            List of input requirements (empty = no run inputs needed).
+        """
+        return []
 
     def get_parameter_schema(self) -> dict[str, Any]:
         """Return JSON Schema for plugin parameters.

@@ -36,6 +36,7 @@ from percell3.core import queries, zarr_io
 from percell3.core.exceptions import (
     BioRepNotFoundError,
     ChannelNotFoundError,
+    DuplicateError,
     ExperimentError,
     ExperimentNotFoundError,
     MeasurementConfigNotFoundError,
@@ -1421,6 +1422,50 @@ class ExperimentStore:
     def set_active_measurement_config(self, config_id: int) -> None:
         """Set the active measurement config."""
         queries.set_active_measurement_config(self._conn, config_id)
+
+    def auto_create_default_config(self) -> int:
+        """Create a default measurement config from latest runs per FOV.
+
+        Uses the latest segmentation run per FOV and pairs it with
+        all threshold runs for that FOV. Sets the new config as active.
+
+        Returns:
+            The config ID.
+
+        Raises:
+            ValueError: If no segmentation runs exist.
+        """
+        fovs = self.get_fovs()
+        if not fovs:
+            raise ValueError("No FOVs in experiment")
+
+        entries: list[tuple[int, int, int | None]] = []
+        for fov in fovs:
+            seg_runs = self.list_segmentation_runs(fov.id)
+            if not seg_runs:
+                continue
+            latest_seg = seg_runs[-1]
+
+            thr_runs = self.list_threshold_runs(fov_id=fov.id)
+            if thr_runs:
+                for tr in thr_runs:
+                    entries.append((fov.id, latest_seg.id, tr.id))
+            else:
+                entries.append((fov.id, latest_seg.id, None))
+
+        if not entries:
+            raise ValueError("No segmentation runs found in any FOV")
+
+        config_id = self.create_measurement_config("default")
+        for fov_id, seg_id, thr_id in entries:
+            self.add_measurement_config_entry(config_id, fov_id, seg_id, thr_id)
+        return config_id
+
+    def remove_measurement_config_entry(self, entry_id: int) -> None:
+        """Remove a single entry from a measurement config."""
+        self._conn.execute(
+            "DELETE FROM measurement_config_entries WHERE id = ?", (entry_id,),
+        )
 
     # --- Run Name Generation ---
 

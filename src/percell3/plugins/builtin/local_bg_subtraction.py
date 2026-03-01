@@ -20,7 +20,13 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from percell3.plugins.base import AnalysisPlugin, PluginInfo, PluginResult
+from percell3.plugins.base import (
+    AnalysisPlugin,
+    InputKind,
+    PluginInfo,
+    PluginInputRequirement,
+    PluginResult,
+)
 
 if TYPE_CHECKING:
     from percell3.core import ExperimentStore
@@ -61,6 +67,12 @@ class LocalBGSubtractionPlugin(AnalysisPlugin):
             description="Per-particle local background subtraction with Gaussian peak detection",
             author="PerCell Team",
         )
+
+    def required_inputs(self) -> list[PluginInputRequirement]:
+        return [
+            PluginInputRequirement(kind=InputKind.SEGMENTATION),
+            PluginInputRequirement(kind=InputKind.THRESHOLD),
+        ]
 
     def validate(self, store: ExperimentStore) -> list[str]:
         """Check experiment has cells, channels, and particle masks."""
