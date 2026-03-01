@@ -8,6 +8,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from percell3.core.constants import (
+    PARTICLE_AGGREGATE_METRICS,
+    PARTICLE_AREA_METRICS,
+    PARTICLE_SUMMARY_METRICS,
+)
 from percell3.core.models import MeasurementRecord, ParticleRecord
 
 if TYPE_CHECKING:
@@ -15,29 +20,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-PARTICLE_SUMMARY_METRICS = [
-    "particle_count",
-    "total_particle_area",
-    "mean_particle_area",
-    "max_particle_area",
-    "particle_coverage_fraction",
-    "mean_particle_mean_intensity",
-    "mean_particle_integrated_intensity",
-    "total_particle_integrated_intensity",
-]
-
-# Particle area metrics stored in pixels, converted to um2 at export time.
-PARTICLE_AREA_METRICS = [
-    "total_particle_area",
-    "mean_particle_area",
-    "max_particle_area",
-]
-
-# Aggregate metrics computed per (channel, condition, bio_rep) group during
-# Prism export.  These are derived from per-cell particle_count data — they
-# are NOT stored in the database.
-PARTICLE_AGGREGATE_METRICS = [
-    "pct_cells_with_particles",
+# Re-export for backwards compatibility with existing imports.
+__all__ = [
+    "PARTICLE_SUMMARY_METRICS",
+    "PARTICLE_AREA_METRICS",
+    "PARTICLE_AGGREGATE_METRICS",
 ]
 
 

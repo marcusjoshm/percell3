@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS experiments (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
-    percell_version TEXT NOT NULL DEFAULT '3.4.0',
+    percell_version TEXT NOT NULL DEFAULT '4.0.0',
+    active_measurement_config_id INTEGER
+        REFERENCES measurement_configs(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -63,18 +65,21 @@ CREATE TABLE IF NOT EXISTS fovs (
 );
 
 CREATE TABLE IF NOT EXISTS segmentation_runs (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
     channel_id INTEGER NOT NULL REFERENCES channels(id),
+    name TEXT NOT NULL,
     model_name TEXT NOT NULL,
     parameters TEXT,
-    cell_count INTEGER,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    cell_count INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(fov_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS cells (
     id INTEGER PRIMARY KEY,
-    fov_id INTEGER NOT NULL REFERENCES fovs(id),
-    segmentation_id INTEGER NOT NULL REFERENCES segmentation_runs(id),
+    fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
+    segmentation_id INTEGER NOT NULL REFERENCES segmentation_runs(id) ON DELETE CASCADE,
     label_value INTEGER NOT NULL,
     centroid_x REAL NOT NULL,
     centroid_y REAL NOT NULL,
@@ -90,77 +95,33 @@ CREATE TABLE IF NOT EXISTS cells (
     UNIQUE(fov_id, segmentation_id, label_value)
 );
 
-CREATE TABLE IF NOT EXISTS measurements (
-    id INTEGER PRIMARY KEY,
-    cell_id INTEGER NOT NULL REFERENCES cells(id),
-    channel_id INTEGER NOT NULL REFERENCES channels(id),
-    metric TEXT NOT NULL,
-    value REAL NOT NULL,
-    scope TEXT NOT NULL DEFAULT 'whole_cell',
-    threshold_run_id INTEGER REFERENCES threshold_runs(id),
-    UNIQUE(cell_id, channel_id, metric, scope),
-    CHECK(scope IN ('whole_cell', 'mask_inside', 'mask_outside'))
-);
-
 CREATE TABLE IF NOT EXISTS threshold_runs (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
     channel_id INTEGER NOT NULL REFERENCES channels(id),
+    name TEXT NOT NULL,
     method TEXT NOT NULL,
     parameters TEXT,
     threshold_value REAL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(fov_id, channel_id, name)
 );
 
-CREATE TABLE IF NOT EXISTS analysis_runs (
+CREATE TABLE IF NOT EXISTS measurements (
     id INTEGER PRIMARY KEY,
-    plugin_name TEXT NOT NULL,
-    parameters TEXT,
-    status TEXT NOT NULL DEFAULT 'running',
-    cell_count INTEGER,
-    started_at TEXT NOT NULL DEFAULT (datetime('now')),
-    completed_at TEXT
+    cell_id INTEGER NOT NULL REFERENCES cells(id) ON DELETE CASCADE,
+    channel_id INTEGER NOT NULL REFERENCES channels(id),
+    metric TEXT NOT NULL,
+    value REAL NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'whole_cell'
+        CHECK(scope IN ('whole_cell', 'mask_inside', 'mask_outside')),
+    threshold_run_id INTEGER REFERENCES threshold_runs(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS tags (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    color TEXT
-);
-
-CREATE TABLE IF NOT EXISTS cell_tags (
-    cell_id INTEGER NOT NULL REFERENCES cells(id),
-    tag_id INTEGER NOT NULL REFERENCES tags(id),
-    PRIMARY KEY (cell_id, tag_id)
-);
-
-CREATE TABLE IF NOT EXISTS fov_status_cache (
-    fov_id INTEGER PRIMARY KEY REFERENCES fovs(id) ON DELETE CASCADE,
-    cell_count INTEGER NOT NULL DEFAULT 0,
-    seg_model TEXT DEFAULT '',
-    measured_channels TEXT DEFAULT '',
-    masked_channels TEXT DEFAULT '',
-    particle_channels TEXT DEFAULT '',
-    particle_count INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS fov_tags (
-    fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
-    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-    PRIMARY KEY (fov_id, tag_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_cells_fov ON cells(fov_id);
-CREATE INDEX IF NOT EXISTS idx_cells_fov_valid ON cells(fov_id, is_valid);
-CREATE INDEX IF NOT EXISTS idx_cells_segmentation ON cells(segmentation_id);
-CREATE INDEX IF NOT EXISTS idx_cells_area ON cells(area_pixels);
-CREATE INDEX IF NOT EXISTS idx_measurements_cell ON measurements(cell_id);
-CREATE INDEX IF NOT EXISTS idx_measurements_channel ON measurements(channel_id);
-CREATE INDEX IF NOT EXISTS idx_measurements_metric ON measurements(metric);
 CREATE TABLE IF NOT EXISTS particles (
     id INTEGER PRIMARY KEY,
-    cell_id INTEGER NOT NULL REFERENCES cells(id),
-    threshold_run_id INTEGER NOT NULL REFERENCES threshold_runs(id),
+    cell_id INTEGER NOT NULL REFERENCES cells(id) ON DELETE CASCADE,
+    threshold_run_id INTEGER NOT NULL REFERENCES threshold_runs(id) ON DELETE CASCADE,
     label_value INTEGER NOT NULL,
     centroid_x REAL NOT NULL,
     centroid_y REAL NOT NULL,
@@ -182,6 +143,90 @@ CREATE TABLE IF NOT EXISTS particles (
     UNIQUE(cell_id, threshold_run_id, label_value)
 );
 
+CREATE TABLE IF NOT EXISTS analysis_runs (
+    id INTEGER PRIMARY KEY,
+    plugin_name TEXT NOT NULL,
+    parameters TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
+    cell_count INTEGER,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    color TEXT
+);
+
+CREATE TABLE IF NOT EXISTS cell_tags (
+    cell_id INTEGER NOT NULL REFERENCES cells(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id),
+    PRIMARY KEY (cell_id, tag_id)
+);
+
+CREATE TABLE IF NOT EXISTS measurement_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS measurement_config_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    config_id INTEGER NOT NULL REFERENCES measurement_configs(id) ON DELETE CASCADE,
+    fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
+    segmentation_run_id INTEGER NOT NULL REFERENCES segmentation_runs(id) ON DELETE CASCADE,
+    threshold_run_id INTEGER REFERENCES threshold_runs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS fov_status_cache (
+    fov_id INTEGER PRIMARY KEY REFERENCES fovs(id) ON DELETE CASCADE,
+    status_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS fov_tags (
+    fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (fov_id, tag_id)
+);
+
+-- Partial unique indexes for measurements (handles NULL threshold_run_id)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_meas_unique_with_thresh
+    ON measurements(cell_id, channel_id, metric, scope, threshold_run_id)
+    WHERE threshold_run_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_meas_unique_without_thresh
+    ON measurements(cell_id, channel_id, metric, scope)
+    WHERE threshold_run_id IS NULL;
+
+-- Partial unique indexes for config entries (handles NULL threshold_run_id)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_config_entry_with_thresh
+    ON measurement_config_entries(config_id, fov_id, segmentation_run_id, threshold_run_id)
+    WHERE threshold_run_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_config_entry_without_thresh
+    ON measurement_config_entries(config_id, fov_id, segmentation_run_id)
+    WHERE threshold_run_id IS NULL;
+
+-- Standard indexes
+CREATE INDEX IF NOT EXISTS idx_cells_fov ON cells(fov_id);
+CREATE INDEX IF NOT EXISTS idx_cells_fov_valid ON cells(fov_id, is_valid);
+CREATE INDEX IF NOT EXISTS idx_cells_segmentation ON cells(segmentation_id);
+CREATE INDEX IF NOT EXISTS idx_cells_area ON cells(area_pixels);
+CREATE INDEX IF NOT EXISTS idx_measurements_cell ON measurements(cell_id);
+CREATE INDEX IF NOT EXISTS idx_measurements_channel ON measurements(channel_id);
+CREATE INDEX IF NOT EXISTS idx_measurements_metric ON measurements(metric);
+CREATE INDEX IF NOT EXISTS idx_measurements_threshold_run ON measurements(threshold_run_id);
+CREATE INDEX IF NOT EXISTS idx_measurements_cell_scope ON measurements(cell_id, scope);
+CREATE INDEX IF NOT EXISTS idx_measurements_cell_channel_scope
+    ON measurements(cell_id, channel_id, scope);
+CREATE INDEX IF NOT EXISTS idx_seg_runs_fov ON segmentation_runs(fov_id);
+CREATE INDEX IF NOT EXISTS idx_thresh_runs_fov ON threshold_runs(fov_id);
+CREATE INDEX IF NOT EXISTS idx_thresh_runs_fov_channel ON threshold_runs(fov_id, channel_id);
+CREATE INDEX IF NOT EXISTS idx_config_entries_config ON measurement_config_entries(config_id);
+CREATE INDEX IF NOT EXISTS idx_config_entries_fov ON measurement_config_entries(fov_id);
+CREATE INDEX IF NOT EXISTS idx_config_entries_seg_run ON measurement_config_entries(segmentation_run_id);
 CREATE INDEX IF NOT EXISTS idx_fovs_condition ON fovs(condition_id);
 CREATE INDEX IF NOT EXISTS idx_fovs_bio_rep ON fovs(bio_rep_id);
 CREATE INDEX IF NOT EXISTS idx_fov_tags_fov ON fov_tags(fov_id);
@@ -194,18 +239,25 @@ EXPECTED_TABLES = frozenset({
     "experiments", "channels", "conditions", "timepoints", "bio_reps", "fovs",
     "segmentation_runs", "cells", "measurements", "threshold_runs",
     "analysis_runs", "tags", "cell_tags", "particles",
+    "measurement_configs", "measurement_config_entries",
     "fov_status_cache", "fov_tags",
 })
 
 EXPECTED_INDEXES = frozenset({
     "idx_cells_fov", "idx_cells_fov_valid", "idx_cells_segmentation", "idx_cells_area",
     "idx_measurements_cell", "idx_measurements_channel", "idx_measurements_metric",
+    "idx_measurements_threshold_run", "idx_measurements_cell_scope",
+    "idx_measurements_cell_channel_scope",
+    "idx_meas_unique_with_thresh", "idx_meas_unique_without_thresh",
+    "idx_seg_runs_fov", "idx_thresh_runs_fov", "idx_thresh_runs_fov_channel",
+    "idx_config_entries_config", "idx_config_entries_fov", "idx_config_entries_seg_run",
+    "idx_config_entry_with_thresh", "idx_config_entry_without_thresh",
     "idx_fovs_condition", "idx_fovs_bio_rep",
     "idx_fov_tags_fov", "idx_fov_tags_tag",
     "idx_particles_cell", "idx_particles_run",
 })
 
-EXPECTED_VERSION = "3.4.0"
+EXPECTED_VERSION = "4.0.0"
 
 
 def create_schema(
@@ -250,79 +302,8 @@ def _ensure_tables(conn: sqlite3.Connection) -> None:
     if not missing:
         return
 
-    # Only create tables that are missing — use IF NOT EXISTS for safety
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS particles (
-            id INTEGER PRIMARY KEY,
-            cell_id INTEGER NOT NULL REFERENCES cells(id),
-            threshold_run_id INTEGER NOT NULL REFERENCES threshold_runs(id),
-            label_value INTEGER NOT NULL,
-            centroid_x REAL NOT NULL,
-            centroid_y REAL NOT NULL,
-            bbox_x INTEGER NOT NULL,
-            bbox_y INTEGER NOT NULL,
-            bbox_w INTEGER NOT NULL,
-            bbox_h INTEGER NOT NULL,
-            area_pixels REAL NOT NULL,
-            area_um2 REAL,
-            perimeter REAL,
-            circularity REAL,
-            eccentricity REAL,
-            solidity REAL,
-            major_axis_length REAL,
-            minor_axis_length REAL,
-            mean_intensity REAL,
-            max_intensity REAL,
-            integrated_intensity REAL,
-            UNIQUE(cell_id, threshold_run_id, label_value)
-        );
-
-        CREATE TABLE IF NOT EXISTS tags (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
-            color TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS cell_tags (
-            cell_id INTEGER NOT NULL REFERENCES cells(id),
-            tag_id INTEGER NOT NULL REFERENCES tags(id),
-            PRIMARY KEY (cell_id, tag_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS analysis_runs (
-            id INTEGER PRIMARY KEY,
-            plugin_name TEXT NOT NULL,
-            parameters TEXT,
-            status TEXT NOT NULL DEFAULT 'running',
-            cell_count INTEGER,
-            started_at TEXT NOT NULL DEFAULT (datetime('now')),
-            completed_at TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS fov_status_cache (
-            fov_id INTEGER PRIMARY KEY REFERENCES fovs(id) ON DELETE CASCADE,
-            cell_count INTEGER NOT NULL DEFAULT 0,
-            seg_model TEXT DEFAULT '',
-            measured_channels TEXT DEFAULT '',
-            masked_channels TEXT DEFAULT '',
-            particle_channels TEXT DEFAULT '',
-            particle_count INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS fov_tags (
-            fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
-            tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-            PRIMARY KEY (fov_id, tag_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_particles_cell ON particles(cell_id);
-        CREATE INDEX IF NOT EXISTS idx_particles_run ON particles(threshold_run_id);
-        CREATE INDEX IF NOT EXISTS idx_fovs_condition ON fovs(condition_id);
-        CREATE INDEX IF NOT EXISTS idx_fovs_bio_rep ON fovs(bio_rep_id);
-        CREATE INDEX IF NOT EXISTS idx_fov_tags_fov ON fov_tags(fov_id);
-        CREATE INDEX IF NOT EXISTS idx_fov_tags_tag ON fov_tags(tag_id);
-    """)
+    # Re-run the full schema — IF NOT EXISTS keeps existing tables untouched
+    conn.executescript(_SCHEMA_SQL)
 
 
 def open_database(db_path: Path) -> sqlite3.Connection:
@@ -336,6 +317,7 @@ def open_database(db_path: Path) -> sqlite3.Connection:
 
     Raises:
         ExperimentNotFoundError: If the database file does not exist.
+        SchemaVersionError: If the schema major version does not match.
     """
     if not db_path.exists():
         raise ExperimentNotFoundError(str(db_path))
@@ -345,15 +327,15 @@ def open_database(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
 
-    # Check schema version — no migration from older versions (breaking change)
+    # Check schema version — no migration from older major versions
     row = conn.execute(
         "SELECT percell_version FROM experiments LIMIT 1"
     ).fetchone()
     if row is not None:
         stored = row["percell_version"]
-        stored_parts = stored.split(".")[:2]
-        expected_parts = EXPECTED_VERSION.split(".")[:2]
-        if stored_parts != expected_parts:
+        stored_major = stored.split(".")[0]
+        expected_major = EXPECTED_VERSION.split(".")[0]
+        if stored_major != expected_major:
             conn.close()
             raise SchemaVersionError(stored, EXPECTED_VERSION)
 

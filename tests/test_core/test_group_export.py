@@ -19,7 +19,7 @@ def store_with_groups(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP")
     store.add_condition("ctrl")
     fov_id = store.add_fov("ctrl", width=128, height=128)
-    seg_id = store.add_segmentation_run("GFP", "cyto3")
+    seg_id = store.add_segmentation_run(fov_id, "GFP", "cyto3")
 
     # Create 4 cells
     cells = [
@@ -63,7 +63,7 @@ def store_no_groups(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP")
     store.add_condition("ctrl")
     fov_id = store.add_fov("ctrl", width=128, height=128)
-    seg_id = store.add_segmentation_run("GFP", "cyto3")
+    seg_id = store.add_segmentation_run(fov_id, "GFP", "cyto3")
 
     cells = [
         CellRecord(

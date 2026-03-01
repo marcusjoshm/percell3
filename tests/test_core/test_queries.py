@@ -147,7 +147,7 @@ class TestBioRepQueries:
         cid = queries.insert_condition(db_conn, "control")
         br_id = queries.insert_bio_rep(db_conn, "N1")
         fov_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cid, bio_rep_id=br_id)
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+        seg_id = queries.insert_segmentation_run(db_conn, fov_id, ch_id, "seg", "cyto3")
         cells = [
             CellRecord(
                 fov_id=fov_id, segmentation_id=seg_id, label_value=1,
@@ -168,11 +168,12 @@ class TestBioRepQueries:
         n2_id = queries.insert_bio_rep(db_conn, "N2")
         fov1 = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cid, bio_rep_id=n1_id)
         fov2 = queries.insert_fov(db_conn, "ctrl_N2_FOV_001", condition_id=cid, bio_rep_id=n2_id)
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+        seg_id1 = queries.insert_segmentation_run(db_conn, fov1, ch_id, "seg", "cyto3")
+        seg_id2 = queries.insert_segmentation_run(db_conn, fov2, ch_id, "seg", "cyto3")
 
         cells_n1 = [
             CellRecord(
-                fov_id=fov1, segmentation_id=seg_id, label_value=i,
+                fov_id=fov1, segmentation_id=seg_id1, label_value=i,
                 centroid_x=100, centroid_y=200,
                 bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
                 area_pixels=1200,
@@ -181,7 +182,7 @@ class TestBioRepQueries:
         ]
         cells_n2 = [
             CellRecord(
-                fov_id=fov2, segmentation_id=seg_id, label_value=i,
+                fov_id=fov2, segmentation_id=seg_id2, label_value=i,
                 centroid_x=100, centroid_y=200,
                 bbox_x=80, bbox_y=180, bbox_w=40, bbox_h=40,
                 area_pixels=1200,
@@ -259,7 +260,7 @@ class TestCellQueries:
         cond_id = queries.insert_condition(db_conn, "control")
         br_id = queries.insert_bio_rep(db_conn, "N1")
         fov_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id)
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+        seg_id = queries.insert_segmentation_run(db_conn, fov_id, ch_id, "seg", "cyto3")
         return cond_id, fov_id, seg_id
 
     def test_insert_and_select(self, db_conn):
@@ -314,7 +315,7 @@ class TestMeasurementQueries:
         cond_id = queries.insert_condition(db_conn, "control")
         br_id = queries.insert_bio_rep(db_conn, "N1")
         fov_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id)
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+        seg_id = queries.insert_segmentation_run(db_conn, fov_id, ch_id, "seg", "cyto3")
         cells = [
             CellRecord(
                 fov_id=fov_id, segmentation_id=seg_id, label_value=i,
@@ -325,10 +326,10 @@ class TestMeasurementQueries:
             for i in range(1, 4)
         ]
         cell_ids = queries.insert_cells(db_conn, cells)
-        return ch_id, cell_ids
+        return ch_id, fov_id, cell_ids
 
     def test_insert_and_select(self, db_conn):
-        ch_id, cell_ids = self._setup(db_conn)
+        ch_id, fov_id, cell_ids = self._setup(db_conn)
         measurements = [
             MeasurementRecord(cell_id=cid, channel_id=ch_id,
                               metric="mean_intensity", value=42.0 + cid)
@@ -340,7 +341,7 @@ class TestMeasurementQueries:
         assert all(r["metric"] == "mean_intensity" for r in rows)
 
     def test_filter_by_metric(self, db_conn):
-        ch_id, cell_ids = self._setup(db_conn)
+        ch_id, fov_id, cell_ids = self._setup(db_conn)
         measurements = []
         for cid in cell_ids:
             measurements.append(
@@ -356,7 +357,7 @@ class TestMeasurementQueries:
         assert len(rows) == 3
 
     def test_insert_with_scope(self, db_conn):
-        ch_id, cell_ids = self._setup(db_conn)
+        ch_id, fov_id, cell_ids = self._setup(db_conn)
         measurements = [
             MeasurementRecord(
                 cell_id=cell_ids[0], channel_id=ch_id,
@@ -378,7 +379,7 @@ class TestMeasurementQueries:
         assert scopes == {"whole_cell", "mask_inside", "mask_outside"}
 
     def test_filter_by_scope(self, db_conn):
-        ch_id, cell_ids = self._setup(db_conn)
+        ch_id, fov_id, cell_ids = self._setup(db_conn)
         measurements = [
             MeasurementRecord(
                 cell_id=cell_ids[0], channel_id=ch_id,
@@ -396,7 +397,7 @@ class TestMeasurementQueries:
         assert rows[0]["value"] == 30.0
 
     def test_scope_default_is_whole_cell(self, db_conn):
-        ch_id, cell_ids = self._setup(db_conn)
+        ch_id, fov_id, cell_ids = self._setup(db_conn)
         m = MeasurementRecord(
             cell_id=cell_ids[0], channel_id=ch_id,
             metric="mean_intensity", value=42.0,
@@ -408,7 +409,7 @@ class TestMeasurementQueries:
 
     def test_overwrite_by_scope(self, db_conn):
         """INSERT OR REPLACE respects scope in unique constraint."""
-        ch_id, cell_ids = self._setup(db_conn)
+        ch_id, fov_id, cell_ids = self._setup(db_conn)
         m1 = MeasurementRecord(
             cell_id=cell_ids[0], channel_id=ch_id,
             metric="mean_intensity", value=42.0, scope="whole_cell",
@@ -434,8 +435,8 @@ class TestMeasurementQueries:
         assert rows[0]["value"] == 99.0
 
     def test_threshold_run_id_stored(self, db_conn):
-        ch_id, cell_ids = self._setup(db_conn)
-        tr_id = queries.insert_threshold_run(db_conn, ch_id, "otsu")
+        ch_id, fov_id, cell_ids = self._setup(db_conn)
+        tr_id = queries.insert_threshold_run(db_conn, fov_id, ch_id, "thr", "otsu")
         m = MeasurementRecord(
             cell_id=cell_ids[0], channel_id=ch_id,
             metric="mean_intensity", value=30.0,
@@ -452,7 +453,7 @@ class TestTagQueries:
         cond_id = queries.insert_condition(db_conn, "control")
         br_id = queries.insert_bio_rep(db_conn, "N1")
         fov_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id)
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+        seg_id = queries.insert_segmentation_run(db_conn, fov_id, ch_id, "seg", "cyto3")
         cells = [
             CellRecord(
                 fov_id=fov_id, segmentation_id=seg_id, label_value=i,
@@ -504,7 +505,7 @@ class TestEmptyListGuards:
         cond_id = queries.insert_condition(db_conn, "control")
         br_id = queries.insert_bio_rep(db_conn, "N1")
         fov_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id)
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+        seg_id = queries.insert_segmentation_run(db_conn, fov_id, ch_id, "seg", "cyto3")
         return ch_id, cond_id, fov_id, seg_id
 
     def test_delete_cell_tags_empty_list(self, db_conn):
@@ -536,7 +537,7 @@ class TestInsertCellsRollback:
         cond_id = queries.insert_condition(db_conn, "control")
         br_id = queries.insert_bio_rep(db_conn, "N1")
         fov_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id)
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+        seg_id = queries.insert_segmentation_run(db_conn, fov_id, ch_id, "seg", "cyto3")
 
         cells = [
             CellRecord(
@@ -615,7 +616,7 @@ class TestDeleteCellsForFov:
         cond_id = queries.insert_condition(db_conn, "control")
         br_id = queries.insert_bio_rep(db_conn, "N1")
         fov_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id)
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cpsam")
+        seg_id = queries.insert_segmentation_run(db_conn, fov_id, ch_id, "seg", "cpsam")
         cells = [
             CellRecord(
                 fov_id=fov_id, segmentation_id=seg_id, label_value=i,
@@ -657,7 +658,7 @@ class TestFovSegmentationSummary:
         br_id = queries.insert_bio_rep(db_conn, "N1")
         fov1_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id)
         fov2_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_002", condition_id=cond_id, bio_rep_id=br_id)
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cpsam")
+        seg_id = queries.insert_segmentation_run(db_conn, fov1_id, ch_id, "seg", "cpsam")
 
         cells = [
             CellRecord(
@@ -682,7 +683,7 @@ class TestParticleQueries:
         cond_id = queries.insert_condition(db_conn, "control")
         br_id = queries.insert_bio_rep(db_conn, "N1")
         fov_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id)
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cpsam")
+        seg_id = queries.insert_segmentation_run(db_conn, fov_id, ch_id, "seg", "cpsam")
         cells = [
             CellRecord(
                 fov_id=fov_id, segmentation_id=seg_id, label_value=i,
@@ -693,7 +694,7 @@ class TestParticleQueries:
             for i in range(1, 3)
         ]
         cell_ids = queries.insert_cells(db_conn, cells)
-        thr_id = queries.insert_threshold_run(db_conn, ch_id, "otsu")
+        thr_id = queries.insert_threshold_run(db_conn, fov_id, ch_id, "thr", "otsu")
         return fov_id, cell_ids, thr_id, ch_id
 
     def test_insert_and_select_particles(self, db_conn):
@@ -722,7 +723,7 @@ class TestParticleQueries:
 
     def test_select_by_threshold_run(self, db_conn):
         fov_id, cell_ids, thr_id, ch_id = self._setup(db_conn)
-        thr_id2 = queries.insert_threshold_run(db_conn, ch_id, "manual")
+        thr_id2 = queries.insert_threshold_run(db_conn, fov_id, ch_id, "thr_manual", "manual")
         particles = [
             ParticleRecord(
                 cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
@@ -789,15 +790,18 @@ class TestParticleQueries:
 class TestThresholdRunQueries:
     def test_select_threshold_runs(self, db_conn):
         ch_id = queries.insert_channel(db_conn, "GFP")
+        cond_id = queries.insert_condition(db_conn, "control")
+        br_id = queries.insert_bio_rep(db_conn, "N1")
+        fov_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id)
         thr_id = queries.insert_threshold_run(
-            db_conn, ch_id, "otsu", {"fov_name": "fov_1"}
+            db_conn, fov_id, ch_id, "thr", "otsu", {"fov_name": "fov_1"}
         )
-        runs = queries.select_threshold_runs(db_conn)
+        runs = queries.select_threshold_runs_for_fov(db_conn, fov_id)
         assert len(runs) == 1
-        assert runs[0]["id"] == thr_id
-        assert runs[0]["channel"] == "GFP"
-        assert runs[0]["method"] == "otsu"
-        assert runs[0]["parameters"]["fov_name"] == "fov_1"
+        assert runs[0].id == thr_id
+        assert runs[0].channel == "GFP"
+        assert runs[0].method == "otsu"
+        assert runs[0].parameters["fov_name"] == "fov_1"
 
 
 class TestDeleteTagsByPrefix:
@@ -806,7 +810,7 @@ class TestDeleteTagsByPrefix:
         cond_id = queries.insert_condition(db_conn, "ctrl")
         br_id = queries.insert_bio_rep(db_conn, "N1")
         fov_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id)
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cpsam")
+        seg_id = queries.insert_segmentation_run(db_conn, fov_id, ch_id, "seg", "cpsam")
         return fov_id, seg_id
 
     def test_delete_matching_tags(self, db_conn):
@@ -877,7 +881,7 @@ class TestExperimentSummary:
             db_conn, "ctrl_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id,
             width=64, height=64,
         )
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+        seg_id = queries.insert_segmentation_run(db_conn, fov_id, ch_id, "seg", "cyto3")
         cells = [
             CellRecord(
                 fov_id=fov_id, segmentation_id=seg_id, label_value=i,
@@ -910,7 +914,7 @@ class TestExperimentSummary:
             db_conn, "treated_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id,
             width=64, height=64,
         )
-        seg_id = queries.insert_segmentation_run(db_conn, ch_id, "cyto3")
+        seg_id = queries.insert_segmentation_run(db_conn, fov_id, ch_id, "seg", "cyto3")
 
         cells = [
             CellRecord(
@@ -946,7 +950,7 @@ class TestExperimentSummary:
         )
         queries.insert_measurements(db_conn, measurements)
 
-        thr_id = queries.insert_threshold_run(db_conn, ch_id, "otsu")
+        thr_id = queries.insert_threshold_run(db_conn, fov_id, ch_id, "thr", "otsu")
         particles = [
             ParticleRecord(
                 cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=j,
@@ -988,23 +992,29 @@ class TestDisplayNameGeneration:
 
 class TestFovStatusCache:
     def test_upsert_and_select(self, db_conn):
+        import json as _json
+
         cond_id = queries.insert_condition(db_conn, "ctrl")
         br_id = queries.insert_bio_rep(db_conn, "N1")
         fov_id = queries.insert_fov(db_conn, "ctrl_N1_FOV_001", condition_id=cond_id, bio_rep_id=br_id)
 
-        queries.upsert_fov_status_cache(
-            db_conn, fov_id, cell_count=10, seg_model="cpsam",
-            measured_channels="GFP,DAPI", masked_channels="GFP",
-            particle_channels="GFP", particle_count=42,
-        )
+        status = {
+            "cell_count": 10,
+            "seg_model": "cpsam",
+            "measured_channels": "GFP,DAPI",
+            "masked_channels": "GFP",
+            "particle_channels": "GFP",
+            "particle_count": 42,
+        }
+        queries.upsert_fov_status_cache(db_conn, fov_id, _json.dumps(status))
 
         rows = queries.select_fov_status_cache(db_conn)
         assert len(rows) == 1
         r = rows[0]
         assert r["fov_id"] == fov_id
-        assert r["cell_count"] == 10
-        assert r["seg_model"] == "cpsam"
-        assert r["particle_count"] == 42
+        assert r["status"]["cell_count"] == 10
+        assert r["status"]["seg_model"] == "cpsam"
+        assert r["status"]["particle_count"] == 42
 
 
 class TestFovTags:

@@ -53,6 +53,55 @@ class CellRecord:
 
 
 @dataclass(frozen=True)
+class SegmentationRunInfo:
+    """Metadata for a named segmentation run on a single FOV."""
+
+    id: int
+    fov_id: int
+    channel: str
+    name: str
+    model_name: str
+    parameters: dict | None
+    cell_count: int
+    created_at: str
+
+
+@dataclass(frozen=True)
+class ThresholdRunInfo:
+    """Metadata for a named threshold run on a single FOV."""
+
+    id: int
+    fov_id: int
+    channel: str
+    name: str
+    method: str
+    parameters: dict | None
+    threshold_value: float | None
+    created_at: str
+
+
+@dataclass(frozen=True)
+class MeasurementConfigInfo:
+    """Metadata for a measurement configuration."""
+
+    id: int
+    name: str
+    created_at: str
+    entry_count: int
+
+
+@dataclass(frozen=True)
+class MeasurementConfigEntry:
+    """A single entry in a measurement configuration."""
+
+    id: int
+    config_id: int
+    fov_id: int
+    segmentation_run_id: int
+    threshold_run_id: int | None
+
+
+@dataclass(frozen=True)
 class MeasurementRecord:
     """A single measurement value for one cell on one channel."""
 

@@ -43,7 +43,7 @@ class TestCreateSchema:
 
     def test_experiment_has_version(self, db_conn):
         row = db_conn.execute("SELECT percell_version FROM experiments").fetchone()
-        assert row["percell_version"] == "3.4.0"
+        assert row["percell_version"] == "4.0.0"
 
 
 class TestOpenDatabase:
@@ -70,10 +70,10 @@ class TestOpenDatabase:
             open_database(db_path)
 
     def test_compatible_patch_version_ok(self, tmp_path):
-        """Different patch version with same major.minor should open fine."""
+        """Different patch version with same major should open fine."""
         db_path = tmp_path / "patch.db"
         conn = create_schema(db_path, name="Patch")
-        conn.execute("UPDATE experiments SET percell_version = '3.4.99'")
+        conn.execute("UPDATE experiments SET percell_version = '4.0.99'")
         conn.commit()
         conn.close()
 
@@ -94,7 +94,7 @@ class TestEnsureMissingTables:
     def test_missing_tables_created(self, tmp_path):
         """Opening a database missing some tables creates them."""
         db_path = tmp_path / "nop.db"
-        # Create a minimal 3.4.0 database WITHOUT particles, tags, etc.
+        # Create a minimal 4.0.0 database WITHOUT particles, tags, configs, etc.
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         conn.executescript("""
@@ -105,7 +105,8 @@ class TestEnsureMissingTables:
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
-                percell_version TEXT NOT NULL DEFAULT '3.4.0',
+                percell_version TEXT NOT NULL DEFAULT '4.0.0',
+                active_measurement_config_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
@@ -152,18 +153,21 @@ class TestEnsureMissingTables:
             );
 
             CREATE TABLE segmentation_runs (
-                id INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
                 channel_id INTEGER NOT NULL REFERENCES channels(id),
+                name TEXT NOT NULL,
                 model_name TEXT NOT NULL,
                 parameters TEXT,
-                cell_count INTEGER,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                cell_count INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(fov_id, name)
             );
 
             CREATE TABLE cells (
                 id INTEGER PRIMARY KEY,
-                fov_id INTEGER NOT NULL REFERENCES fovs(id),
-                segmentation_id INTEGER NOT NULL REFERENCES segmentation_runs(id),
+                fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
+                segmentation_id INTEGER NOT NULL REFERENCES segmentation_runs(id) ON DELETE CASCADE,
                 label_value INTEGER NOT NULL,
                 centroid_x REAL NOT NULL,
                 centroid_y REAL NOT NULL,
@@ -179,28 +183,30 @@ class TestEnsureMissingTables:
                 UNIQUE(fov_id, segmentation_id, label_value)
             );
 
-            CREATE TABLE measurements (
-                id INTEGER PRIMARY KEY,
-                cell_id INTEGER NOT NULL REFERENCES cells(id),
-                channel_id INTEGER NOT NULL REFERENCES channels(id),
-                metric TEXT NOT NULL,
-                value REAL NOT NULL,
-                scope TEXT NOT NULL DEFAULT 'whole_cell',
-                threshold_run_id INTEGER REFERENCES threshold_runs(id),
-                UNIQUE(cell_id, channel_id, metric, scope),
-                CHECK(scope IN ('whole_cell', 'mask_inside', 'mask_outside'))
-            );
-
             CREATE TABLE threshold_runs (
-                id INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
                 channel_id INTEGER NOT NULL REFERENCES channels(id),
+                name TEXT NOT NULL,
                 method TEXT NOT NULL,
                 parameters TEXT,
                 threshold_value REAL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(fov_id, channel_id, name)
             );
 
-            INSERT INTO experiments (name, percell_version) VALUES ('Test', '3.4.0');
+            CREATE TABLE measurements (
+                id INTEGER PRIMARY KEY,
+                cell_id INTEGER NOT NULL REFERENCES cells(id) ON DELETE CASCADE,
+                channel_id INTEGER NOT NULL REFERENCES channels(id),
+                metric TEXT NOT NULL,
+                value REAL NOT NULL,
+                scope TEXT NOT NULL DEFAULT 'whole_cell'
+                    CHECK(scope IN ('whole_cell', 'mask_inside', 'mask_outside')),
+                threshold_run_id INTEGER REFERENCES threshold_runs(id) ON DELETE CASCADE
+            );
+
+            INSERT INTO experiments (name, percell_version) VALUES ('Test', '4.0.0');
         """)
         conn.commit()
         conn.close()

@@ -5,12 +5,16 @@ Handles image, label, and mask storage with NGFF 0.4 metadata.
 
 from __future__ import annotations
 
+import logging
+import shutil
 from pathlib import Path
 
 import dask.array as da
 import numpy as np
 import zarr
 from numcodecs import Blosc, Zstd
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -42,19 +46,19 @@ def image_group_path(fov_id: int) -> str:
     return fov_group_path(fov_id)
 
 
-def label_group_path(fov_id: int) -> str:
-    """Zarr group path for a FOV's label image."""
-    return fov_group_path(fov_id)
+def label_group_path(fov_id: int, segmentation_run_id: int) -> str:
+    """Zarr group path for a FOV's label image under a segmentation run."""
+    return f"fov_{fov_id}/seg_{segmentation_run_id}"
 
 
-def mask_group_path(fov_id: int, channel: str) -> str:
-    """Zarr group path for a FOV's threshold mask."""
-    return f"fov_{fov_id}/threshold_{channel}"
+def mask_group_path(fov_id: int, channel: str, threshold_run_id: int) -> str:
+    """Zarr group path for a FOV's threshold mask under a threshold run."""
+    return f"fov_{fov_id}/{channel}/run_{threshold_run_id}/mask"
 
 
-def particle_label_group_path(fov_id: int, channel: str) -> str:
-    """Zarr group path for a FOV's particle labels."""
-    return f"fov_{fov_id}/particles_{channel}"
+def particle_label_group_path(fov_id: int, channel: str, threshold_run_id: int) -> str:
+    """Zarr group path for a FOV's particle labels under a threshold run."""
+    return f"fov_{fov_id}/{channel}/run_{threshold_run_id}/particles"
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +382,28 @@ def init_zarr_store(zarr_path: Path) -> None:
     """Create an empty zarr group at the given path."""
     root = zarr.open(str(zarr_path), mode="w")
     root.attrs["percell_version"] = "3.2.0"
+
+
+# ---------------------------------------------------------------------------
+# Deletion helpers
+# ---------------------------------------------------------------------------
+
+
+def delete_zarr_group(zarr_path: Path, group_path: str) -> None:
+    """Delete a Zarr group and all its contents.
+
+    Uses shutil.rmtree on the directory backing the group, which is the
+    most robust method for zarr v2 DirectoryStore deletion.  Safe to call
+    if the group does not exist (no-op).
+
+    Args:
+        zarr_path: Path to the zarr store root.
+        group_path: Relative group path within the store (e.g. "fov_1/seg_3").
+    """
+    group_dir = zarr_path / group_path
+    if group_dir.exists():
+        shutil.rmtree(group_dir)
+        logger.debug("Deleted zarr group %s from %s", group_path, zarr_path)
 
 
 # ---------------------------------------------------------------------------

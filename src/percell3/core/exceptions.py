@@ -77,3 +77,40 @@ class DuplicateError(ExperimentError):
         super().__init__(msg)
         self.entity = entity
         self.name = name
+
+
+class SegmentationRunNotFoundError(ExperimentError):
+    """Raised when referencing a nonexistent segmentation run."""
+
+    def __init__(self, run_id: int | None = None) -> None:
+        msg = f"Segmentation run not found: {run_id}" if run_id is not None else "Segmentation run not found"
+        super().__init__(msg)
+        self.run_id = run_id
+
+
+class ThresholdRunNotFoundError(ExperimentError):
+    """Raised when referencing a nonexistent threshold run."""
+
+    def __init__(self, run_id: int | None = None) -> None:
+        msg = f"Threshold run not found: {run_id}" if run_id is not None else "Threshold run not found"
+        super().__init__(msg)
+        self.run_id = run_id
+
+
+class MeasurementConfigNotFoundError(ExperimentError):
+    """Raised when referencing a nonexistent measurement configuration."""
+
+    def __init__(self, config_id: int | None = None) -> None:
+        msg = f"Measurement config not found: {config_id}" if config_id is not None else "Measurement config not found"
+        super().__init__(msg)
+        self.config_id = config_id
+
+
+class RunNameError(ExperimentError):
+    """Raised when a run name is invalid or conflicts with an existing name."""
+
+    def __init__(self, name: str, reason: str = "invalid") -> None:
+        msg = f"Invalid run name {name!r}: {reason}"
+        super().__init__(msg)
+        self.name = name
+        self.reason = reason
