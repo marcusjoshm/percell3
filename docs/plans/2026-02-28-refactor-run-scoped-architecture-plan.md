@@ -797,7 +797,7 @@ Changes:
 
 - [x] Update `threshold_fov()` with `fov_id`, auto-name
 - [x] Update `threshold_group()` to create per-group named runs
-- [ ] Remove immediate particle extraction from `threshold_fov()` and `threshold_group()` (particles now extracted during `BatchMeasurer.measure_config()` instead)
+- [x] Remove immediate particle extraction from `threshold_fov()` and `threshold_group()` (particles now extracted during `BatchMeasurer.measure_config()` instead)
 - [x] Pass `threshold_run_id` to `write_mask()`
 
 ##### 2.3 Particle Analyzer
@@ -890,14 +890,14 @@ Transaction boundary: per-config-entry commit. If entry 5 fails, entries 1-4 are
 
 Re-measure behavior: skip entries that already have measurements unless `force=True`.
 
-- [ ] Rewrite `BatchMeasurer` to iterate config entries
-- [ ] Resolve channel from threshold run metadata (`store.get_threshold_run()`)
-- [ ] Implement per-entry commit boundary
-- [ ] Add skip-if-already-measured logic (check existing measurements)
-- [ ] Add `force` parameter to re-measure all
-- [ ] Run particle analysis as part of measurement (deferred from thresholding)
-- [ ] Progress callback reports per-entry progress
-- [ ] Add `_skip_cache` parameter to avoid per-entry `update_fov_status_cache()` calls (rebuild once at end)
+- [x] Rewrite `BatchMeasurer` to iterate config entries
+- [x] Resolve channel from threshold run metadata (`store.get_threshold_run()`)
+- [x] Implement per-entry commit boundary
+- [x] Add skip-if-already-measured logic (check existing measurements)
+- [x] Add `force` parameter to re-measure all
+- [x] Run particle analysis as part of measurement (deferred from thresholding)
+- [x] Progress callback reports per-entry progress
+- [x] Add `_skip_cache` parameter to avoid per-entry `update_fov_status_cache()` calls (rebuild once at end)
 
 > **Research Insight — Batch Measurement Performance (CRITICAL):**
 >
@@ -971,14 +971,14 @@ Re-measure behavior: skip entries that already have measurements unless `force=T
 - [x] Test segmentation engine creates per-FOV runs
 - [x] Test re-segmentation creates new run without deleting existing runs
 - [x] Test threshold engine creates named runs
-- [ ] Test threshold engine does NOT extract particles
+- [x] Test threshold engine does NOT extract particles
 - [x] Test particle analyzer reads from run-scoped Zarr paths
 - [x] Test particle summary metrics have threshold_run_id set
-- [ ] Test config-driven batch measurement: whole_cell + mask-scoped + particles
-- [ ] Test batch measurement skips already-measured entries
-- [ ] Test batch measurement with force=True re-measures
-- [ ] Test partial batch failure commits completed entries
-- [ ] Test channel resolution from threshold run metadata in `measure_config()`
+- [x] Test config-driven batch measurement: whole_cell + mask-scoped + particles
+- [x] Test batch measurement skips already-measured entries
+- [x] Test batch measurement with force=True re-measures
+- [x] Test partial batch failure commits completed entries
+- [x] Test channel resolution from threshold run metadata in `measure_config()`
 
 ---
 
