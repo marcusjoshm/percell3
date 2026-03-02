@@ -238,6 +238,10 @@ class ExperimentStore:
     ) -> int:
         """Add a FOV. Auto-generates display_name and creates bio_rep 'N1' if needed.
 
+        When width and height are provided, automatically creates a whole-field
+        segmentation (or reuses an existing one with matching dimensions) and
+        a fov_config entry pointing to it.
+
         Returns the new FOV ID.
         """
         cond_id = queries.select_condition_id(self._conn, condition)
@@ -259,12 +263,21 @@ class ExperimentStore:
         _validate_name(display_name, "fov display_name")
 
         tp_id = queries.select_timepoint_id(self._conn, timepoint) if timepoint else None
-        return queries.insert_fov(
+        fov_id = queries.insert_fov(
             self._conn, display_name=display_name,
             condition_id=cond_id, bio_rep_id=bio_rep_id,
             timepoint_id=tp_id, width=width, height=height,
             pixel_size_um=pixel_size_um, source_file=source_file,
         )
+
+        # Auto-create whole-field segmentation and config entry
+        if width is not None and height is not None:
+            seg_id = self._get_or_create_whole_field_segmentation(
+                fov_id, width, height,
+            )
+            self.set_fov_config_entry(fov_id, seg_id)
+
+        return fov_id
 
     def get_conditions(self) -> list[str]:
         return queries.select_conditions(self._conn)
@@ -394,6 +407,140 @@ class ExperimentStore:
         ch = self.get_channel(channel)
         return zarr_io.read_image_channel_numpy(
             self.images_zarr_path, gp, ch.display_order
+        )
+
+    # --- Auto-naming helpers ---
+
+    def _generate_segmentation_name(
+        self,
+        model_name: str = "",
+        channel: str = "",
+    ) -> str:
+        """Generate a unique segmentation name like 'cyto3_DAPI_1'."""
+        existing = {s.name for s in self.get_segmentations()}
+        base = "_".join(filter(None, [model_name, channel])) or "seg"
+        n = 1
+        while True:
+            candidate = f"{base}_{n}"
+            if candidate not in existing:
+                return candidate
+            n += 1
+
+    def _generate_threshold_name(
+        self,
+        grouping_channel: str = "",
+        threshold_channel: str = "",
+    ) -> str:
+        """Generate a unique threshold name like 'thresh_GFP_DAPI_1'."""
+        existing = {t.name for t in self.get_thresholds()}
+        parts = list(filter(None, ["thresh", grouping_channel, threshold_channel]))
+        base = "_".join(parts)
+        n = 1
+        while True:
+            candidate = f"{base}_{n}"
+            if candidate not in existing:
+                return candidate
+            n += 1
+
+    # --- Whole-field segmentation ---
+
+    def _get_or_create_whole_field_segmentation(
+        self,
+        fov_id: int,
+        width: int,
+        height: int,
+    ) -> int:
+        """Get or create a whole-field segmentation with matching dimensions.
+
+        Reuses existing whole_field segmentations with the same dimensions.
+        Creates an all-1 label image if a new segmentation is needed.
+
+        Returns:
+            The segmentation ID.
+        """
+        existing = self.get_segmentations(
+            seg_type="whole_field", width=width, height=height,
+        )
+        if existing:
+            return existing[0].id
+
+        name = self._generate_segmentation_name("whole_field")
+        seg_id = self.add_segmentation(
+            name, "whole_field", width, height, source_fov_id=fov_id,
+        )
+
+        # Write all-1 label image (every pixel belongs to cell 1)
+        labels = np.ones((height, width), dtype=np.int32)
+        self.write_labels(labels, seg_id)
+
+        return seg_id
+
+    def create_whole_field_segmentation(
+        self,
+        fov_id: int,
+        width: int,
+        height: int,
+    ) -> int:
+        """Create a whole-field segmentation with every-pixel-is-1 labels.
+
+        Public API for creating whole-field segmentations. Unlike the
+        private helper, this always creates a new segmentation (no reuse).
+
+        Args:
+            fov_id: Source FOV ID for provenance.
+            width: Image width in pixels.
+            height: Image height in pixels.
+
+        Returns:
+            The segmentation ID.
+        """
+        name = self._generate_segmentation_name("whole_field")
+        seg_id = self.add_segmentation(
+            name, "whole_field", width, height, source_fov_id=fov_id,
+        )
+        labels = np.ones((height, width), dtype=np.int32)
+        self.write_labels(labels, seg_id)
+        return seg_id
+
+    # --- Auto-config helpers ---
+
+    def _auto_config_segmentation(self, fov_id: int, seg_id: int) -> None:
+        """Update fov_config to use a new cellular segmentation for a FOV.
+
+        Replaces the segmentation in all existing config entries for the FOV,
+        preserving any threshold associations.
+        """
+        existing = self.get_fov_config(fov_id)
+        if not existing:
+            # No config yet — create a bare entry with just the segmentation
+            self.set_fov_config_entry(fov_id, seg_id)
+            return
+
+        # Replace segmentation in each existing entry
+        for entry in existing:
+            self.delete_fov_config_entry(entry.id)
+            self.set_fov_config_entry(
+                fov_id, seg_id,
+                threshold_id=entry.threshold_id,
+                scopes=entry.scopes,
+            )
+
+    def _auto_config_threshold(self, fov_id: int, thr_id: int) -> None:
+        """Add a threshold to fov_config for a FOV.
+
+        Uses the first segmentation from the FOV's existing config.
+        If no config exists, does nothing (threshold can be configured manually).
+        """
+        existing = self.get_fov_config(fov_id)
+        if not existing:
+            return
+
+        # Use the segmentation from the first existing config entry
+        seg_id = existing[0].segmentation_id
+        self.set_fov_config_entry(
+            fov_id, seg_id,
+            threshold_id=thr_id,
+            scopes=["whole_cell", "mask_inside", "mask_outside"],
         )
 
     # --- Label Images (keyed by segmentation_id) ---
@@ -638,6 +785,11 @@ class ExperimentStore:
             raise
         except sqlite3.IntegrityError:
             raise RunNameError(name, f"a segmentation named {name!r} already exists")
+
+        # Auto-config: update source FOV's config to use this segmentation
+        if source_fov_id is not None and seg_type == "cellular":
+            self._auto_config_segmentation(source_fov_id, seg_id)
+
         return seg_id
 
     def get_segmentations(
@@ -762,6 +914,11 @@ class ExperimentStore:
             raise
         except sqlite3.IntegrityError:
             raise RunNameError(name, f"a threshold named {name!r} already exists")
+
+        # Auto-config: add threshold to source FOV's config
+        if source_fov_id is not None:
+            self._auto_config_threshold(source_fov_id, thr_id)
+
         return thr_id
 
     def get_thresholds(

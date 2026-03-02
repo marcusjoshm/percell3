@@ -231,15 +231,15 @@ images.zarr/
 **Success criteria**: All query functions work with new schema. ExperimentStore CRUD operations pass. Dimension validation rejects mismatches.
 
 #### Phase 4: Whole-Field Segmentation + Auto-Config
-- [ ] Add `ExperimentStore.create_whole_field_segmentation(fov_id, width, height)` — creates `seg_type='whole_field'` segmentation with every-pixel-is-1 label array
-- [ ] Update `ExperimentStore.add_fov()` to auto-create whole-field segmentation on import
-- [ ] Update `ExperimentStore.add_fov()` to auto-create fov_config entry pointing to whole-field seg
-- [ ] Add auto-config update logic: when new segmentation created, update fov_config for matching-dimension FOVs to use newest seg
-- [ ] Add auto-config update logic: when new threshold created, add to fov_config for the source FOV
-- [ ] Add auto-naming: `_generate_segmentation_name(model_name, channel, existing_names)` → `{model}_{channel}_{n}`
-- [ ] Add auto-naming: `_generate_threshold_name(grouping_channel, threshold_channel, existing_names)` → `thresh_{grouping}_{threshold}_{n}`
-- [ ] Write tests for import flow: add_fov creates whole_field seg + config entry
-- [ ] Write tests for auto-config on seg/threshold creation
+- [x] Add `ExperimentStore.create_whole_field_segmentation(fov_id, width, height)` — creates `seg_type='whole_field'` segmentation with every-pixel-is-1 label array
+- [x] Update `ExperimentStore.add_fov()` to auto-create whole-field segmentation on import
+- [x] Update `ExperimentStore.add_fov()` to auto-create fov_config entry pointing to whole-field seg
+- [x] Add auto-config update logic: when new segmentation created, update fov_config for matching-dimension FOVs to use newest seg
+- [x] Add auto-config update logic: when new threshold created, add to fov_config for the source FOV
+- [x] Add auto-naming: `_generate_segmentation_name(model_name, channel, existing_names)` → `{model}_{channel}_{n}`
+- [x] Add auto-naming: `_generate_threshold_name(grouping_channel, threshold_channel, existing_names)` → `thresh_{grouping}_{threshold}_{n}`
+- [x] Write tests for import flow: add_fov creates whole_field seg + config entry
+- [x] Write tests for auto-config on seg/threshold creation
 
 **Files**: `src/percell3/core/experiment_store.py`, `tests/test_core/test_experiment_store.py`
 

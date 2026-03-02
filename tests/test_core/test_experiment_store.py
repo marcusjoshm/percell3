@@ -1241,9 +1241,7 @@ class TestFovStatusCache:
             "seg_test", "cellular", 64, 64,
             source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
         )
-
-        # Add fov_config so the status cache can reflect the segmentation
-        experiment.set_fov_config_entry(fov_id, seg_id)
+        # add_segmentation auto-configs fov_config for source_fov_id
 
         cells = [
             CellRecord(
@@ -1273,9 +1271,7 @@ class TestFovStatusCache:
             "seg_test", "cellular", 64, 64,
             source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
         )
-
-        # Add fov_config so the status cache can reflect the segmentation
-        experiment.set_fov_config_entry(fov_id, seg_id)
+        # add_segmentation auto-configs fov_config for source_fov_id
 
         cells = [
             CellRecord(
@@ -1309,9 +1305,7 @@ class TestFovStatusCache:
             "seg_test", "cellular", 64, 64,
             source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
         )
-
-        # Add fov_config so the status cache can reflect the segmentation
-        experiment.set_fov_config_entry(fov_id, seg_id)
+        # add_segmentation auto-configs fov_config for source_fov_id
 
         cells = [
             CellRecord(
@@ -1388,3 +1382,265 @@ class TestExperimentSummary:
         assert row["cells"] == 10
         assert row["condition_name"] == "control"
         assert "GFP" in row["measured_channels"]
+
+
+# === Phase 4: Whole-Field Segmentation + Auto-Config ===
+
+
+class TestWholeFieldSegmentation:
+    """Tests for automatic whole-field segmentation on FOV import."""
+
+    def test_add_fov_with_dims_creates_whole_field_seg(self, experiment):
+        """add_fov with width/height auto-creates whole-field segmentation."""
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control", width=128, height=64)
+
+        segs = experiment.get_segmentations(seg_type="whole_field")
+        assert len(segs) == 1
+        assert segs[0].seg_type == "whole_field"
+        assert segs[0].width == 128
+        assert segs[0].height == 64
+
+    def test_add_fov_with_dims_creates_config_entry(self, experiment):
+        """add_fov auto-creates fov_config linking FOV to whole-field seg."""
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control", width=128, height=64)
+
+        config = experiment.get_fov_config(fov_id)
+        assert len(config) == 1
+        seg = experiment.get_segmentation(config[0].segmentation_id)
+        assert seg.seg_type == "whole_field"
+
+    def test_add_fov_with_dims_writes_all_ones_labels(self, experiment):
+        """Auto-created whole-field seg has all-1 label image."""
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control", width=64, height=32)
+
+        segs = experiment.get_segmentations(seg_type="whole_field")
+        labels = experiment.read_labels(segs[0].id)
+        arr = np.array(labels)
+        assert arr.shape == (32, 64)
+        assert np.all(arr == 1)
+
+    def test_add_fov_without_dims_no_auto_seg(self, experiment):
+        """add_fov without width/height does NOT auto-create segmentation."""
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+
+        segs = experiment.get_segmentations()
+        assert len(segs) == 0
+        config = experiment.get_fov_config(fov_id)
+        assert len(config) == 0
+
+    def test_multiple_fovs_same_dims_share_whole_field_seg(self, experiment):
+        """Multiple FOVs with same dimensions reuse the same whole-field seg."""
+        experiment.add_condition("control")
+        fov1 = experiment.add_fov("control", width=128, height=128)
+        fov2 = experiment.add_fov("control", width=128, height=128)
+
+        segs = experiment.get_segmentations(seg_type="whole_field")
+        assert len(segs) == 1  # Only one whole-field seg created
+
+        config1 = experiment.get_fov_config(fov1)
+        config2 = experiment.get_fov_config(fov2)
+        assert config1[0].segmentation_id == config2[0].segmentation_id
+
+    def test_different_dims_create_separate_whole_field_segs(self, experiment):
+        """FOVs with different dims get different whole-field segmentations."""
+        experiment.add_condition("control")
+        fov1 = experiment.add_fov("control", width=128, height=128)
+        fov2 = experiment.add_fov("control", width=256, height=256)
+
+        segs = experiment.get_segmentations(seg_type="whole_field")
+        assert len(segs) == 2
+
+        config1 = experiment.get_fov_config(fov1)
+        config2 = experiment.get_fov_config(fov2)
+        assert config1[0].segmentation_id != config2[0].segmentation_id
+
+    def test_create_whole_field_segmentation_public(self, experiment):
+        """Public API always creates new segmentation (no reuse)."""
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+
+        seg1 = experiment.create_whole_field_segmentation(fov_id, 64, 64)
+        seg2 = experiment.create_whole_field_segmentation(fov_id, 64, 64)
+        assert seg1 != seg2
+
+        segs = experiment.get_segmentations(seg_type="whole_field")
+        assert len(segs) == 2
+
+
+class TestAutoConfig:
+    """Tests for automatic fov_config updates on seg/threshold creation."""
+
+    def test_cellular_seg_auto_configs_source_fov(self, experiment):
+        """add_segmentation with source_fov_id auto-creates config entry."""
+        experiment.add_channel("DAPI")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
+
+        config = experiment.get_fov_config(fov_id)
+        assert len(config) == 1
+        assert config[0].segmentation_id == seg_id
+        assert config[0].threshold_id is None
+
+    def test_cellular_seg_replaces_existing_config(self, experiment):
+        """Second cellular seg replaces first in config entries."""
+        experiment.add_channel("DAPI")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control", width=64, height=64)
+
+        # FOV already has whole_field seg in config from add_fov
+        config_before = experiment.get_fov_config(fov_id)
+        assert len(config_before) == 1
+
+        # Adding cellular seg replaces the whole_field seg in config
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
+
+        config_after = experiment.get_fov_config(fov_id)
+        assert len(config_after) == 1
+        assert config_after[0].segmentation_id == seg_id
+
+    def test_threshold_auto_configs_source_fov(self, experiment):
+        """add_threshold with source_fov_id adds config entry with scopes."""
+        experiment.add_channel("DAPI")
+        experiment.add_channel("GFP")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
+        thr_id = experiment.add_threshold(
+            "thr_test", "otsu", 64, 64,
+            source_fov_id=fov_id, source_channel="GFP",
+        )
+
+        config = experiment.get_fov_config(fov_id)
+        # Should have: 1 bare seg entry + 1 seg+threshold entry
+        assert len(config) == 2
+        thr_entries = [e for e in config if e.threshold_id == thr_id]
+        assert len(thr_entries) == 1
+        assert set(thr_entries[0].scopes) == {"whole_cell", "mask_inside", "mask_outside"}
+
+    def test_threshold_no_config_without_existing_seg(self, experiment):
+        """Threshold without existing config does not auto-config."""
+        experiment.add_channel("GFP")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+
+        thr_id = experiment.add_threshold(
+            "thr_test", "otsu", 64, 64,
+            source_fov_id=fov_id, source_channel="GFP",
+        )
+
+        # No existing config → threshold auto-config is a no-op
+        config = experiment.get_fov_config(fov_id)
+        assert len(config) == 0
+
+    def test_seg_without_source_fov_no_auto_config(self, experiment):
+        """Segmentation without source_fov_id does not auto-config."""
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+        )
+
+        config = experiment.get_fov_config(fov_id)
+        assert len(config) == 0
+
+    def test_whole_field_seg_does_not_auto_config(self, experiment):
+        """Only cellular segmentations trigger auto-config."""
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+        seg_id = experiment.add_segmentation(
+            "wf_test", "whole_field", 64, 64, source_fov_id=fov_id,
+        )
+
+        config = experiment.get_fov_config(fov_id)
+        assert len(config) == 0
+
+    def test_cellular_seg_preserves_threshold_in_config(self, experiment):
+        """New cellular seg preserves existing threshold associations."""
+        experiment.add_channel("DAPI")
+        experiment.add_channel("GFP")
+        experiment.add_condition("control")
+        fov_id = experiment.add_fov("control")
+
+        # Set up initial seg + threshold config
+        seg1 = experiment.add_segmentation(
+            "seg1", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
+        thr_id = experiment.add_threshold(
+            "thr1", "otsu", 64, 64,
+            source_fov_id=fov_id, source_channel="GFP",
+        )
+
+        # Config should have bare seg entry + seg+threshold entry
+        config_before = experiment.get_fov_config(fov_id)
+        assert len(config_before) == 2
+
+        # Add second cellular seg — should replace seg in both entries
+        seg2 = experiment.add_segmentation(
+            "seg2", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
+
+        config_after = experiment.get_fov_config(fov_id)
+        assert len(config_after) == 2
+        # All entries now reference seg2
+        for entry in config_after:
+            assert entry.segmentation_id == seg2
+        # Threshold association preserved
+        thr_entries = [e for e in config_after if e.threshold_id == thr_id]
+        assert len(thr_entries) == 1
+
+
+class TestAutoNaming:
+    """Tests for auto-generated segmentation and threshold names."""
+
+    def test_segmentation_name_generation(self, experiment):
+        """Names follow pattern: model_channel_N."""
+        name = experiment._generate_segmentation_name("cyto3", "DAPI")
+        assert name == "cyto3_DAPI_1"
+
+    def test_segmentation_name_increments(self, experiment):
+        """Sequential names increment counter."""
+        experiment.add_segmentation("cyto3_DAPI_1", "cellular", 64, 64)
+        name = experiment._generate_segmentation_name("cyto3", "DAPI")
+        assert name == "cyto3_DAPI_2"
+
+    def test_segmentation_name_model_only(self, experiment):
+        """Name works with model only (no channel)."""
+        name = experiment._generate_segmentation_name("whole_field")
+        assert name == "whole_field_1"
+
+    def test_segmentation_name_fallback(self, experiment):
+        """Empty args produce 'seg_N' fallback."""
+        name = experiment._generate_segmentation_name()
+        assert name == "seg_1"
+
+    def test_threshold_name_generation(self, experiment):
+        """Names follow pattern: thresh_grouping_threshold_N."""
+        name = experiment._generate_threshold_name("GFP", "DAPI")
+        assert name == "thresh_GFP_DAPI_1"
+
+    def test_threshold_name_increments(self, experiment):
+        """Sequential names increment counter."""
+        experiment.add_threshold("thresh_GFP_DAPI_1", "otsu", 64, 64)
+        name = experiment._generate_threshold_name("GFP", "DAPI")
+        assert name == "thresh_GFP_DAPI_2"
+
+    def test_threshold_name_no_channels(self, experiment):
+        """Name works with no channels specified."""
+        name = experiment._generate_threshold_name()
+        assert name == "thresh_1"
