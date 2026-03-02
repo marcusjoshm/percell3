@@ -363,7 +363,7 @@ class TestExport:
     def test_export_csv(self, experiment_with_data, tmp_path):
         csv_path = tmp_path / "results.csv"
         experiment_with_data.export_csv(csv_path, channels=["GFP"])
-        df = pd.read_csv(csv_path)
+        df = pd.read_csv(csv_path, comment="#")
         assert "cell_id" in df.columns
         assert "GFP_mean_intensity" in df.columns
 

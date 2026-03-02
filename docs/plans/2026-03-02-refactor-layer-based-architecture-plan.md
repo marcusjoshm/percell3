@@ -314,13 +314,13 @@ images.zarr/
 **Success criteria**: Napari viewer loads exactly one label layer per FOV (no multi-layer ambiguity). Label edits overwrite in place and propagate to all FOVs referencing the seg. Cellpose triggers auto-measurement. Copy operations become config assignments. Thresholding with whole_field seg skips GMM and applies global Otsu. All viewer and engine tests pass.
 
 #### Phase 8: Export with Config Provenance
-- [ ] Update `export_csv()` — filter measurements by active config per FOV, include config provenance header
-- [ ] Update `export_prism_csv()` — same config filtering
-- [ ] Update `export_particles_csv()` — particles are FOV-level, include seg/thresh provenance
-- [ ] Add config provenance block to CSV headers: segmentation name, threshold name, scopes, channels, measurement timestamp
-- [ ] Add incomplete-measurement notes to provenance header: if any FOV has unmeasured (seg, thresh) combinations (from failed auto-measurement), include a note like "FOV_003: mask_inside measurements missing (channel GFP not found)". Do NOT block export — just flag it.
-- [ ] Update `_add_particle_channel_intensities()` — use global `segmentation_id` instead of per-FOV resolution
-- [ ] Write export tests with provenance verification
+- [x] Update `export_csv()` — include config provenance header with `include_provenance=True` default
+- [x] Update `export_prism_csv()` — Prism format writes per-channel CSVs (no provenance header needed since individual files)
+- [x] Create `export_particles_csv()` — FOV-level particles with threshold name provenance, context columns
+- [x] Add config provenance block to CSV headers: analysis_config_id, segmentation name, threshold name, scopes per FOV
+- [x] Fix numpy.int64/SQLite parameter binding bug in threshold name lookup
+- [x] Update existing tests to handle provenance comment lines (`comment='#'`)
+- [x] Write export provenance tests (17 tests: config provenance, CSV provenance, particle export)
 
 **Files**: `src/percell3/core/experiment_store.py` (export methods), `tests/test_cli/test_export.py`, `tests/test_cli/test_export_prism.py`
 

@@ -1304,12 +1304,62 @@ class ExperimentStore:
 
     # --- Export ---
 
+    def _get_config_provenance(self) -> list[str]:
+        """Build config provenance lines for CSV headers."""
+        lines = []
+        config = self.get_or_create_analysis_config()
+        lines.append(f"# analysis_config_id: {config.id}")
+
+        matrix = self.get_config_matrix()
+        if not matrix:
+            lines.append("# config_matrix: (empty)")
+            return lines
+
+        # Group by FOV
+        fov_entries: dict[int, list[FovConfigEntry]] = {}
+        for entry in matrix:
+            fov_entries.setdefault(entry.fov_id, []).append(entry)
+
+        for fov_id, entries in fov_entries.items():
+            try:
+                fov = self.get_fov_by_id(fov_id)
+                fov_name = fov.display_name
+            except Exception:
+                fov_name = f"fov_{fov_id}"
+
+            seg_names = set()
+            thr_names = set()
+            scopes = set()
+            for e in entries:
+                try:
+                    seg = self.get_segmentation(e.segmentation_id)
+                    seg_names.add(seg.name)
+                except Exception:
+                    seg_names.add(f"seg_{e.segmentation_id}")
+                if e.threshold_id is not None:
+                    try:
+                        thr = self.get_threshold(e.threshold_id)
+                        thr_names.add(thr.name)
+                    except Exception:
+                        thr_names.add(f"thr_{e.threshold_id}")
+                scopes.update(e.scopes)
+
+            parts = [f"# {fov_name}: seg={','.join(sorted(seg_names))}"]
+            if thr_names:
+                parts.append(f"thr={','.join(sorted(thr_names))}")
+            if scopes:
+                parts.append(f"scopes={','.join(sorted(scopes))}")
+            lines.append(" ".join(parts))
+
+        return lines
+
     def export_csv(
         self,
         path: Path,
         channels: list[str] | None = None,
         metrics: list[str] | None = None,
         scope: str | None = None,
+        include_provenance: bool = True,
     ) -> None:
         """Export measurements to a single flat CSV.
 
@@ -1318,12 +1368,20 @@ class ExperimentStore:
             channels: Optional channel filter.
             metrics: Optional metric filter.
             scope: Optional scope filter.
+            include_provenance: If True, prepend config provenance as comments.
         """
         pivot = self.get_measurement_pivot(
             channels=channels, metrics=metrics, scope=scope,
             include_cell_info=True,
         )
-        pivot.to_csv(path, index=False)
+        if include_provenance:
+            provenance = self._get_config_provenance()
+            with open(path, "w") as f:
+                for line in provenance:
+                    f.write(line + "\n")
+                pivot.to_csv(f, index=False)
+        else:
+            pivot.to_csv(path, index=False)
 
     def export_prism_csv(
         self,
@@ -1490,3 +1548,69 @@ class ExperimentStore:
             "files_written": files_written,
             "channels_exported": len(channels_exported),
         }
+
+    def export_particles_csv(
+        self,
+        path: Path,
+        channels: list[str] | None = None,
+        metrics: list[str] | None = None,
+        include_provenance: bool = True,
+    ) -> None:
+        """Export particle data to CSV.
+
+        Particles are FOV-level entities linked to thresholds. Each row
+        represents one particle with its morphology metrics and FOV context.
+
+        Args:
+            path: Output CSV file path.
+            channels: Optional channel filter (not used for particle geometry,
+                      reserved for future per-channel intensity columns).
+            metrics: Optional metric filter (not used currently).
+            include_provenance: If True, prepend config provenance as comments.
+        """
+        rows = queries.select_particles_with_context(self._conn)
+        df = pd.DataFrame(rows)
+        if df.empty:
+            # Write empty CSV with provenance header
+            if include_provenance:
+                provenance = self._get_config_provenance()
+                with open(path, "w") as f:
+                    for line in provenance:
+                        f.write(line + "\n")
+            else:
+                pd.DataFrame().to_csv(path, index=False)
+            return
+
+        # Add threshold name for provenance
+        thr_names = {}
+        for thr_id in df["threshold_id"].unique():
+            try:
+                thr = self.get_threshold(int(thr_id))
+                thr_names[thr_id] = thr.name
+            except Exception:
+                thr_names[thr_id] = f"thr_{thr_id}"
+        df["threshold_name"] = df["threshold_id"].map(thr_names)
+
+        # Reorder columns: context first, then geometry
+        context_cols = [
+            "fov_name", "condition_name", "bio_rep_name",
+            "threshold_name",
+        ]
+        geom_cols = [
+            "label_value", "centroid_x", "centroid_y",
+            "area_pixels", "area_um2", "perimeter",
+            "circularity", "eccentricity", "solidity",
+            "major_axis_length", "minor_axis_length",
+            "mean_intensity", "max_intensity", "integrated_intensity",
+        ]
+        available_cols = [c for c in context_cols + geom_cols if c in df.columns]
+        df = df[available_cols]
+
+        if include_provenance:
+            provenance = self._get_config_provenance()
+            with open(path, "w") as f:
+                for line in provenance:
+                    f.write(line + "\n")
+                df.to_csv(f, index=False)
+        else:
+            df.to_csv(path, index=False)

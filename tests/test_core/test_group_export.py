@@ -161,7 +161,7 @@ class TestGroupsInWideCsv:
     ):
         csv_path = tmp_path / "test_export.csv"
         store_with_groups.export_csv(csv_path)
-        df = pd.read_csv(csv_path)
+        df = pd.read_csv(csv_path, comment="#")
         assert "group" in df.columns
         assert set(df["group"].unique()) == {"g1", "g2"}
 
