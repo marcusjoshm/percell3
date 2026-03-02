@@ -18,7 +18,7 @@ from percell3.core.exceptions import (
     ExperimentNotFoundError,
 )
 from percell3.core.experiment_store import ExperimentStore
-from percell3.core.models import CellRecord, MeasurementRecord
+from percell3.core.models import CellRecord, MeasurementRecord, ParticleRecord
 
 
 @pytest.fixture
@@ -37,7 +37,10 @@ def experiment_with_data(experiment: ExperimentStore) -> ExperimentStore:
     experiment.add_condition("control")
     experiment.add_condition("treated")
     fov_id = experiment.add_fov("control", width=256, height=256)
-    seg_id = experiment.add_segmentation_run(fov_id, channel="DAPI", model_name="cyto3")
+    seg_id = experiment.add_segmentation(
+        "seg_ctrl", "cellular", 256, 256,
+        source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+    )
 
     cells = [
         CellRecord(
@@ -53,7 +56,8 @@ def experiment_with_data(experiment: ExperimentStore) -> ExperimentStore:
     gfp = experiment.get_channel("GFP")
     measurements = [
         MeasurementRecord(cell_id=cid, channel_id=gfp.id,
-                          metric="mean_intensity", value=42.0 + cid)
+                          metric="mean_intensity", value=42.0 + cid,
+                          segmentation_id=seg_id)
         for cid in cell_ids
     ]
     experiment.add_measurements(measurements)
@@ -214,7 +218,10 @@ class TestCells:
         experiment.add_channel("DAPI", role="nucleus")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control")
-        seg_id = experiment.add_segmentation_run(fov_id, channel="DAPI", model_name="cyto3")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
 
         cells = [
             CellRecord(
@@ -265,7 +272,10 @@ class TestMeasurements:
         experiment.add_channel("RFP", role="signal")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control")
-        seg_id = experiment.add_segmentation_run(fov_id, channel="DAPI", model_name="cyto3")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
 
         cells = [
             CellRecord(
@@ -283,12 +293,14 @@ class TestMeasurements:
 
         gfp_measurements = [
             MeasurementRecord(cell_id=cid, channel_id=gfp.id,
-                              metric="mean_intensity", value=42.0)
+                              metric="mean_intensity", value=42.0,
+                              segmentation_id=seg_id)
             for cid in cell_ids
         ]
         rfp_measurements = [
             MeasurementRecord(cell_id=cid, channel_id=rfp.id,
-                              metric="mean_intensity", value=99.0)
+                              metric="mean_intensity", value=99.0,
+                              segmentation_id=seg_id)
             for cid in cell_ids
         ]
         experiment.add_measurements(gfp_measurements)
@@ -307,14 +319,17 @@ class TestLabels:
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control", width=512, height=512)
-        seg_id = experiment.add_segmentation_run(fov_id, channel="DAPI", model_name="cyto3")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 512, 512,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
 
         labels = np.zeros((512, 512), dtype=np.int32)
         labels[100:150, 100:150] = 1
         labels[200:260, 200:260] = 2
 
-        experiment.write_labels(fov_id, labels, segmentation_run_id=seg_id)
-        result = experiment.read_labels(fov_id, segmentation_run_id=seg_id)
+        experiment.write_labels(labels, seg_id)
+        result = experiment.read_labels(seg_id)
         np.testing.assert_array_equal(result, labels)
 
 
@@ -374,13 +389,16 @@ class TestMasks:
         experiment.add_channel("GFP")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control", width=128, height=128)
-        thr_id = experiment.add_threshold_run(fov_id, channel="GFP", method="otsu")
+        thr_id = experiment.add_threshold(
+            "thr_test", "otsu", 128, 128,
+            source_fov_id=fov_id, source_channel="GFP",
+        )
 
         mask = np.zeros((128, 128), dtype=bool)
         mask[20:80, 20:80] = True
 
-        experiment.write_mask(fov_id, "GFP", mask, threshold_run_id=thr_id)
-        result = experiment.read_mask(fov_id, "GFP", threshold_run_id=thr_id)
+        experiment.write_mask(mask, thr_id)
+        result = experiment.read_mask(thr_id)
         assert result.dtype == np.uint8
         assert result[50, 50] == 255
         assert result[0, 0] == 0
@@ -414,14 +432,15 @@ class TestAnalysisRuns:
         experiment.complete_analysis_run(run_id, status="completed", cell_count=42)
 
 
-class TestSegmentationRuns:
-    def test_add_segmentation_run(self, experiment):
+class TestSegmentations:
+    def test_add_segmentation(self, experiment):
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control")
-        seg_id = experiment.add_segmentation_run(
-            fov_id, channel="DAPI", model_name="cyto3",
-            parameters={"diameter": 30}
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+            parameters={"diameter": 30},
         )
         assert seg_id >= 1
 
@@ -483,18 +502,20 @@ class TestIntrospection:
     def test_get_tags_empty(self, experiment):
         assert experiment.get_tags() == []
 
-    def test_get_segmentation_runs(self, experiment):
+    def test_get_segmentations(self, experiment):
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control")
-        experiment.add_segmentation_run(
-            fov_id, channel="DAPI", model_name="cyto3", parameters={"diameter": 30}
+        experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI",
+            model_name="cyto3", parameters={"diameter": 30},
         )
-        runs = experiment.get_segmentation_runs()
-        assert len(runs) == 1
-        assert runs[0].channel == "DAPI"
-        assert runs[0].model_name == "cyto3"
-        assert runs[0].parameters == {"diameter": 30}
+        segs = experiment.get_segmentations()
+        assert len(segs) == 1
+        assert segs[0].source_channel == "DAPI"
+        assert segs[0].model_name == "cyto3"
+        assert segs[0].parameters == {"diameter": 30}
 
     def test_get_analysis_runs(self, experiment):
         experiment.start_analysis_run("my_plugin", {"threshold": 100})
@@ -632,7 +653,10 @@ class TestBioReps:
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control")
-        seg_id = experiment.add_segmentation_run(fov_id, channel="DAPI", model_name="cyto3")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
 
         cells = [
             CellRecord(
@@ -656,8 +680,14 @@ class TestBioReps:
         experiment.add_channel("DAPI")
         fov1 = experiment.add_fov("control", bio_rep="N1")
         fov2 = experiment.add_fov("control", bio_rep="N2")
-        seg_id1 = experiment.add_segmentation_run(fov1, channel="DAPI", model_name="cyto3")
-        seg_id2 = experiment.add_segmentation_run(fov2, channel="DAPI", model_name="cyto3")
+        seg_id1 = experiment.add_segmentation(
+            "seg_n1", "cellular", 64, 64,
+            source_fov_id=fov1, source_channel="DAPI", model_name="cyto3",
+        )
+        seg_id2 = experiment.add_segmentation(
+            "seg_n2", "cellular", 64, 64,
+            source_fov_id=fov2, source_channel="DAPI", model_name="cyto3",
+        )
 
         cells_n1 = [
             CellRecord(
@@ -692,7 +722,10 @@ class TestBioReps:
         experiment.add_channel("GFP")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control")
-        seg_id = experiment.add_segmentation_run(fov_id, channel="DAPI", model_name="cyto3")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
 
         cells = [
             CellRecord(
@@ -707,7 +740,8 @@ class TestBioReps:
         gfp = experiment.get_channel("GFP")
         experiment.add_measurements([
             MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
-                              metric="mean_intensity", value=42.0)
+                              metric="mean_intensity", value=42.0,
+                              segmentation_id=seg_id)
         ])
 
         pivot = experiment.get_measurement_pivot()
@@ -719,7 +753,10 @@ class TestBioReps:
         experiment.add_channel("GFP")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control")
-        seg_id = experiment.add_segmentation_run(fov_id, channel="GFP", model_name="cyto3")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="GFP", model_name="cyto3",
+        )
 
         cells = [
             CellRecord(
@@ -735,13 +772,13 @@ class TestBioReps:
         experiment.add_measurements([
             MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
                               metric="mean_intensity", value=42.0,
-                              scope="whole_cell"),
+                              scope="whole_cell", segmentation_id=seg_id),
             MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
                               metric="mean_intensity", value=30.0,
-                              scope="mask_inside"),
+                              scope="mask_inside", segmentation_id=seg_id),
             MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
                               metric="mean_intensity", value=12.0,
-                              scope="mask_outside"),
+                              scope="mask_outside", segmentation_id=seg_id),
         ])
 
         pivot = experiment.get_measurement_pivot()
@@ -757,7 +794,10 @@ class TestBioReps:
         experiment.add_channel("GFP")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control")
-        seg_id = experiment.add_segmentation_run(fov_id, channel="GFP", model_name="cyto3")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="GFP", model_name="cyto3",
+        )
 
         cells = [
             CellRecord(
@@ -773,10 +813,10 @@ class TestBioReps:
         experiment.add_measurements([
             MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
                               metric="mean_intensity", value=42.0,
-                              scope="whole_cell"),
+                              scope="whole_cell", segmentation_id=seg_id),
             MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
                               metric="mean_intensity", value=30.0,
-                              scope="mask_inside"),
+                              scope="mask_inside", segmentation_id=seg_id),
         ])
 
         pivot = experiment.get_measurement_pivot(scope="whole_cell")
@@ -845,32 +885,35 @@ class TestRenameChannel:
         assert "Hoechst" in ch_names
         assert "DAPI" not in ch_names
 
-    def test_rename_channel_updates_particle_labels(self, experiment):
-        """rename_channel should rename particles_ zarr groups alongside threshold_ groups."""
+    def test_rename_channel_independent_of_masks(self, experiment):
+        """Masks and particle labels are keyed by threshold_id, not channel name."""
         experiment.add_channel("ch00")
         experiment.add_condition("ctrl")
         fov_id = experiment.add_fov("ctrl", width=64, height=64)
 
-        # Write a mask and particle labels under the old channel name
+        thr_id = experiment.add_threshold(
+            "thr_test", "otsu", 64, 64,
+            source_fov_id=fov_id, source_channel="ch00",
+        )
+
+        # Write a mask and particle labels
         mask = np.zeros((64, 64), dtype=np.int32)
         mask[10:20, 10:20] = 1
-        thr_id = experiment.add_threshold_run(fov_id, "ch00", method="otsu")
-        experiment.write_mask(fov_id, "ch00", mask, threshold_run_id=thr_id)
+        experiment.write_mask(mask, thr_id)
 
         plabels = np.zeros((64, 64), dtype=np.int32)
         plabels[12:18, 12:18] = 1
-        experiment.write_particle_labels(fov_id, "ch00", plabels, threshold_run_id=thr_id)
+        experiment.write_particle_labels(plabels, thr_id)
 
         # Rename the channel
         experiment.rename_channel("ch00", "GFP")
 
-        # Particle labels should be readable under the new name
-        result = experiment.read_particle_labels(fov_id, "GFP", threshold_run_id=thr_id)
+        # Masks and particle labels are keyed by threshold_id, unaffected by rename
+        result = experiment.read_particle_labels(thr_id)
         assert result.shape == (64, 64)
         assert result[15, 15] == 1
 
-        # Mask should also be readable under the new name
-        mask_result = experiment.read_mask(fov_id, "GFP", threshold_run_id=thr_id)
+        mask_result = experiment.read_mask(thr_id)
         assert mask_result.shape == (64, 64)
         assert mask_result[15, 15] > 0
 
@@ -989,12 +1032,15 @@ class TestParticles:
 
     @pytest.fixture
     def store_with_threshold(self, experiment):
-        """Experiment with a channel, condition, FOV, seg run, cells, and threshold run."""
+        """Experiment with a channel, condition, FOV, segmentation, cells, and threshold."""
         experiment.add_channel("DAPI", role="nucleus")
         experiment.add_channel("GFP", role="signal")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control", width=128, height=128)
-        seg_id = experiment.add_segmentation_run(fov_id, channel="DAPI", model_name="cyto3")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 128, 128,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
         cells = [
             CellRecord(
                 fov_id=fov_id, segmentation_id=seg_id, label_value=i,
@@ -1004,23 +1050,25 @@ class TestParticles:
             )
             for i in range(1, 4)
         ]
-        cell_ids = experiment.add_cells(cells)
-        thr_id = experiment.add_threshold_run(fov_id, channel="GFP", method="otsu")
-        return experiment, cell_ids, thr_id, fov_id
+        experiment.add_cells(cells)
+        thr_id = experiment.add_threshold(
+            "thr_test", "otsu", 128, 128,
+            source_fov_id=fov_id, source_channel="GFP",
+        )
+        return experiment, thr_id, fov_id
 
     def test_add_and_get_particles(self, store_with_threshold):
-        store, cell_ids, thr_id, fov_id = store_with_threshold
-        from percell3.core.models import ParticleRecord
+        store, thr_id, fov_id = store_with_threshold
 
         particles = [
             ParticleRecord(
-                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
+                fov_id=fov_id, threshold_id=thr_id, label_value=1,
                 centroid_x=55.0, centroid_y=65.0,
                 bbox_x=50, bbox_y=60, bbox_w=10, bbox_h=10,
                 area_pixels=80.0, circularity=0.9,
             ),
             ParticleRecord(
-                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=2,
+                fov_id=fov_id, threshold_id=thr_id, label_value=2,
                 centroid_x=57.0, centroid_y=67.0,
                 bbox_x=52, bbox_y=62, bbox_w=8, bbox_h=8,
                 area_pixels=50.0,
@@ -1028,17 +1076,16 @@ class TestParticles:
         ]
         store.add_particles(particles)
 
-        df = store.get_particles(cell_ids=[cell_ids[0]])
+        df = store.get_particles(fov_id=fov_id)
         assert len(df) == 2
         assert "circularity" in df.columns
 
-    def test_get_particles_by_threshold_run(self, store_with_threshold):
-        store, cell_ids, thr_id, fov_id = store_with_threshold
-        from percell3.core.models import ParticleRecord
+    def test_get_particles_by_threshold(self, store_with_threshold):
+        store, thr_id, fov_id = store_with_threshold
 
         particles = [
             ParticleRecord(
-                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
+                fov_id=fov_id, threshold_id=thr_id, label_value=1,
                 centroid_x=55.0, centroid_y=65.0,
                 bbox_x=50, bbox_y=60, bbox_w=10, bbox_h=10,
                 area_pixels=80.0,
@@ -1046,70 +1093,64 @@ class TestParticles:
         ]
         store.add_particles(particles)
 
-        df = store.get_particles(threshold_run_id=thr_id)
+        df = store.get_particles(threshold_id=thr_id)
         assert len(df) == 1
 
     def test_get_particles_empty(self, store_with_threshold):
-        store, cell_ids, thr_id, fov_id = store_with_threshold
-        df = store.get_particles(cell_ids=[cell_ids[0]])
+        store, thr_id, fov_id = store_with_threshold
+        df = store.get_particles(fov_id=fov_id)
         assert len(df) == 0
 
     def test_delete_particles_for_fov(self, store_with_threshold):
-        store, cell_ids, thr_id, fov_id = store_with_threshold
-        from percell3.core.models import ParticleRecord
+        store, thr_id, fov_id = store_with_threshold
 
         particles = [
             ParticleRecord(
-                cell_id=cid, threshold_run_id=thr_id, label_value=1,
+                fov_id=fov_id, threshold_id=thr_id, label_value=i,
                 centroid_x=55.0, centroid_y=65.0,
                 bbox_x=50, bbox_y=60, bbox_w=10, bbox_h=10,
                 area_pixels=80.0,
             )
-            for cid in cell_ids
+            for i in range(1, 4)
         ]
         store.add_particles(particles)
         deleted = store.delete_particles_for_fov(fov_id)
         assert deleted == 3
 
-        df = store.get_particles(threshold_run_id=thr_id)
+        df = store.get_particles(threshold_id=thr_id)
         assert len(df) == 0
 
-    def test_delete_particles_for_threshold_run(self, store_with_threshold):
-        store, cell_ids, thr_id, fov_id = store_with_threshold
-        from percell3.core.models import ParticleRecord
+    def test_delete_particles_for_threshold(self, store_with_threshold):
+        store, thr_id, fov_id = store_with_threshold
 
         particles = [
             ParticleRecord(
-                cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
+                fov_id=fov_id, threshold_id=thr_id, label_value=1,
                 centroid_x=55.0, centroid_y=65.0,
                 bbox_x=50, bbox_y=60, bbox_w=10, bbox_h=10,
                 area_pixels=80.0,
             ),
         ]
         store.add_particles(particles)
-        deleted = store.delete_particles_for_threshold_run(thr_id)
+        deleted = store.delete_particles_for_threshold(thr_id)
         assert deleted == 1
 
 
-    # TestWriteMaskCleansStaleParticles was removed because the new run-scoped
-    # architecture uses CASCADE on threshold_run deletion instead of
-    # cleaning stale particles on write_mask. See delete_segmentation_run /
-    # delete_threshold_run for the CASCADE-based cleanup.
-
-
-class TestThresholdRuns:
-    def test_get_threshold_runs(self, experiment):
+class TestThresholds:
+    def test_get_thresholds(self, experiment):
         experiment.add_channel("GFP")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control")
-        thr_id = experiment.add_threshold_run(
-            fov_id, channel="GFP", method="otsu", parameters={"group": "g1"},
+        experiment.add_threshold(
+            "thr_test", "otsu", 64, 64,
+            source_fov_id=fov_id, source_channel="GFP",
+            parameters={"group": "g1"},
         )
-        runs = experiment.get_threshold_runs()
-        assert len(runs) == 1
-        assert runs[0].channel == "GFP"
-        assert runs[0].method == "otsu"
-        assert runs[0].parameters == {"group": "g1"}
+        thresholds = experiment.get_thresholds()
+        assert len(thresholds) == 1
+        assert thresholds[0].source_channel == "GFP"
+        assert thresholds[0].method == "otsu"
+        assert thresholds[0].parameters == {"group": "g1"}
 
 
 class TestDeleteTagsByPrefix:
@@ -1156,29 +1197,35 @@ class TestParticleLabelIO:
         experiment.add_channel("GFP")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control", width=128, height=128)
-        thr_id = experiment.add_threshold_run(fov_id, channel="GFP", method="otsu")
+        thr_id = experiment.add_threshold(
+            "thr_test", "otsu", 128, 128,
+            source_fov_id=fov_id, source_channel="GFP",
+        )
 
         labels = np.zeros((128, 128), dtype=np.int32)
         labels[20:40, 20:40] = 1
         labels[60:80, 60:80] = 2
 
-        experiment.write_particle_labels(fov_id, "GFP", labels, threshold_run_id=thr_id)
-        result = experiment.read_particle_labels(fov_id, "GFP", threshold_run_id=thr_id)
+        experiment.write_particle_labels(labels, thr_id)
+        result = experiment.read_particle_labels(thr_id)
         np.testing.assert_array_equal(result, labels)
 
     def test_particle_labels_zarr_path(self, experiment):
-        """Particle labels are stored at fov_{id}/channel/run_{id}/particles."""
+        """Particle labels are stored at thresh_{id}/particles/0."""
         experiment.add_channel("GFP")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control", width=64, height=64)
-        thr_id = experiment.add_threshold_run(fov_id, channel="GFP", method="otsu")
+        thr_id = experiment.add_threshold(
+            "thr_test", "otsu", 64, 64,
+            source_fov_id=fov_id, source_channel="GFP",
+        )
 
         labels = np.zeros((64, 64), dtype=np.int32)
         labels[10:20, 10:20] = 1
-        experiment.write_particle_labels(fov_id, "GFP", labels, threshold_run_id=thr_id)
+        experiment.write_particle_labels(labels, thr_id)
 
         store = zarr.open(str(experiment.masks_zarr_path), mode="r")
-        assert f"fov_{fov_id}/GFP/run_{thr_id}/particles" in store
+        assert f"thresh_{thr_id}/particles" in store
 
 
 # === FOV Status Cache ===
@@ -1190,7 +1237,13 @@ class TestFovStatusCache:
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control")
-        seg_id = experiment.add_segmentation_run(fov_id, channel="DAPI", model_name="cyto3")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
+
+        # Add fov_config so the status cache can reflect the segmentation
+        experiment.set_fov_config_entry(fov_id, seg_id)
 
         cells = [
             CellRecord(
@@ -1207,10 +1260,8 @@ class TestFovStatusCache:
         assert len(cache) == 1
         assert cache[0]["fov_id"] == fov_id
         status = cache[0]["status"]
-        assert len(status["segmentation_runs"]) == 1
-        # cell_count in status cache reflects segmentation_runs.cell_count column,
-        # which is updated separately via update_segmentation_run_cell_count
-        assert "cell_count" in status["segmentation_runs"][0]
+        assert len(status["segmentations"]) == 1
+        assert "cell_count" in status["segmentations"][0]
 
     def test_cache_updated_on_add_measurements(self, experiment):
         """Status cache is refreshed when measurements are added."""
@@ -1218,7 +1269,13 @@ class TestFovStatusCache:
         experiment.add_channel("GFP")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control")
-        seg_id = experiment.add_segmentation_run(fov_id, channel="DAPI", model_name="cyto3")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
+
+        # Add fov_config so the status cache can reflect the segmentation
+        experiment.set_fov_config_entry(fov_id, seg_id)
 
         cells = [
             CellRecord(
@@ -1233,23 +1290,28 @@ class TestFovStatusCache:
         gfp = experiment.get_channel("GFP")
         experiment.add_measurements([
             MeasurementRecord(cell_id=cell_ids[0], channel_id=gfp.id,
-                              metric="mean_intensity", value=42.0)
+                              metric="mean_intensity", value=42.0,
+                              segmentation_id=seg_id)
         ])
 
         from percell3.core.queries import select_fov_status_cache
         cache = select_fov_status_cache(experiment._conn)
         assert cache[0]["fov_id"] == fov_id
-        # New JSON-based cache tracks segmentation/threshold runs;
-        # verify the cache entry exists and has segmentation run data
         status = cache[0]["status"]
-        assert len(status["segmentation_runs"]) == 1
+        assert len(status["segmentations"]) == 1
 
     def test_cache_cleared_on_delete_cells(self, experiment):
-        """Status cache reflects zero cells after deletion."""
+        """Status cache reflects segmentation after cell deletion."""
         experiment.add_channel("DAPI")
         experiment.add_condition("control")
         fov_id = experiment.add_fov("control")
-        seg_id = experiment.add_segmentation_run(fov_id, channel="DAPI", model_name="cyto3")
+        seg_id = experiment.add_segmentation(
+            "seg_test", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+        )
+
+        # Add fov_config so the status cache can reflect the segmentation
+        experiment.set_fov_config_entry(fov_id, seg_id)
 
         cells = [
             CellRecord(
@@ -1264,9 +1326,9 @@ class TestFovStatusCache:
 
         from percell3.core.queries import select_fov_status_cache
         cache = select_fov_status_cache(experiment._conn)
-        # After deleting cells, seg run still exists in the cache
+        # After deleting cells, segmentation still exists in the cache via fov_config
         status = cache[0]["status"]
-        assert len(status["segmentation_runs"]) == 1
+        assert len(status["segmentations"]) == 1
 
 
 # === FOV Tags ===

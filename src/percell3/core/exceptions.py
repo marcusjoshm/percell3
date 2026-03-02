@@ -79,38 +79,29 @@ class DuplicateError(ExperimentError):
         self.name = name
 
 
-class SegmentationRunNotFoundError(ExperimentError):
-    """Raised when referencing a nonexistent segmentation run."""
+class SegmentationNotFoundError(ExperimentError):
+    """Raised when referencing a nonexistent segmentation."""
 
-    def __init__(self, run_id: int | None = None) -> None:
-        msg = f"Segmentation run not found: {run_id}" if run_id is not None else "Segmentation run not found"
+    def __init__(self, segmentation_id: int | None = None) -> None:
+        msg = f"Segmentation not found: {segmentation_id}" if segmentation_id is not None else "Segmentation not found"
         super().__init__(msg)
-        self.run_id = run_id
+        self.segmentation_id = segmentation_id
 
 
-class ThresholdRunNotFoundError(ExperimentError):
-    """Raised when referencing a nonexistent threshold run."""
+class ThresholdNotFoundError(ExperimentError):
+    """Raised when referencing a nonexistent threshold."""
 
-    def __init__(self, run_id: int | None = None) -> None:
-        msg = f"Threshold run not found: {run_id}" if run_id is not None else "Threshold run not found"
+    def __init__(self, threshold_id: int | None = None) -> None:
+        msg = f"Threshold not found: {threshold_id}" if threshold_id is not None else "Threshold not found"
         super().__init__(msg)
-        self.run_id = run_id
-
-
-class MeasurementConfigNotFoundError(ExperimentError):
-    """Raised when referencing a nonexistent measurement configuration."""
-
-    def __init__(self, config_id: int | None = None) -> None:
-        msg = f"Measurement config not found: {config_id}" if config_id is not None else "Measurement config not found"
-        super().__init__(msg)
-        self.config_id = config_id
+        self.threshold_id = threshold_id
 
 
 class RunNameError(ExperimentError):
-    """Raised when a run name is invalid or conflicts with an existing name."""
+    """Raised when an entity name is invalid or conflicts with an existing name."""
 
     def __init__(self, name: str, reason: str = "invalid") -> None:
-        msg = f"Invalid run name {name!r}: {reason}"
+        msg = f"Invalid name {name!r}: {reason}"
         super().__init__(msg)
         self.name = name
         self.reason = reason

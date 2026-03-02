@@ -17,8 +17,6 @@ CREATE TABLE IF NOT EXISTS experiments (
     name TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     percell_version TEXT NOT NULL DEFAULT '4.0.0',
-    active_measurement_config_id INTEGER
-        REFERENCES measurement_configs(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -64,22 +62,25 @@ CREATE TABLE IF NOT EXISTS fovs (
     source_file TEXT
 );
 
-CREATE TABLE IF NOT EXISTS segmentation_runs (
+CREATE TABLE IF NOT EXISTS segmentations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
-    channel_id INTEGER NOT NULL REFERENCES channels(id),
-    name TEXT NOT NULL,
-    model_name TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    seg_type TEXT NOT NULL DEFAULT 'cellular'
+        CHECK(seg_type IN ('whole_field', 'cellular')),
+    source_fov_id INTEGER REFERENCES fovs(id) ON DELETE SET NULL,
+    source_channel TEXT,
+    model_name TEXT NOT NULL DEFAULT '',
     parameters TEXT,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
     cell_count INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(fov_id, name)
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS cells (
     id INTEGER PRIMARY KEY,
     fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
-    segmentation_id INTEGER NOT NULL REFERENCES segmentation_runs(id) ON DELETE CASCADE,
+    segmentation_id INTEGER NOT NULL REFERENCES segmentations(id) ON DELETE CASCADE,
     label_value INTEGER NOT NULL,
     centroid_x REAL NOT NULL,
     centroid_y REAL NOT NULL,
@@ -95,16 +96,18 @@ CREATE TABLE IF NOT EXISTS cells (
     UNIQUE(fov_id, segmentation_id, label_value)
 );
 
-CREATE TABLE IF NOT EXISTS threshold_runs (
+CREATE TABLE IF NOT EXISTS thresholds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
-    channel_id INTEGER NOT NULL REFERENCES channels(id),
-    name TEXT NOT NULL,
-    method TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    source_fov_id INTEGER REFERENCES fovs(id) ON DELETE SET NULL,
+    source_channel TEXT,
+    grouping_channel TEXT,
+    method TEXT NOT NULL DEFAULT '',
     parameters TEXT,
     threshold_value REAL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(fov_id, channel_id, name)
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS measurements (
@@ -115,13 +118,15 @@ CREATE TABLE IF NOT EXISTS measurements (
     value REAL NOT NULL,
     scope TEXT NOT NULL DEFAULT 'whole_cell'
         CHECK(scope IN ('whole_cell', 'mask_inside', 'mask_outside')),
-    threshold_run_id INTEGER REFERENCES threshold_runs(id) ON DELETE CASCADE
+    segmentation_id INTEGER NOT NULL REFERENCES segmentations(id) ON DELETE CASCADE,
+    threshold_id INTEGER REFERENCES thresholds(id) ON DELETE CASCADE,
+    measured_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS particles (
     id INTEGER PRIMARY KEY,
-    cell_id INTEGER NOT NULL REFERENCES cells(id) ON DELETE CASCADE,
-    threshold_run_id INTEGER NOT NULL REFERENCES threshold_runs(id) ON DELETE CASCADE,
+    fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
+    threshold_id INTEGER NOT NULL REFERENCES thresholds(id) ON DELETE CASCADE,
     label_value INTEGER NOT NULL,
     centroid_x REAL NOT NULL,
     centroid_y REAL NOT NULL,
@@ -140,7 +145,22 @@ CREATE TABLE IF NOT EXISTS particles (
     mean_intensity REAL,
     max_intensity REAL,
     integrated_intensity REAL,
-    UNIQUE(cell_id, threshold_run_id, label_value)
+    UNIQUE(fov_id, threshold_id, label_value)
+);
+
+CREATE TABLE IF NOT EXISTS analysis_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS fov_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    config_id INTEGER NOT NULL REFERENCES analysis_config(id) ON DELETE CASCADE,
+    fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
+    segmentation_id INTEGER NOT NULL REFERENCES segmentations(id) ON DELETE CASCADE,
+    threshold_id INTEGER REFERENCES thresholds(id) ON DELETE SET NULL,
+    scopes TEXT NOT NULL DEFAULT '["whole_cell"]'
 );
 
 CREATE TABLE IF NOT EXISTS analysis_runs (
@@ -165,20 +185,6 @@ CREATE TABLE IF NOT EXISTS cell_tags (
     PRIMARY KEY (cell_id, tag_id)
 );
 
-CREATE TABLE IF NOT EXISTS measurement_configs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS measurement_config_entries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    config_id INTEGER NOT NULL REFERENCES measurement_configs(id) ON DELETE CASCADE,
-    fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
-    segmentation_run_id INTEGER NOT NULL REFERENCES segmentation_runs(id) ON DELETE CASCADE,
-    threshold_run_id INTEGER REFERENCES threshold_runs(id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS fov_status_cache (
     fov_id INTEGER PRIMARY KEY REFERENCES fovs(id) ON DELETE CASCADE,
     status_json TEXT NOT NULL DEFAULT '{}',
@@ -191,23 +197,23 @@ CREATE TABLE IF NOT EXISTS fov_tags (
     PRIMARY KEY (fov_id, tag_id)
 );
 
--- Partial unique indexes for measurements (handles NULL threshold_run_id)
+-- Partial unique indexes for measurements (handles NULL threshold_id)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_meas_unique_with_thresh
-    ON measurements(cell_id, channel_id, metric, scope, threshold_run_id)
-    WHERE threshold_run_id IS NOT NULL;
+    ON measurements(cell_id, channel_id, metric, scope, segmentation_id, threshold_id)
+    WHERE threshold_id IS NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_meas_unique_without_thresh
-    ON measurements(cell_id, channel_id, metric, scope)
-    WHERE threshold_run_id IS NULL;
+    ON measurements(cell_id, channel_id, metric, scope, segmentation_id)
+    WHERE threshold_id IS NULL;
 
--- Partial unique indexes for config entries (handles NULL threshold_run_id)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_config_entry_with_thresh
-    ON measurement_config_entries(config_id, fov_id, segmentation_run_id, threshold_run_id)
-    WHERE threshold_run_id IS NOT NULL;
+-- Partial unique indexes for fov_config (handles NULL threshold_id)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fov_config_with_thresh
+    ON fov_config(config_id, fov_id, segmentation_id, threshold_id)
+    WHERE threshold_id IS NOT NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_config_entry_without_thresh
-    ON measurement_config_entries(config_id, fov_id, segmentation_run_id)
-    WHERE threshold_run_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fov_config_without_thresh
+    ON fov_config(config_id, fov_id, segmentation_id)
+    WHERE threshold_id IS NULL;
 
 -- Standard indexes
 CREATE INDEX IF NOT EXISTS idx_cells_fov ON cells(fov_id);
@@ -217,44 +223,46 @@ CREATE INDEX IF NOT EXISTS idx_cells_area ON cells(area_pixels);
 CREATE INDEX IF NOT EXISTS idx_measurements_cell ON measurements(cell_id);
 CREATE INDEX IF NOT EXISTS idx_measurements_channel ON measurements(channel_id);
 CREATE INDEX IF NOT EXISTS idx_measurements_metric ON measurements(metric);
-CREATE INDEX IF NOT EXISTS idx_measurements_threshold_run ON measurements(threshold_run_id);
+CREATE INDEX IF NOT EXISTS idx_measurements_segmentation ON measurements(segmentation_id);
+CREATE INDEX IF NOT EXISTS idx_measurements_threshold ON measurements(threshold_id);
 CREATE INDEX IF NOT EXISTS idx_measurements_cell_scope ON measurements(cell_id, scope);
 CREATE INDEX IF NOT EXISTS idx_measurements_cell_channel_scope
     ON measurements(cell_id, channel_id, scope);
-CREATE INDEX IF NOT EXISTS idx_seg_runs_fov ON segmentation_runs(fov_id);
-CREATE INDEX IF NOT EXISTS idx_thresh_runs_fov ON threshold_runs(fov_id);
-CREATE INDEX IF NOT EXISTS idx_thresh_runs_fov_channel ON threshold_runs(fov_id, channel_id);
-CREATE INDEX IF NOT EXISTS idx_config_entries_config ON measurement_config_entries(config_id);
-CREATE INDEX IF NOT EXISTS idx_config_entries_fov ON measurement_config_entries(fov_id);
-CREATE INDEX IF NOT EXISTS idx_config_entries_seg_run ON measurement_config_entries(segmentation_run_id);
+CREATE INDEX IF NOT EXISTS idx_segmentations_type ON segmentations(seg_type);
+CREATE INDEX IF NOT EXISTS idx_segmentations_source_fov ON segmentations(source_fov_id);
+CREATE INDEX IF NOT EXISTS idx_thresholds_source_fov ON thresholds(source_fov_id);
+CREATE INDEX IF NOT EXISTS idx_fov_config_config ON fov_config(config_id);
+CREATE INDEX IF NOT EXISTS idx_fov_config_fov ON fov_config(fov_id);
+CREATE INDEX IF NOT EXISTS idx_fov_config_segmentation ON fov_config(segmentation_id);
 CREATE INDEX IF NOT EXISTS idx_fovs_condition ON fovs(condition_id);
 CREATE INDEX IF NOT EXISTS idx_fovs_bio_rep ON fovs(bio_rep_id);
 CREATE INDEX IF NOT EXISTS idx_fov_tags_fov ON fov_tags(fov_id);
 CREATE INDEX IF NOT EXISTS idx_fov_tags_tag ON fov_tags(tag_id);
-CREATE INDEX IF NOT EXISTS idx_particles_cell ON particles(cell_id);
-CREATE INDEX IF NOT EXISTS idx_particles_run ON particles(threshold_run_id);
+CREATE INDEX IF NOT EXISTS idx_particles_fov ON particles(fov_id);
+CREATE INDEX IF NOT EXISTS idx_particles_threshold ON particles(threshold_id);
 """
 
 EXPECTED_TABLES = frozenset({
     "experiments", "channels", "conditions", "timepoints", "bio_reps", "fovs",
-    "segmentation_runs", "cells", "measurements", "threshold_runs",
+    "segmentations", "cells", "measurements", "thresholds",
     "analysis_runs", "tags", "cell_tags", "particles",
-    "measurement_configs", "measurement_config_entries",
+    "analysis_config", "fov_config",
     "fov_status_cache", "fov_tags",
 })
 
 EXPECTED_INDEXES = frozenset({
     "idx_cells_fov", "idx_cells_fov_valid", "idx_cells_segmentation", "idx_cells_area",
     "idx_measurements_cell", "idx_measurements_channel", "idx_measurements_metric",
-    "idx_measurements_threshold_run", "idx_measurements_cell_scope",
-    "idx_measurements_cell_channel_scope",
+    "idx_measurements_segmentation", "idx_measurements_threshold",
+    "idx_measurements_cell_scope", "idx_measurements_cell_channel_scope",
     "idx_meas_unique_with_thresh", "idx_meas_unique_without_thresh",
-    "idx_seg_runs_fov", "idx_thresh_runs_fov", "idx_thresh_runs_fov_channel",
-    "idx_config_entries_config", "idx_config_entries_fov", "idx_config_entries_seg_run",
-    "idx_config_entry_with_thresh", "idx_config_entry_without_thresh",
+    "idx_segmentations_type", "idx_segmentations_source_fov",
+    "idx_thresholds_source_fov",
+    "idx_fov_config_config", "idx_fov_config_fov", "idx_fov_config_segmentation",
+    "idx_fov_config_with_thresh", "idx_fov_config_without_thresh",
     "idx_fovs_condition", "idx_fovs_bio_rep",
     "idx_fov_tags_fov", "idx_fov_tags_tag",
-    "idx_particles_cell", "idx_particles_run",
+    "idx_particles_fov", "idx_particles_threshold",
 })
 
 EXPECTED_VERSION = "4.0.0"

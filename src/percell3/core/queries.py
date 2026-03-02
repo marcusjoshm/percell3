@@ -14,20 +14,20 @@ from percell3.core.exceptions import (
     ConditionNotFoundError,
     DuplicateError,
     FovNotFoundError,
-    MeasurementConfigNotFoundError,
-    SegmentationRunNotFoundError,
-    ThresholdRunNotFoundError,
+    SegmentationNotFoundError,
+    ThresholdNotFoundError,
 )
 from percell3.core.models import (
+    AnalysisConfig,
     ChannelConfig,
     CellRecord,
+    DeleteImpact,
+    FovConfigEntry,
     FovInfo,
-    MeasurementConfigEntry,
-    MeasurementConfigInfo,
     MeasurementRecord,
     ParticleRecord,
-    SegmentationRunInfo,
-    ThresholdRunInfo,
+    SegmentationInfo,
+    ThresholdInfo,
 )
 
 # ---------------------------------------------------------------------------
@@ -324,110 +324,272 @@ def select_fov_by_display_name(conn: sqlite3.Connection, display_name: str) -> F
 
 
 # ---------------------------------------------------------------------------
-# Segmentation Runs
+# Segmentations (global entities)
 # ---------------------------------------------------------------------------
 
 
-def _row_to_segmentation_run(row: sqlite3.Row) -> SegmentationRunInfo:
-    """Convert a query result row to a SegmentationRunInfo."""
+def _row_to_segmentation(row: sqlite3.Row) -> SegmentationInfo:
+    """Convert a query result row to a SegmentationInfo."""
     params = json.loads(row["parameters"]) if row["parameters"] else None
-    return SegmentationRunInfo(
+    return SegmentationInfo(
         id=row["id"],
-        fov_id=row["fov_id"],
-        channel=row["channel"],
         name=row["name"],
+        seg_type=row["seg_type"],
+        source_fov_id=row["source_fov_id"],
+        source_channel=row["source_channel"],
         model_name=row["model_name"],
         parameters=params,
+        width=row["width"],
+        height=row["height"],
         cell_count=row["cell_count"] or 0,
         created_at=row["created_at"],
     )
 
 
-def insert_segmentation_run(
+_SEG_SELECT_COLS = (
+    "SELECT s.id, s.name, s.seg_type, s.source_fov_id, "
+    "s.source_channel, s.model_name, s.parameters, "
+    "s.width, s.height, s.cell_count, s.created_at "
+    "FROM segmentations s"
+)
+
+
+def insert_segmentation(
     conn: sqlite3.Connection,
-    fov_id: int,
-    channel_id: int,
     name: str,
-    model_name: str,
+    seg_type: str,
+    width: int,
+    height: int,
+    source_fov_id: int | None = None,
+    source_channel: str | None = None,
+    model_name: str = "",
     parameters: dict[str, object] | None = None,
 ) -> int:
-    """Insert a named segmentation run for a FOV. Returns the run ID."""
+    """Insert a global segmentation entity. Returns the segmentation ID."""
     params_json = json.dumps(parameters) if parameters else None
-    cur = conn.execute(
-        "INSERT INTO segmentation_runs (fov_id, channel_id, name, model_name, parameters) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (fov_id, channel_id, name, model_name, params_json),
-    )
-    conn.commit()
+    try:
+        cur = conn.execute(
+            "INSERT INTO segmentations (name, seg_type, source_fov_id, source_channel, "
+            "model_name, parameters, width, height) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, seg_type, source_fov_id, source_channel, model_name,
+             params_json, width, height),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        raise DuplicateError("segmentation", name)
     return cur.lastrowid  # type: ignore[return-value]
 
 
-def select_segmentation_runs_for_fov(
+def select_segmentations(
     conn: sqlite3.Connection,
-    fov_id: int,
-) -> list[SegmentationRunInfo]:
-    """Return all segmentation runs for a FOV, ordered by creation time."""
-    rows = conn.execute(
-        "SELECT sr.id, sr.fov_id, ch.name AS channel, sr.name, sr.model_name, "
-        "sr.parameters, sr.cell_count, sr.created_at "
-        "FROM segmentation_runs sr "
-        "JOIN channels ch ON sr.channel_id = ch.id "
-        "WHERE sr.fov_id = ? "
-        "ORDER BY sr.created_at",
-        (fov_id,),
-    ).fetchall()
-    return [_row_to_segmentation_run(r) for r in rows]
+    seg_type: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> list[SegmentationInfo]:
+    """Return all segmentations, optionally filtered by type or dimensions."""
+    query = _SEG_SELECT_COLS
+    params: list = []
+    clauses: list[str] = []
+    if seg_type is not None:
+        clauses.append("s.seg_type = ?")
+        params.append(seg_type)
+    if width is not None:
+        clauses.append("s.width = ?")
+        params.append(width)
+    if height is not None:
+        clauses.append("s.height = ?")
+        params.append(height)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY s.id"
+    rows = conn.execute(query, params).fetchall()
+    return [_row_to_segmentation(r) for r in rows]
 
 
-def select_segmentation_run(
+def select_segmentation(
     conn: sqlite3.Connection,
-    run_id: int,
-) -> SegmentationRunInfo:
-    """Return a single segmentation run by ID.
+    segmentation_id: int,
+) -> SegmentationInfo:
+    """Return a single segmentation by ID.
 
     Raises:
-        SegmentationRunNotFoundError: If the run does not exist.
+        SegmentationNotFoundError: If the segmentation does not exist.
     """
     row = conn.execute(
-        "SELECT sr.id, sr.fov_id, ch.name AS channel, sr.name, sr.model_name, "
-        "sr.parameters, sr.cell_count, sr.created_at "
-        "FROM segmentation_runs sr "
-        "JOIN channels ch ON sr.channel_id = ch.id "
-        "WHERE sr.id = ?",
-        (run_id,),
+        _SEG_SELECT_COLS + " WHERE s.id = ?",
+        (segmentation_id,),
     ).fetchone()
     if row is None:
-        raise SegmentationRunNotFoundError(run_id)
-    return _row_to_segmentation_run(row)
+        raise SegmentationNotFoundError(segmentation_id)
+    return _row_to_segmentation(row)
 
 
-def rename_segmentation_run(
+def rename_segmentation(
     conn: sqlite3.Connection,
-    run_id: int,
+    segmentation_id: int,
     new_name: str,
 ) -> None:
-    """Rename a segmentation run. Raises IntegrityError on name collision."""
+    """Rename a segmentation. Raises DuplicateError on name collision."""
+    try:
+        conn.execute(
+            "UPDATE segmentations SET name = ? WHERE id = ?",
+            (new_name, segmentation_id),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise DuplicateError("segmentation", new_name)
+
+
+def delete_segmentation(conn: sqlite3.Connection, segmentation_id: int) -> None:
+    """Delete a segmentation. CASCADE handles cells, measurements, fov_config."""
+    conn.execute("DELETE FROM segmentations WHERE id = ?", (segmentation_id,))
+    conn.commit()
+
+
+def update_segmentation_cell_count(
+    conn: sqlite3.Connection,
+    segmentation_id: int,
+    cell_count: int,
+) -> None:
     conn.execute(
-        "UPDATE segmentation_runs SET name = ? WHERE id = ?",
-        (new_name, run_id),
+        "UPDATE segmentations SET cell_count = ? WHERE id = ?",
+        (cell_count, segmentation_id),
     )
     conn.commit()
 
 
-def delete_segmentation_run(conn: sqlite3.Connection, run_id: int) -> None:
-    """Delete a segmentation run. CASCADE handles cells, measurements, particles."""
-    conn.execute("DELETE FROM segmentation_runs WHERE id = ?", (run_id,))
+# ---------------------------------------------------------------------------
+# Thresholds (global entities)
+# ---------------------------------------------------------------------------
+
+
+def _row_to_threshold(row: sqlite3.Row) -> ThresholdInfo:
+    """Convert a query result row to a ThresholdInfo."""
+    params = json.loads(row["parameters"]) if row["parameters"] else None
+    return ThresholdInfo(
+        id=row["id"],
+        name=row["name"],
+        source_fov_id=row["source_fov_id"],
+        source_channel=row["source_channel"],
+        grouping_channel=row["grouping_channel"],
+        method=row["method"],
+        parameters=params,
+        threshold_value=row["threshold_value"],
+        width=row["width"],
+        height=row["height"],
+        created_at=row["created_at"],
+    )
+
+
+_THR_SELECT_COLS = (
+    "SELECT t.id, t.name, t.source_fov_id, t.source_channel, "
+    "t.grouping_channel, t.method, t.parameters, t.threshold_value, "
+    "t.width, t.height, t.created_at "
+    "FROM thresholds t"
+)
+
+
+def insert_threshold(
+    conn: sqlite3.Connection,
+    name: str,
+    method: str,
+    width: int,
+    height: int,
+    source_fov_id: int | None = None,
+    source_channel: str | None = None,
+    grouping_channel: str | None = None,
+    parameters: dict[str, object] | None = None,
+) -> int:
+    """Insert a global threshold entity. Returns the threshold ID."""
+    params_json = json.dumps(parameters) if parameters else None
+    try:
+        cur = conn.execute(
+            "INSERT INTO thresholds (name, source_fov_id, source_channel, "
+            "grouping_channel, method, parameters, width, height) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, source_fov_id, source_channel, grouping_channel, method,
+             params_json, width, height),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        raise DuplicateError("threshold", name)
+    return cur.lastrowid  # type: ignore[return-value]
+
+
+def select_thresholds(
+    conn: sqlite3.Connection,
+    width: int | None = None,
+    height: int | None = None,
+) -> list[ThresholdInfo]:
+    """Return all thresholds, optionally filtered by dimensions."""
+    query = _THR_SELECT_COLS
+    params: list = []
+    clauses: list[str] = []
+    if width is not None:
+        clauses.append("t.width = ?")
+        params.append(width)
+    if height is not None:
+        clauses.append("t.height = ?")
+        params.append(height)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY t.id"
+    rows = conn.execute(query, params).fetchall()
+    return [_row_to_threshold(r) for r in rows]
+
+
+def select_threshold(
+    conn: sqlite3.Connection,
+    threshold_id: int,
+) -> ThresholdInfo:
+    """Return a single threshold by ID.
+
+    Raises:
+        ThresholdNotFoundError: If the threshold does not exist.
+    """
+    row = conn.execute(
+        _THR_SELECT_COLS + " WHERE t.id = ?",
+        (threshold_id,),
+    ).fetchone()
+    if row is None:
+        raise ThresholdNotFoundError(threshold_id)
+    return _row_to_threshold(row)
+
+
+def rename_threshold(
+    conn: sqlite3.Connection,
+    threshold_id: int,
+    new_name: str,
+) -> None:
+    """Rename a threshold. Raises DuplicateError on name collision."""
+    try:
+        conn.execute(
+            "UPDATE thresholds SET name = ? WHERE id = ?",
+            (new_name, threshold_id),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise DuplicateError("threshold", new_name)
+
+
+def delete_threshold(conn: sqlite3.Connection, threshold_id: int) -> None:
+    """Delete a threshold. CASCADE handles particles, measurements, fov_config."""
+    conn.execute("DELETE FROM thresholds WHERE id = ?", (threshold_id,))
     conn.commit()
 
 
-def update_segmentation_run_cell_count(
+def update_threshold_value(
     conn: sqlite3.Connection,
-    run_id: int,
-    cell_count: int,
+    threshold_id: int,
+    threshold_value: float,
 ) -> None:
+    """Update the threshold value (set after computation)."""
     conn.execute(
-        "UPDATE segmentation_runs SET cell_count = ? WHERE id = ?",
-        (cell_count, run_id),
+        "UPDATE thresholds SET threshold_value = ? WHERE id = ?",
+        (threshold_value, threshold_id),
     )
     conn.commit()
 
@@ -438,12 +600,7 @@ def update_segmentation_run_cell_count(
 
 
 def insert_cells(conn: sqlite3.Connection, cells: list[CellRecord]) -> list[int]:
-    """Bulk insert cell records. Returns list of new cell IDs.
-
-    Uses executemany for performance (~3-5x faster than row-by-row).
-    The entire batch is atomic: if any insert fails (e.g. duplicate),
-    all inserts are rolled back.
-    """
+    """Bulk insert cell records. Returns list of new cell IDs."""
     if not cells:
         return []
     sql = (
@@ -467,8 +624,6 @@ def insert_cells(conn: sqlite3.Connection, cells: list[CellRecord]) -> list[int]
     except sqlite3.IntegrityError:
         conn.rollback()
         raise DuplicateError("cell", str(cells[-1].label_value))
-    # Return IDs: executemany doesn't give per-row lastrowid,
-    # so compute from the final lastrowid.
     last_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     return list(range(last_id - len(cells) + 1, last_id + 1))
 
@@ -581,11 +736,12 @@ def insert_measurements(
 ) -> None:
     conn.executemany(
         "INSERT OR REPLACE INTO measurements "
-        "(cell_id, channel_id, metric, value, scope, threshold_run_id) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "(cell_id, channel_id, metric, value, scope, "
+        "segmentation_id, threshold_id, measured_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))",
         [
             (m.cell_id, m.channel_id, m.metric, m.value,
-             m.scope, m.threshold_run_id)
+             m.scope, m.segmentation_id, m.threshold_id, m.measured_at)
             for m in measurements
         ],
     )
@@ -601,7 +757,7 @@ def select_measurements(
 ) -> list[dict]:
     query = (
         "SELECT m.cell_id, ch.name AS channel, m.metric, m.value, "
-        "m.scope, m.threshold_run_id "
+        "m.scope, m.segmentation_id, m.threshold_id, m.measured_at "
         "FROM measurements m "
         "JOIN channels ch ON m.channel_id = ch.id"
     )
@@ -620,9 +776,7 @@ def select_measurements(
         clauses.append(f"m.metric IN ({placeholders})")
         params.extend(metrics)
     if scope is not None:
-        # Include particle summary metrics regardless of scope — they are
-        # scope-independent (computed from threshold mask, not from
-        # whole-cell vs masked measurement).
+        # Include particle summary metrics regardless of scope
         clauses.append(
             "(m.scope = ? OR m.metric IN ("
             "'particle_count','total_particle_area','mean_particle_area',"
@@ -657,269 +811,394 @@ def select_distinct_measured_metrics(conn: sqlite3.Connection) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Threshold Runs
+# Particles (FOV-level, keyed by fov_id + threshold_id)
 # ---------------------------------------------------------------------------
 
 
-def _row_to_threshold_run(row: sqlite3.Row) -> ThresholdRunInfo:
-    """Convert a query result row to a ThresholdRunInfo."""
-    params = json.loads(row["parameters"]) if row["parameters"] else None
-    return ThresholdRunInfo(
+def insert_particles(
+    conn: sqlite3.Connection,
+    particles: list[ParticleRecord],
+) -> None:
+    """Bulk insert particle records."""
+    if not particles:
+        return
+    sql = (
+        "INSERT INTO particles ("
+        "fov_id, threshold_id, label_value, "
+        "centroid_x, centroid_y, bbox_x, bbox_y, bbox_w, bbox_h, "
+        "area_pixels, area_um2, perimeter, circularity, "
+        "eccentricity, solidity, major_axis_length, minor_axis_length, "
+        "mean_intensity, max_intensity, integrated_intensity"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    rows = [
+        (
+            p.fov_id, p.threshold_id, p.label_value,
+            p.centroid_x, p.centroid_y,
+            p.bbox_x, p.bbox_y, p.bbox_w, p.bbox_h,
+            p.area_pixels, p.area_um2, p.perimeter, p.circularity,
+            p.eccentricity, p.solidity,
+            p.major_axis_length, p.minor_axis_length,
+            p.mean_intensity, p.max_intensity, p.integrated_intensity,
+        )
+        for p in particles
+    ]
+    conn.executemany(sql, rows)
+    conn.commit()
+
+
+def select_particles(
+    conn: sqlite3.Connection,
+    fov_id: int | None = None,
+    threshold_id: int | None = None,
+) -> list[dict]:
+    """Query particles with optional filters."""
+    query = "SELECT * FROM particles"
+    params: list = []
+    clauses: list[str] = []
+    if fov_id is not None:
+        clauses.append("fov_id = ?")
+        params.append(fov_id)
+    if threshold_id is not None:
+        clauses.append("threshold_id = ?")
+        params.append(threshold_id)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY id"
+    rows = conn.execute(query, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def select_particles_with_context(
+    conn: sqlite3.Connection,
+    threshold_id: int | None = None,
+    fov_id: int | None = None,
+) -> list[dict]:
+    """Query particles enriched with FOV context (condition, bio rep)."""
+    query = (
+        "SELECT p.*, "
+        "f.display_name AS fov_name, cond.name AS condition_name, br.name AS bio_rep_name "
+        "FROM particles p "
+        "JOIN fovs f ON p.fov_id = f.id "
+        "JOIN conditions cond ON f.condition_id = cond.id "
+        "JOIN bio_reps br ON f.bio_rep_id = br.id"
+    )
+    params: list = []
+    clauses: list[str] = []
+    if threshold_id is not None:
+        clauses.append("p.threshold_id = ?")
+        params.append(threshold_id)
+    if fov_id is not None:
+        clauses.append("p.fov_id = ?")
+        params.append(fov_id)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY p.fov_id, p.id"
+    rows = conn.execute(query, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_particles_for_fov(conn: sqlite3.Connection, fov_id: int) -> int:
+    """Delete all particles for a FOV.
+
+    Returns:
+        Number of particles deleted.
+    """
+    count = conn.execute(
+        "SELECT COUNT(*) FROM particles WHERE fov_id = ?", (fov_id,),
+    ).fetchone()[0]
+    if count == 0:
+        return 0
+    conn.execute("DELETE FROM particles WHERE fov_id = ?", (fov_id,))
+    conn.commit()
+    return count
+
+
+def delete_particles_for_threshold(
+    conn: sqlite3.Connection,
+    threshold_id: int,
+) -> int:
+    """Delete all particles for a specific threshold.
+
+    Returns:
+        Number of particles deleted.
+    """
+    count = conn.execute(
+        "SELECT COUNT(*) FROM particles WHERE threshold_id = ?",
+        (threshold_id,),
+    ).fetchone()[0]
+    if count == 0:
+        return 0
+    conn.execute(
+        "DELETE FROM particles WHERE threshold_id = ?",
+        (threshold_id,),
+    )
+    conn.commit()
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Analysis Config
+# ---------------------------------------------------------------------------
+
+
+def get_or_create_analysis_config(
+    conn: sqlite3.Connection,
+    experiment_id: int = 1,
+) -> AnalysisConfig:
+    """Get the analysis config for an experiment, creating one if needed."""
+    row = conn.execute(
+        "SELECT id, experiment_id, created_at FROM analysis_config "
+        "WHERE experiment_id = ? ORDER BY id DESC LIMIT 1",
+        (experiment_id,),
+    ).fetchone()
+    if row is not None:
+        return AnalysisConfig(
+            id=row["id"],
+            experiment_id=row["experiment_id"],
+            created_at=row["created_at"],
+        )
+    cur = conn.execute(
+        "INSERT INTO analysis_config (experiment_id) VALUES (?)",
+        (experiment_id,),
+    )
+    conn.commit()
+    config_id = cur.lastrowid
+    row = conn.execute(
+        "SELECT id, experiment_id, created_at FROM analysis_config WHERE id = ?",
+        (config_id,),
+    ).fetchone()
+    return AnalysisConfig(
         id=row["id"],
-        fov_id=row["fov_id"],
-        channel=row["channel"],
-        name=row["name"],
-        method=row["method"],
-        parameters=params,
-        threshold_value=row["threshold_value"],
+        experiment_id=row["experiment_id"],
         created_at=row["created_at"],
     )
 
 
-def insert_threshold_run(
-    conn: sqlite3.Connection,
-    fov_id: int,
-    channel_id: int,
-    name: str,
-    method: str,
-    parameters: dict[str, object] | None = None,
-) -> int:
-    """Insert a named threshold run for a FOV. Returns the run ID."""
-    params_json = json.dumps(parameters) if parameters else None
-    cur = conn.execute(
-        "INSERT INTO threshold_runs (fov_id, channel_id, name, method, parameters) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (fov_id, channel_id, name, method, params_json),
-    )
-    conn.commit()
-    return cur.lastrowid  # type: ignore[return-value]
-
-
-def select_threshold_runs_for_fov(
-    conn: sqlite3.Connection,
-    fov_id: int,
-    channel_name: str | None = None,
-) -> list[ThresholdRunInfo]:
-    """Return threshold runs for a FOV, optionally filtered by channel."""
-    if channel_name is not None:
-        rows = conn.execute(
-            "SELECT tr.id, tr.fov_id, ch.name AS channel, tr.name, tr.method, "
-            "tr.parameters, tr.threshold_value, tr.created_at "
-            "FROM threshold_runs tr "
-            "JOIN channels ch ON tr.channel_id = ch.id "
-            "WHERE tr.fov_id = ? AND ch.name = ? "
-            "ORDER BY tr.created_at",
-            (fov_id, channel_name),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT tr.id, tr.fov_id, ch.name AS channel, tr.name, tr.method, "
-            "tr.parameters, tr.threshold_value, tr.created_at "
-            "FROM threshold_runs tr "
-            "JOIN channels ch ON tr.channel_id = ch.id "
-            "WHERE tr.fov_id = ? "
-            "ORDER BY tr.created_at",
-            (fov_id,),
-        ).fetchall()
-    return [_row_to_threshold_run(r) for r in rows]
-
-
-def select_threshold_run(
-    conn: sqlite3.Connection,
-    run_id: int,
-) -> ThresholdRunInfo:
-    """Return a single threshold run by ID.
-
-    Raises:
-        ThresholdRunNotFoundError: If the run does not exist.
-    """
-    row = conn.execute(
-        "SELECT tr.id, tr.fov_id, ch.name AS channel, tr.name, tr.method, "
-        "tr.parameters, tr.threshold_value, tr.created_at "
-        "FROM threshold_runs tr "
-        "JOIN channels ch ON tr.channel_id = ch.id "
-        "WHERE tr.id = ?",
-        (run_id,),
-    ).fetchone()
-    if row is None:
-        raise ThresholdRunNotFoundError(run_id)
-    return _row_to_threshold_run(row)
-
-
-def rename_threshold_run(
-    conn: sqlite3.Connection,
-    run_id: int,
-    new_name: str,
-) -> None:
-    """Rename a threshold run. Raises IntegrityError on name collision."""
-    conn.execute(
-        "UPDATE threshold_runs SET name = ? WHERE id = ?",
-        (new_name, run_id),
-    )
-    conn.commit()
-
-
-def delete_threshold_run(conn: sqlite3.Connection, run_id: int) -> None:
-    """Delete a threshold run. CASCADE handles particles and measurements."""
-    conn.execute("DELETE FROM threshold_runs WHERE id = ?", (run_id,))
-    conn.commit()
-
-
-def update_threshold_run_value(
-    conn: sqlite3.Connection,
-    run_id: int,
-    threshold_value: float,
-) -> None:
-    """Update the threshold value for a run (set after computation)."""
-    conn.execute(
-        "UPDATE threshold_runs SET threshold_value = ? WHERE id = ?",
-        (threshold_value, run_id),
-    )
-    conn.commit()
-
-
 # ---------------------------------------------------------------------------
-# Measurement Configs
+# FOV Config (per-FOV segmentation/threshold assignments)
 # ---------------------------------------------------------------------------
 
 
-def _row_to_measurement_config(row: sqlite3.Row) -> MeasurementConfigInfo:
-    """Convert a query result row to a MeasurementConfigInfo."""
-    return MeasurementConfigInfo(
-        id=row["id"],
-        name=row["name"],
-        created_at=row["created_at"],
-        entry_count=row["entry_count"],
-    )
-
-
-def insert_measurement_config(conn: sqlite3.Connection, name: str) -> int:
-    """Create a measurement configuration. Returns the config ID."""
-    cur = conn.execute(
-        "INSERT INTO measurement_configs (name) VALUES (?)",
-        (name,),
-    )
-    conn.commit()
-    return cur.lastrowid  # type: ignore[return-value]
-
-
-def select_measurement_configs(conn: sqlite3.Connection) -> list[MeasurementConfigInfo]:
-    """Return all measurement configurations with entry counts."""
-    rows = conn.execute(
-        "SELECT mc.id, mc.name, mc.created_at, "
-        "COUNT(mce.id) AS entry_count "
-        "FROM measurement_configs mc "
-        "LEFT JOIN measurement_config_entries mce ON mc.id = mce.config_id "
-        "GROUP BY mc.id "
-        "ORDER BY mc.created_at",
-    ).fetchall()
-    return [_row_to_measurement_config(r) for r in rows]
-
-
-def select_measurement_config(
-    conn: sqlite3.Connection,
-    config_id: int,
-) -> MeasurementConfigInfo:
-    """Return a single measurement config by ID.
-
-    Raises:
-        MeasurementConfigNotFoundError: If the config does not exist.
-    """
-    row = conn.execute(
-        "SELECT mc.id, mc.name, mc.created_at, "
-        "COUNT(mce.id) AS entry_count "
-        "FROM measurement_configs mc "
-        "LEFT JOIN measurement_config_entries mce ON mc.id = mce.config_id "
-        "WHERE mc.id = ? "
-        "GROUP BY mc.id",
-        (config_id,),
-    ).fetchone()
-    if row is None:
-        raise MeasurementConfigNotFoundError(config_id)
-    return _row_to_measurement_config(row)
-
-
-def delete_measurement_config(conn: sqlite3.Connection, config_id: int) -> None:
-    """Delete a measurement config and its entries (CASCADE)."""
-    conn.execute("DELETE FROM measurement_configs WHERE id = ?", (config_id,))
-    conn.commit()
-
-
-def insert_measurement_config_entry(
+def insert_fov_config_entry(
     conn: sqlite3.Connection,
     config_id: int,
     fov_id: int,
-    segmentation_run_id: int,
-    threshold_run_id: int | None = None,
+    segmentation_id: int,
+    threshold_id: int | None = None,
+    scopes: list[str] | None = None,
 ) -> int:
-    """Add an entry to a measurement config. Returns the entry ID."""
+    """Add a row to fov_config. Returns the entry ID."""
+    scopes_json = json.dumps(scopes or ["whole_cell"])
     cur = conn.execute(
-        "INSERT INTO measurement_config_entries "
-        "(config_id, fov_id, segmentation_run_id, threshold_run_id) "
-        "VALUES (?, ?, ?, ?)",
-        (config_id, fov_id, segmentation_run_id, threshold_run_id),
+        "INSERT INTO fov_config (config_id, fov_id, segmentation_id, "
+        "threshold_id, scopes) VALUES (?, ?, ?, ?, ?)",
+        (config_id, fov_id, segmentation_id, threshold_id, scopes_json),
     )
     conn.commit()
     return cur.lastrowid  # type: ignore[return-value]
 
 
-def select_measurement_config_entries(
+def select_fov_config(
     conn: sqlite3.Connection,
     config_id: int,
-) -> list[MeasurementConfigEntry]:
-    """Return all entries for a measurement config."""
-    rows = conn.execute(
-        "SELECT id, config_id, fov_id, segmentation_run_id, threshold_run_id "
-        "FROM measurement_config_entries "
-        "WHERE config_id = ? "
-        "ORDER BY fov_id",
-        (config_id,),
-    ).fetchall()
+    fov_id: int | None = None,
+) -> list[FovConfigEntry]:
+    """Return fov_config entries, optionally filtered by FOV."""
+    query = (
+        "SELECT id, config_id, fov_id, segmentation_id, threshold_id, scopes "
+        "FROM fov_config WHERE config_id = ?"
+    )
+    params: list = [config_id]
+    if fov_id is not None:
+        query += " AND fov_id = ?"
+        params.append(fov_id)
+    query += " ORDER BY fov_id, id"
+    rows = conn.execute(query, params).fetchall()
     return [
-        MeasurementConfigEntry(
+        FovConfigEntry(
             id=r["id"],
             config_id=r["config_id"],
             fov_id=r["fov_id"],
-            segmentation_run_id=r["segmentation_run_id"],
-            threshold_run_id=r["threshold_run_id"],
+            segmentation_id=r["segmentation_id"],
+            threshold_id=r["threshold_id"],
+            scopes=json.loads(r["scopes"]) if r["scopes"] else ["whole_cell"],
         )
         for r in rows
     ]
 
 
-def delete_measurement_config_entry(
+def update_fov_config_entry(
     conn: sqlite3.Connection,
     entry_id: int,
+    segmentation_id: int | None = None,
+    threshold_id: int | None = None,
+    scopes: list[str] | None = None,
 ) -> None:
-    """Delete a single config entry."""
-    conn.execute("DELETE FROM measurement_config_entries WHERE id = ?", (entry_id,))
+    """Update fields on an existing fov_config entry."""
+    updates: list[str] = []
+    params: list = []
+    if segmentation_id is not None:
+        updates.append("segmentation_id = ?")
+        params.append(segmentation_id)
+    if threshold_id is not None:
+        updates.append("threshold_id = ?")
+        params.append(threshold_id)
+    if scopes is not None:
+        updates.append("scopes = ?")
+        params.append(json.dumps(scopes))
+    if not updates:
+        return
+    params.append(entry_id)
+    conn.execute(
+        f"UPDATE fov_config SET {', '.join(updates)} WHERE id = ?",
+        params,
+    )
     conn.commit()
 
 
-def select_active_measurement_config_id(conn: sqlite3.Connection) -> int | None:
-    """Return the active measurement config ID, or None."""
-    row = conn.execute(
-        "SELECT active_measurement_config_id FROM experiments LIMIT 1"
-    ).fetchone()
-    if row is None:
-        return None
-    return row["active_measurement_config_id"]
+def delete_fov_config_entry(conn: sqlite3.Connection, entry_id: int) -> None:
+    """Delete a single fov_config entry."""
+    conn.execute("DELETE FROM fov_config WHERE id = ?", (entry_id,))
+    conn.commit()
 
 
-def set_active_measurement_config(
+def delete_fov_config_for_fov(
     conn: sqlite3.Connection,
-    config_id: int | None,
+    config_id: int,
+    fov_id: int,
 ) -> None:
-    """Set the active measurement config (or clear it with None)."""
+    """Delete all config entries for a specific FOV."""
     conn.execute(
-        "UPDATE experiments SET active_measurement_config_id = ?",
-        (config_id,),
+        "DELETE FROM fov_config WHERE config_id = ? AND fov_id = ?",
+        (config_id, fov_id),
     )
     conn.commit()
 
 
 # ---------------------------------------------------------------------------
-# Analysis Runs
+# Cell deletion (re-segmentation)
+# ---------------------------------------------------------------------------
+
+
+def delete_cells_for_fov(conn: sqlite3.Connection, fov_id: int) -> int:
+    """Delete all cells (and their measurements/tags) for a FOV.
+
+    Returns:
+        Number of cells deleted.
+    """
+    count = conn.execute(
+        "SELECT COUNT(*) FROM cells WHERE fov_id = ?", (fov_id,)
+    ).fetchone()[0]
+    if count == 0:
+        return 0
+    conn.execute(
+        "DELETE FROM measurements WHERE cell_id IN "
+        "(SELECT id FROM cells WHERE fov_id = ?)",
+        (fov_id,),
+    )
+    conn.execute(
+        "DELETE FROM cell_tags WHERE cell_id IN "
+        "(SELECT id FROM cells WHERE fov_id = ?)",
+        (fov_id,),
+    )
+    conn.execute("DELETE FROM cells WHERE fov_id = ?", (fov_id,))
+    conn.commit()
+    return count
+
+
+def select_fov_segmentation_summary(
+    conn: sqlite3.Connection,
+) -> dict[int, tuple[int, str | None]]:
+    """Return {fov_id: (cell_count, last_model_name)} for all FOVs."""
+    rows = conn.execute(
+        "SELECT f.id AS fov_id, "
+        "       COUNT(c.id) AS cell_count, "
+        "       s.model_name "
+        "FROM fovs f "
+        "LEFT JOIN cells c ON c.fov_id = f.id AND c.is_valid = 1 "
+        "LEFT JOIN segmentations s ON c.segmentation_id = s.id "
+        "GROUP BY f.id "
+        "ORDER BY f.id"
+    ).fetchall()
+    result: dict[int, tuple[int, str | None]] = {}
+    for r in rows:
+        result[r["fov_id"]] = (r["cell_count"], r["model_name"])
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Rename operations
+# ---------------------------------------------------------------------------
+
+
+def rename_experiment(conn: sqlite3.Connection, new_name: str) -> None:
+    """Rename the experiment (SQLite only, does not rename the directory)."""
+    conn.execute("UPDATE experiments SET name = ?", (new_name,))
+    conn.commit()
+
+
+def rename_condition(conn: sqlite3.Connection, old_name: str, new_name: str) -> None:
+    """Rename a condition. Raises ConditionNotFoundError / DuplicateError."""
+    cid = select_condition_id(conn, old_name)
+    try:
+        conn.execute("UPDATE conditions SET name = ? WHERE id = ?", (new_name, cid))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise DuplicateError("condition", new_name)
+
+
+def rename_channel(conn: sqlite3.Connection, old_name: str, new_name: str) -> None:
+    """Rename a channel. Raises ChannelNotFoundError / DuplicateError."""
+    ch = select_channel_by_name(conn, old_name)
+    try:
+        conn.execute("UPDATE channels SET name = ? WHERE id = ?", (new_name, ch.id))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise DuplicateError("channel", new_name)
+
+
+def rename_bio_rep(
+    conn: sqlite3.Connection,
+    old_name: str,
+    new_name: str,
+) -> None:
+    """Rename a biological replicate. Raises BioRepNotFoundError / DuplicateError."""
+    row = select_bio_rep_by_name(conn, old_name)
+    try:
+        conn.execute("UPDATE bio_reps SET name = ? WHERE id = ?", (new_name, row["id"]))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise DuplicateError("bio_rep", new_name)
+
+
+def rename_fov(
+    conn: sqlite3.Connection,
+    fov_id: int,
+    new_display_name: str,
+) -> None:
+    """Rename a FOV by ID. Raises FovNotFoundError / DuplicateError."""
+    existing = conn.execute(
+        "SELECT id FROM fovs WHERE id = ?", (fov_id,)
+    ).fetchone()
+    if existing is None:
+        raise FovNotFoundError(str(fov_id))
+    try:
+        conn.execute(
+            "UPDATE fovs SET display_name = ? WHERE id = ?",
+            (new_display_name, fov_id),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise DuplicateError("fov", new_display_name)
+
+
+# ---------------------------------------------------------------------------
+# Analysis Runs (plugin executions)
 # ---------------------------------------------------------------------------
 
 
@@ -1029,410 +1308,6 @@ def delete_cell_tags(
 
 
 # ---------------------------------------------------------------------------
-# Cell deletion (re-segmentation)
-# ---------------------------------------------------------------------------
-
-
-def delete_cells_for_fov(conn: sqlite3.Connection, fov_id: int) -> int:
-    """Delete all cells (and their particles/measurements/tags) for a FOV.
-
-    Cascade order: particles -> measurements -> cell_tags -> cells.
-
-    Returns:
-        Number of cells deleted.
-    """
-    count = conn.execute(
-        "SELECT COUNT(*) FROM cells WHERE fov_id = ?", (fov_id,)
-    ).fetchone()[0]
-    if count == 0:
-        return 0
-    conn.execute(
-        "DELETE FROM particles WHERE cell_id IN "
-        "(SELECT id FROM cells WHERE fov_id = ?)",
-        (fov_id,),
-    )
-    conn.execute(
-        "DELETE FROM measurements WHERE cell_id IN "
-        "(SELECT id FROM cells WHERE fov_id = ?)",
-        (fov_id,),
-    )
-    conn.execute(
-        "DELETE FROM cell_tags WHERE cell_id IN "
-        "(SELECT id FROM cells WHERE fov_id = ?)",
-        (fov_id,),
-    )
-    conn.execute("DELETE FROM cells WHERE fov_id = ?", (fov_id,))
-    conn.commit()
-    return count
-
-
-def select_fov_segmentation_summary(
-    conn: sqlite3.Connection,
-) -> dict[int, tuple[int, str | None]]:
-    """Return {fov_id: (cell_count, last_model_name)} for all FOVs.
-
-    Uses the most recent segmentation run that produced cells for each FOV.
-    FOVs with no cells return (0, None).
-    """
-    rows = conn.execute(
-        "SELECT f.id AS fov_id, "
-        "       COUNT(c.id) AS cell_count, "
-        "       sr.model_name "
-        "FROM fovs f "
-        "LEFT JOIN cells c ON c.fov_id = f.id AND c.is_valid = 1 "
-        "LEFT JOIN segmentation_runs sr ON c.segmentation_id = sr.id "
-        "GROUP BY f.id "
-        "ORDER BY f.id"
-    ).fetchall()
-    result: dict[int, tuple[int, str | None]] = {}
-    for r in rows:
-        result[r["fov_id"]] = (r["cell_count"], r["model_name"])
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Rename operations
-# ---------------------------------------------------------------------------
-
-
-def rename_experiment(conn: sqlite3.Connection, new_name: str) -> None:
-    """Rename the experiment (SQLite only, does not rename the directory)."""
-    conn.execute("UPDATE experiments SET name = ?", (new_name,))
-    conn.commit()
-
-
-def rename_condition(conn: sqlite3.Connection, old_name: str, new_name: str) -> None:
-    """Rename a condition. Raises ConditionNotFoundError / DuplicateError."""
-    cid = select_condition_id(conn, old_name)
-    try:
-        conn.execute("UPDATE conditions SET name = ? WHERE id = ?", (new_name, cid))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.rollback()
-        raise DuplicateError("condition", new_name)
-
-
-def rename_channel(conn: sqlite3.Connection, old_name: str, new_name: str) -> None:
-    """Rename a channel. Raises ChannelNotFoundError / DuplicateError."""
-    ch = select_channel_by_name(conn, old_name)
-    try:
-        conn.execute("UPDATE channels SET name = ? WHERE id = ?", (new_name, ch.id))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.rollback()
-        raise DuplicateError("channel", new_name)
-
-
-def rename_bio_rep(
-    conn: sqlite3.Connection,
-    old_name: str,
-    new_name: str,
-) -> None:
-    """Rename a biological replicate. Raises BioRepNotFoundError / DuplicateError."""
-    row = select_bio_rep_by_name(conn, old_name)
-    try:
-        conn.execute("UPDATE bio_reps SET name = ? WHERE id = ?", (new_name, row["id"]))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.rollback()
-        raise DuplicateError("bio_rep", new_name)
-
-
-def rename_fov(
-    conn: sqlite3.Connection,
-    fov_id: int,
-    new_display_name: str,
-) -> None:
-    """Rename a FOV by ID. Raises FovNotFoundError / DuplicateError."""
-    existing = conn.execute(
-        "SELECT id FROM fovs WHERE id = ?", (fov_id,)
-    ).fetchone()
-    if existing is None:
-        raise FovNotFoundError(str(fov_id))
-    try:
-        conn.execute(
-            "UPDATE fovs SET display_name = ? WHERE id = ?",
-            (new_display_name, fov_id),
-        )
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.rollback()
-        raise DuplicateError("fov", new_display_name)
-
-
-# ---------------------------------------------------------------------------
-# Particles
-# ---------------------------------------------------------------------------
-
-
-def insert_particles(
-    conn: sqlite3.Connection,
-    particles: list[ParticleRecord],
-) -> None:
-    """Bulk insert particle records."""
-    if not particles:
-        return
-    sql = (
-        "INSERT INTO particles ("
-        "cell_id, threshold_run_id, label_value, "
-        "centroid_x, centroid_y, bbox_x, bbox_y, bbox_w, bbox_h, "
-        "area_pixels, area_um2, perimeter, circularity, "
-        "eccentricity, solidity, major_axis_length, minor_axis_length, "
-        "mean_intensity, max_intensity, integrated_intensity"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    rows = [
-        (
-            p.cell_id, p.threshold_run_id, p.label_value,
-            p.centroid_x, p.centroid_y,
-            p.bbox_x, p.bbox_y, p.bbox_w, p.bbox_h,
-            p.area_pixels, p.area_um2, p.perimeter, p.circularity,
-            p.eccentricity, p.solidity,
-            p.major_axis_length, p.minor_axis_length,
-            p.mean_intensity, p.max_intensity, p.integrated_intensity,
-        )
-        for p in particles
-    ]
-    conn.executemany(sql, rows)
-    conn.commit()
-
-
-def select_particles(
-    conn: sqlite3.Connection,
-    cell_ids: list[int] | None = None,
-    threshold_run_id: int | None = None,
-) -> list[dict]:
-    """Query particles with optional filters."""
-    query = "SELECT * FROM particles"
-    params: list = []
-    clauses: list[str] = []
-    if cell_ids is not None and len(cell_ids) > 0:
-        placeholders = ",".join("?" * len(cell_ids))
-        clauses.append(f"cell_id IN ({placeholders})")
-        params.extend(cell_ids)
-    if threshold_run_id is not None:
-        clauses.append("threshold_run_id = ?")
-        params.append(threshold_run_id)
-    if clauses:
-        query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY id"
-    rows = conn.execute(query, params).fetchall()
-    return [dict(r) for r in rows]
-
-
-def select_particles_with_cell_info(
-    conn: sqlite3.Connection,
-    threshold_run_id: int | None = None,
-) -> list[dict]:
-    """Query particles enriched with cell context (FOV, condition, bio rep).
-
-    Args:
-        conn: Database connection.
-        threshold_run_id: Optional filter by threshold run.
-
-    Returns:
-        List of dicts with particle fields plus context columns.
-    """
-    query = (
-        "SELECT p.*, c.label_value AS cell_label_value, "
-        "f.display_name AS fov_name, cond.name AS condition_name, br.name AS bio_rep_name "
-        "FROM particles p "
-        "JOIN cells c ON p.cell_id = c.id "
-        "JOIN fovs f ON c.fov_id = f.id "
-        "JOIN conditions cond ON f.condition_id = cond.id "
-        "JOIN bio_reps br ON f.bio_rep_id = br.id"
-    )
-    params: list = []
-    if threshold_run_id is not None:
-        query += " WHERE p.threshold_run_id = ?"
-        params.append(threshold_run_id)
-    query += " ORDER BY p.cell_id, p.id"
-    rows = conn.execute(query, params).fetchall()
-    return [dict(r) for r in rows]
-
-
-def delete_particles_for_fov(conn: sqlite3.Connection, fov_id: int) -> int:
-    """Delete all particles for cells in a FOV.
-
-    Returns:
-        Number of particles deleted.
-    """
-    count = conn.execute(
-        "SELECT COUNT(*) FROM particles WHERE cell_id IN "
-        "(SELECT id FROM cells WHERE fov_id = ?)",
-        (fov_id,),
-    ).fetchone()[0]
-    if count == 0:
-        return 0
-    conn.execute(
-        "DELETE FROM particles WHERE cell_id IN "
-        "(SELECT id FROM cells WHERE fov_id = ?)",
-        (fov_id,),
-    )
-    conn.commit()
-    return count
-
-
-def delete_particles_for_threshold_run(
-    conn: sqlite3.Connection,
-    threshold_run_id: int,
-) -> int:
-    """Delete all particles for a specific threshold run.
-
-    Returns:
-        Number of particles deleted.
-    """
-    count = conn.execute(
-        "SELECT COUNT(*) FROM particles WHERE threshold_run_id = ?",
-        (threshold_run_id,),
-    ).fetchone()[0]
-    if count == 0:
-        return 0
-    conn.execute(
-        "DELETE FROM particles WHERE threshold_run_id = ?",
-        (threshold_run_id,),
-    )
-    conn.commit()
-    return count
-
-
-def delete_stale_particles_for_fov_channel(
-    conn: sqlite3.Connection,
-    fov_id: int,
-    channel_id: int,
-    keep_run_id: int,
-) -> int:
-    """Delete particles from previous threshold runs on a FOV+channel.
-
-    When a new threshold mask overwrites the old one, particles from
-    prior runs become stale (their mask no longer exists on disk).
-    This deletes those orphaned particles and their summary measurements.
-
-    Args:
-        conn: Database connection.
-        fov_id: FOV whose particles to clean up.
-        channel_id: Threshold channel ID.
-        keep_run_id: The current threshold run ID to keep (not delete).
-
-    Returns:
-        Number of particles deleted.
-    """
-    batch_size = 900  # Stay well under SQLite's 999 limit
-
-    # Find old threshold run IDs for this channel (excluding the current one)
-    old_runs = conn.execute(
-        "SELECT id FROM threshold_runs WHERE channel_id = ? AND id != ?",
-        (channel_id, keep_run_id),
-    ).fetchall()
-    if not old_runs:
-        return 0
-    old_run_ids = [r[0] for r in old_runs]
-
-    # Find cell IDs in this FOV
-    cell_rows = conn.execute(
-        "SELECT id FROM cells WHERE fov_id = ?", (fov_id,),
-    ).fetchall()
-    if not cell_rows:
-        return 0
-    cell_ids = [r[0] for r in cell_rows]
-
-    # Delete particles matching both: cell in this FOV AND old threshold run
-    total_deleted = 0
-    for batch_start in range(0, len(cell_ids), batch_size):
-        batch = cell_ids[batch_start:batch_start + batch_size]
-        cell_ph = ",".join("?" * len(batch))
-        run_ph = ",".join("?" * len(old_run_ids))
-        count = conn.execute(
-            f"SELECT COUNT(*) FROM particles "
-            f"WHERE cell_id IN ({cell_ph}) AND threshold_run_id IN ({run_ph})",
-            batch + old_run_ids,
-        ).fetchone()[0]
-        if count > 0:
-            conn.execute(
-                f"DELETE FROM particles "
-                f"WHERE cell_id IN ({cell_ph}) AND threshold_run_id IN ({run_ph})",
-                batch + old_run_ids,
-            )
-            total_deleted += count
-
-    # Delete particle summary measurements for these cells on this channel
-    from percell3.core.constants import PARTICLE_SUMMARY_METRICS
-    metric_ph = ",".join("?" * len(PARTICLE_SUMMARY_METRICS))
-    for batch_start in range(0, len(cell_ids), batch_size):
-        batch = cell_ids[batch_start:batch_start + batch_size]
-        cell_ph = ",".join("?" * len(batch))
-        conn.execute(
-            f"DELETE FROM measurements "
-            f"WHERE cell_id IN ({cell_ph}) AND channel_id = ? "
-            f"AND metric IN ({metric_ph})",
-            batch + [channel_id] + list(PARTICLE_SUMMARY_METRICS),
-        )
-
-    if total_deleted > 0:
-        conn.commit()
-    return total_deleted
-
-
-def select_experiment_summary(conn: sqlite3.Connection) -> list[dict]:
-    """Per-FOV summary: cells, measurements, thresholds, particles.
-
-    Returns one row per FOV with aggregated status information including
-    cell counts, which channels have been measured (whole_cell vs mask scopes),
-    which channels have particle analysis, and total particle counts.
-    """
-    query = """
-        SELECT
-            f.id AS fov_id,
-            f.display_name AS fov_name,
-            cond.name AS condition_name,
-            b.name AS bio_rep_name,
-            f.width, f.height,
-            COALESCE(cell_agg.cell_count, 0) AS cells,
-            COALESCE(cell_agg.model_name, '') AS seg_model,
-            COALESCE(meas_agg.wc_channels, '') AS measured_channels,
-            COALESCE(meas_agg.mi_channels, '') AS masked_channels,
-            COALESCE(meas_agg.particle_channels, '') AS particle_channels,
-            COALESCE(part_agg.particle_count, 0) AS particles
-        FROM fovs f
-        JOIN conditions cond ON f.condition_id = cond.id
-        JOIN bio_reps b ON f.bio_rep_id = b.id
-        LEFT JOIN (
-            SELECT c.fov_id,
-                   COUNT(*) AS cell_count,
-                   sr.model_name
-            FROM cells c
-            JOIN segmentation_runs sr ON c.segmentation_id = sr.id
-            WHERE c.is_valid = 1
-            GROUP BY c.fov_id
-        ) cell_agg ON cell_agg.fov_id = f.id
-        LEFT JOIN (
-            SELECT c.fov_id,
-                GROUP_CONCAT(DISTINCT CASE WHEN m.scope='whole_cell'
-                    AND m.metric NOT LIKE 'particle_%'
-                    AND m.metric NOT LIKE '%_particle_%'
-                    THEN ch.name END) AS wc_channels,
-                GROUP_CONCAT(DISTINCT CASE WHEN m.scope='mask_inside'
-                    THEN ch.name END) AS mi_channels,
-                GROUP_CONCAT(DISTINCT CASE WHEN m.metric='particle_count'
-                    THEN ch.name END) AS particle_channels
-            FROM measurements m
-            JOIN cells c ON m.cell_id = c.id
-            JOIN channels ch ON m.channel_id = ch.id
-            GROUP BY c.fov_id
-        ) meas_agg ON meas_agg.fov_id = f.id
-        LEFT JOIN (
-            SELECT c.fov_id, COUNT(p.id) AS particle_count
-            FROM particles p
-            JOIN cells c ON p.cell_id = c.id
-            GROUP BY c.fov_id
-        ) part_agg ON part_agg.fov_id = f.id
-        ORDER BY cond.name, b.name, f.display_name
-    """
-    rows = conn.execute(query).fetchall()
-    return [dict(r) for r in rows]
-
-
-# ---------------------------------------------------------------------------
 # FOV Status Cache
 # ---------------------------------------------------------------------------
 
@@ -1457,36 +1332,42 @@ def upsert_fov_status_cache_batch(
     conn: sqlite3.Connection,
     fov_ids: list[int],
 ) -> None:
-    """Rebuild the JSON status cache for multiple FOVs using SQLite CTEs."""
+    """Rebuild the JSON status cache for multiple FOVs.
+
+    Uses fov_config to determine which segmentations and thresholds are
+    assigned to each FOV.
+    """
     if not fov_ids:
         return
     ph = ",".join("?" * len(fov_ids))
     conn.execute(
         f"""
         WITH seg_data AS (
-            SELECT fov_id,
+            SELECT fc.fov_id,
                    json_group_array(json_object(
-                       'id', id, 'name', name, 'cell_count', cell_count
-                   )) AS seg_runs
-            FROM segmentation_runs WHERE fov_id IN ({ph})
-            GROUP BY fov_id
+                       'id', s.id, 'name', s.name, 'cell_count', s.cell_count
+                   )) AS segs
+            FROM fov_config fc
+            JOIN segmentations s ON fc.segmentation_id = s.id
+            WHERE fc.fov_id IN ({ph})
+            GROUP BY fc.fov_id
         ),
         thresh_data AS (
-            SELECT tr.fov_id,
+            SELECT fc.fov_id,
                    json_group_array(json_object(
-                       'id', tr.id, 'name', tr.name,
-                       'channel', ch.name
-                   )) AS thresh_runs
-            FROM threshold_runs tr
-            JOIN channels ch ON tr.channel_id = ch.id
-            WHERE tr.fov_id IN ({ph})
-            GROUP BY tr.fov_id
+                       'id', t.id, 'name', t.name,
+                       'source_channel', t.source_channel
+                   )) AS threshs
+            FROM fov_config fc
+            JOIN thresholds t ON fc.threshold_id = t.id
+            WHERE fc.fov_id IN ({ph}) AND fc.threshold_id IS NOT NULL
+            GROUP BY fc.fov_id
         )
         INSERT OR REPLACE INTO fov_status_cache (fov_id, status_json, updated_at)
         SELECT f.id,
                json_object(
-                   'segmentation_runs', json(COALESCE(sd.seg_runs, '[]')),
-                   'threshold_runs', json(COALESCE(td.thresh_runs, '[]'))
+                   'segmentations', json(COALESCE(sd.segs, '[]')),
+                   'thresholds', json(COALESCE(td.threshs, '[]'))
                ),
                datetime('now')
         FROM fovs f
@@ -1529,8 +1410,8 @@ def insert_fov_tag(conn: sqlite3.Connection, fov_id: int, tag_id: int) -> None:
 def delete_fov_row(conn: sqlite3.Connection, fov_id: int) -> None:
     """Delete a FOV row from the fovs table.
 
-    CASCADE handles segmentation_runs, threshold_runs, cells,
-    measurements, particles, config_entries, fov_status_cache, and fov_tags.
+    CASCADE handles cells, measurements, fov_config,
+    fov_status_cache, and fov_tags.
     """
     conn.execute("DELETE FROM fovs WHERE id = ?", (fov_id,))
     conn.commit()
@@ -1587,11 +1468,7 @@ def generate_display_name(
     bio_rep_name: str,
     base_name: str = "FOV",
 ) -> str:
-    """Generate a unique display name like 'HS_N1_FOV_001'.
-
-    Auto-appends _2, _3, etc. on collision.
-    """
-    # Count existing FOVs with this condition+bio_rep prefix to determine number
+    """Generate a unique display name like 'HS_N1_FOV_001'."""
     prefix = f"{condition_name}_{bio_rep_name}_{base_name}_"
     count = conn.execute(
         "SELECT COUNT(*) FROM fovs WHERE display_name LIKE ?",
@@ -1599,7 +1476,6 @@ def generate_display_name(
     ).fetchone()[0]
     candidate = f"{prefix}{count + 1:03d}"
 
-    # Handle collisions
     for attempt in range(2, 101):
         existing = conn.execute(
             "SELECT id FROM fovs WHERE display_name = ?", (candidate,)
@@ -1618,18 +1494,11 @@ def select_group_tags_for_cells(
     """Return (cell_id, tag_name) pairs for group tags.
 
     Batches the query to stay within SQLite's bind parameter limit.
-
-    Args:
-        conn: Database connection.
-        cell_ids: Cell IDs to look up.
-
-    Returns:
-        List of (cell_id, tag_name) tuples where tag_name matches 'group:%'.
     """
     if not cell_ids:
         return []
 
-    _BATCH_SIZE = 900  # Stay well under SQLite's 999 limit
+    _BATCH_SIZE = 900
     all_rows: list[tuple[int, str]] = []
 
     for i in range(0, len(cell_ids), _BATCH_SIZE):
@@ -1656,16 +1525,7 @@ def delete_tags_by_prefix(
     prefix: str,
     cell_ids: list[int] | None = None,
 ) -> int:
-    """Delete cell_tags and tags matching a name prefix.
-
-    If cell_ids is provided, only remove cell_tags for those cells
-    (tags themselves are kept if other cells reference them).
-    If cell_ids is None, removes tags entirely.
-
-    Returns:
-        Number of cell_tag rows deleted.
-    """
-    # Find matching tag IDs
+    """Delete cell_tags and tags matching a name prefix."""
     rows = conn.execute(
         "SELECT id FROM tags WHERE name LIKE ?", (prefix + "%",)
     ).fetchall()
@@ -1694,8 +1554,65 @@ def delete_tags_by_prefix(
         conn.execute(
             f"DELETE FROM cell_tags WHERE tag_id IN ({ph})", tag_ids
         )
-        # Also delete the tags themselves if removing globally
         conn.execute(f"DELETE FROM tags WHERE id IN ({ph})", tag_ids)
 
     conn.commit()
     return count
+
+
+# ---------------------------------------------------------------------------
+# Experiment Summary
+# ---------------------------------------------------------------------------
+
+
+def select_experiment_summary(conn: sqlite3.Connection) -> list[dict]:
+    """Per-FOV summary: cells, measurements, thresholds, particles."""
+    query = """
+        SELECT
+            f.id AS fov_id,
+            f.display_name AS fov_name,
+            cond.name AS condition_name,
+            b.name AS bio_rep_name,
+            f.width, f.height,
+            COALESCE(cell_agg.cell_count, 0) AS cells,
+            COALESCE(cell_agg.model_name, '') AS seg_model,
+            COALESCE(meas_agg.wc_channels, '') AS measured_channels,
+            COALESCE(meas_agg.mi_channels, '') AS masked_channels,
+            COALESCE(meas_agg.particle_channels, '') AS particle_channels,
+            COALESCE(part_agg.particle_count, 0) AS particles
+        FROM fovs f
+        JOIN conditions cond ON f.condition_id = cond.id
+        JOIN bio_reps b ON f.bio_rep_id = b.id
+        LEFT JOIN (
+            SELECT c.fov_id,
+                   COUNT(*) AS cell_count,
+                   s.model_name
+            FROM cells c
+            JOIN segmentations s ON c.segmentation_id = s.id
+            WHERE c.is_valid = 1
+            GROUP BY c.fov_id
+        ) cell_agg ON cell_agg.fov_id = f.id
+        LEFT JOIN (
+            SELECT c.fov_id,
+                GROUP_CONCAT(DISTINCT CASE WHEN m.scope='whole_cell'
+                    AND m.metric NOT LIKE 'particle_%'
+                    AND m.metric NOT LIKE '%_particle_%'
+                    THEN ch.name END) AS wc_channels,
+                GROUP_CONCAT(DISTINCT CASE WHEN m.scope='mask_inside'
+                    THEN ch.name END) AS mi_channels,
+                GROUP_CONCAT(DISTINCT CASE WHEN m.metric='particle_count'
+                    THEN ch.name END) AS particle_channels
+            FROM measurements m
+            JOIN cells c ON m.cell_id = c.id
+            JOIN channels ch ON m.channel_id = ch.id
+            GROUP BY c.fov_id
+        ) meas_agg ON meas_agg.fov_id = f.id
+        LEFT JOIN (
+            SELECT p.fov_id, COUNT(p.id) AS particle_count
+            FROM particles p
+            GROUP BY p.fov_id
+        ) part_agg ON part_agg.fov_id = f.id
+        ORDER BY cond.name, b.name, f.display_name
+    """
+    rows = conn.execute(query).fetchall()
+    return [dict(r) for r in rows]

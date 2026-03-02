@@ -19,7 +19,10 @@ def store_with_groups(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP")
     store.add_condition("ctrl")
     fov_id = store.add_fov("ctrl", width=128, height=128)
-    seg_id = store.add_segmentation_run(fov_id, "GFP", "cyto3")
+    seg_id = store.add_segmentation(
+        "seg_test", "cellular", 128, 128,
+        source_fov_id=fov_id, source_channel="GFP", model_name="cyto3",
+    )
 
     # Create 4 cells
     cells = [
@@ -38,7 +41,7 @@ def store_with_groups(tmp_path: Path) -> ExperimentStore:
     measurements = [
         MeasurementRecord(
             cell_id=cid, channel_id=ch.id, metric="mean_intensity",
-            value=100.0 + cid * 10,
+            value=100.0 + cid * 10, segmentation_id=seg_id,
         )
         for cid in cell_ids
     ]
@@ -63,7 +66,10 @@ def store_no_groups(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP")
     store.add_condition("ctrl")
     fov_id = store.add_fov("ctrl", width=128, height=128)
-    seg_id = store.add_segmentation_run(fov_id, "GFP", "cyto3")
+    seg_id = store.add_segmentation(
+        "seg_test", "cellular", 128, 128,
+        source_fov_id=fov_id, source_channel="GFP", model_name="cyto3",
+    )
 
     cells = [
         CellRecord(
@@ -80,7 +86,7 @@ def store_no_groups(tmp_path: Path) -> ExperimentStore:
     measurements = [
         MeasurementRecord(
             cell_id=cid, channel_id=ch.id, metric="mean_intensity",
-            value=100.0,
+            value=100.0, segmentation_id=seg_id,
         )
         for cid in cell_ids
     ]

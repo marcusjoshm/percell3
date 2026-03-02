@@ -39,52 +39,23 @@ from percell3.core.exceptions import (
     DuplicateError,
     ExperimentError,
     ExperimentNotFoundError,
-    MeasurementConfigNotFoundError,
     RunNameError,
-    SegmentationRunNotFoundError,
-    ThresholdRunNotFoundError,
+    SegmentationNotFoundError,
+    ThresholdNotFoundError,
 )
 from percell3.core.models import (
+    AnalysisConfig,
     CellRecord,
     ChannelConfig,
     DeleteImpact,
+    FovConfigEntry,
     FovInfo,
-    MeasurementConfigEntry,
-    MeasurementConfigInfo,
     MeasurementRecord,
     ParticleRecord,
-    SegmentationRunInfo,
-    ThresholdRunInfo,
+    SegmentationInfo,
+    ThresholdInfo,
 )
 from percell3.core.schema import create_schema, open_database
-
-
-def _rename_mask_groups(
-    masks_path: Path,
-    old_channel: str,
-    new_channel: str,
-) -> None:
-    """Rename channel-level groups in the masks store.
-
-    With run-scoped paths, the layout is:
-        fov_<id>/<channel>/run_<id>/mask/
-        fov_<id>/<channel>/run_<id>/particles/
-
-    Renaming a channel means renaming the <channel> group under each fov.
-    """
-    import shutil
-
-    if not masks_path.exists():
-        return
-
-    # Walk FOV directories and rename channel groups
-    for fov_dir in masks_path.iterdir():
-        if not fov_dir.is_dir() or not fov_dir.name.startswith("fov_"):
-            continue
-        old_ch_dir = fov_dir / old_channel
-        new_ch_dir = fov_dir / new_channel
-        if old_ch_dir.exists():
-            old_ch_dir.rename(new_ch_dir)
 
 
 class ExperimentStore:
@@ -324,6 +295,35 @@ class ExperimentStore:
         """Get a single FOV by ID."""
         return queries.select_fov_by_id(self._conn, fov_id)
 
+    def delete_fov(self, fov_id: int) -> None:
+        """Delete a FOV and all its FOV-specific data.
+
+        SQLite CASCADE handles: cells, measurements, particles,
+        fov_config entries, fov_status_cache, fov_tags.
+
+        Segmentations and thresholds are global entities and are NOT deleted.
+        Only the FOV's image zarr group is cleaned up.
+
+        Args:
+            fov_id: Database ID of the FOV to delete.
+
+        Raises:
+            ExperimentError: If the FOV does not exist.
+        """
+        import shutil
+
+        # Validate FOV exists
+        self.get_fov_by_id(fov_id)  # raises ExperimentError if not found
+
+        # 1. SQLite CASCADE delete (removes all dependent rows)
+        queries.delete_fov_row(self._conn, fov_id)
+
+        # 2. Remove image zarr group only (labels/masks are global, keyed by seg/thresh ID)
+        fov_group = zarr_io.fov_group_path(fov_id)
+        group_dir = self.images_zarr_path / fov_group
+        if group_dir.exists():
+            shutil.rmtree(group_dir)
+
     # --- Rename operations ---
 
     def rename_experiment(self, new_name: str) -> None:
@@ -340,7 +340,6 @@ class ExperimentStore:
         _validate_name(new_name, "channel name")
         queries.rename_channel(self._conn, old_name, new_name)
         zarr_io.rename_channel_in_ngff(self.images_zarr_path, old_name, new_name)
-        _rename_mask_groups(self.masks_zarr_path, old_name, new_name)
 
     def rename_bio_rep(self, old_name: str, new_name: str) -> None:
         """Rename a biological replicate. DB-only."""
@@ -351,6 +350,16 @@ class ExperimentStore:
         """Rename a FOV by ID. DB-only — zarr paths use fov_id."""
         _validate_name(new_display_name, "fov display_name")
         queries.rename_fov(self._conn, fov_id, new_display_name)
+
+    def rename_segmentation(self, segmentation_id: int, new_name: str) -> None:
+        """Rename a segmentation entity."""
+        _validate_name(new_name, "segmentation name")
+        queries.rename_segmentation(self._conn, segmentation_id, new_name)
+
+    def rename_threshold(self, threshold_id: int, new_name: str) -> None:
+        """Rename a threshold entity."""
+        _validate_name(new_name, "threshold name")
+        queries.rename_threshold(self._conn, threshold_id, new_name)
 
     # --- Image I/O ---
 
@@ -387,21 +396,19 @@ class ExperimentStore:
             self.images_zarr_path, gp, ch.display_order
         )
 
-    # --- Label Images ---
+    # --- Label Images (keyed by segmentation_id) ---
 
-    def write_labels(self, fov_id: int, labels: np.ndarray, segmentation_run_id: int) -> None:
-        fov_info = self.get_fov_by_id(fov_id)
-        gp = zarr_io.label_group_path(fov_id, segmentation_run_id)
-        img_gp = zarr_io.image_group_path(fov_id)
-        source_path = f"../../images.zarr/{img_gp}"
-        zarr_io.write_labels(
-            self.labels_zarr_path, gp, labels,
-            source_image_path=source_path,
-            pixel_size_um=fov_info.pixel_size_um,
-        )
+    def write_labels(self, labels: np.ndarray, segmentation_id: int) -> None:
+        """Write a label image to labels.zarr.
 
-    def read_labels(self, fov_id: int, segmentation_run_id: int) -> np.ndarray:
-        gp = zarr_io.label_group_path(fov_id, segmentation_run_id)
+        Labels are stored at ``labels.zarr/seg_{segmentation_id}/0``.
+        """
+        gp = zarr_io.label_group_path(segmentation_id)
+        zarr_io.write_labels(self.labels_zarr_path, gp, labels)
+
+    def read_labels(self, segmentation_id: int) -> np.ndarray:
+        """Read a label image from labels.zarr."""
+        gp = zarr_io.label_group_path(segmentation_id)
         return zarr_io.read_labels(self.labels_zarr_path, gp)
 
     # --- Cell Records ---
@@ -470,35 +477,6 @@ class ExperimentStore:
         count = queries.delete_cells_for_fov(self._conn, fov_id)
         self.update_fov_status_cache(fov_id)
         return count
-
-    def delete_fov(self, fov_id: int) -> None:
-        """Delete a FOV and all its data.
-
-        SQLite CASCADE handles: segmentation_runs, threshold_runs, cells,
-        measurements, particles, config_entries, fov_status_cache, fov_tags.
-
-        Zarr groups are cleaned up manually after the SQLite delete.
-
-        Args:
-            fov_id: Database ID of the FOV to delete.
-
-        Raises:
-            ExperimentError: If the FOV does not exist.
-        """
-        import shutil
-
-        # Validate FOV exists
-        self.get_fov_by_id(fov_id)  # raises ExperimentError if not found
-
-        # 1. SQLite CASCADE delete (removes all dependent rows)
-        queries.delete_fov_row(self._conn, fov_id)
-
-        # 2. Remove zarr groups (best-effort cleanup after SQLite commit)
-        fov_group = zarr_io.fov_group_path(fov_id)
-        for zarr_root in (self.images_zarr_path, self.labels_zarr_path, self.masks_zarr_path):
-            group_dir = zarr_root / fov_group
-            if group_dir.exists():
-                shutil.rmtree(group_dir)
 
     def get_fov_segmentation_summary(self) -> dict[int, tuple[int, str | None]]:
         """Return segmentation status for all FOVs.
@@ -606,454 +584,340 @@ class ExperimentStore:
 
         return pivot
 
-    # --- Masks ---
+    # --- Masks (keyed by threshold_id) ---
 
-    def write_mask(self, fov_id: int, channel: str, mask: np.ndarray, threshold_run_id: int) -> None:
-        fov_info = self.get_fov_by_id(fov_id)
-        gp = zarr_io.mask_group_path(fov_id, channel, threshold_run_id)
-        zarr_io.write_mask(
-            self.masks_zarr_path, gp, mask,
-            pixel_size_um=fov_info.pixel_size_um,
-        )
+    def write_mask(self, mask: np.ndarray, threshold_id: int) -> None:
+        """Write a binary mask to masks.zarr.
 
-    def read_mask(self, fov_id: int, channel: str, threshold_run_id: int) -> np.ndarray:
-        gp = zarr_io.mask_group_path(fov_id, channel, threshold_run_id)
+        Masks are stored at ``masks.zarr/thresh_{threshold_id}/mask/0``.
+        """
+        gp = zarr_io.mask_group_path(threshold_id)
+        zarr_io.write_mask(self.masks_zarr_path, gp, mask)
+
+    def read_mask(self, threshold_id: int) -> np.ndarray:
+        """Read a binary mask from masks.zarr."""
+        gp = zarr_io.mask_group_path(threshold_id)
         return zarr_io.read_mask(self.masks_zarr_path, gp)
 
-    # --- Segmentation Runs ---
+    # --- Segmentations (global entities) ---
 
-    def add_segmentation_run(
+    def add_segmentation(
         self,
-        fov_id: int,
-        channel: str,
-        model_name: str,
+        name: str,
+        seg_type: str,
+        width: int,
+        height: int,
+        source_fov_id: int | None = None,
+        source_channel: str | None = None,
+        model_name: str = "",
         parameters: dict[str, object] | None = None,
-        name: str | None = None,
     ) -> int:
-        """Create a named segmentation run for a FOV.
+        """Create a global segmentation entity.
 
         Args:
-            fov_id: FOV to attach the run to.
-            channel: Channel name used for segmentation.
+            name: Unique segmentation name.
+            seg_type: 'whole_field' or 'cellular'.
+            width: Image width in pixels.
+            height: Image height in pixels.
+            source_fov_id: FOV where segmentation was computed (provenance).
+            source_channel: Channel used for segmentation (provenance).
             model_name: Model name (e.g. "cyto3").
             parameters: Optional dict of segmentation parameters.
-            name: Run name. Auto-generated from model_name if not provided.
 
         Returns:
-            The segmentation run ID.
+            The segmentation ID.
         """
-        ch = self.get_channel(channel)
-        if name is None:
-            name = self._generate_run_name(
-                model_name, fov_id, "segmentation_runs",
-            )
-        else:
-            _validate_name(name, "run name")
+        _validate_name(name, "segmentation name")
         try:
-            run_id = queries.insert_segmentation_run(
-                self._conn, fov_id, ch.id, name, model_name, parameters,
+            seg_id = queries.insert_segmentation(
+                self._conn, name, seg_type, width, height,
+                source_fov_id=source_fov_id, source_channel=source_channel,
+                model_name=model_name, parameters=parameters,
             )
+        except DuplicateError:
+            raise
         except sqlite3.IntegrityError:
-            raise RunNameError(name, f"a segmentation run named {name!r} already exists on this FOV")
-        self.update_fov_status_cache(fov_id)
-        return run_id
+            raise RunNameError(name, f"a segmentation named {name!r} already exists")
+        return seg_id
 
-    def list_segmentation_runs(self, fov_id: int) -> list[SegmentationRunInfo]:
-        """List all segmentation runs for a FOV."""
-        return queries.select_segmentation_runs_for_fov(self._conn, fov_id)
+    def get_segmentations(
+        self,
+        seg_type: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> list[SegmentationInfo]:
+        """Return all segmentations, optionally filtered."""
+        return queries.select_segmentations(
+            self._conn, seg_type=seg_type, width=width, height=height,
+        )
 
-    def get_segmentation_run(self, run_id: int) -> SegmentationRunInfo:
-        """Get a single segmentation run by ID."""
-        return queries.select_segmentation_run(self._conn, run_id)
+    def get_segmentation(self, segmentation_id: int) -> SegmentationInfo:
+        """Get a single segmentation by ID."""
+        return queries.select_segmentation(self._conn, segmentation_id)
 
-    def rename_segmentation_run(self, run_id: int, new_name: str) -> None:
-        """Rename a segmentation run."""
-        _validate_name(new_name, "run name")
-        try:
-            queries.rename_segmentation_run(self._conn, run_id, new_name)
-        except sqlite3.IntegrityError:
-            raise RunNameError(new_name, f"a segmentation run named {new_name!r} already exists on this FOV")
+    def update_segmentation_cell_count(
+        self, segmentation_id: int, cell_count: int,
+    ) -> None:
+        """Update the cell count for a segmentation."""
+        queries.update_segmentation_cell_count(
+            self._conn, segmentation_id, cell_count,
+        )
 
-    def get_segmentation_run_impact(self, run_id: int) -> DeleteImpact:
-        """Preview what would be deleted if this segmentation run were removed.
+    def get_segmentation_impact(self, segmentation_id: int) -> DeleteImpact:
+        """Preview what would be deleted if this segmentation were removed.
 
         Returns:
-            DeleteImpact with counts of cells, measurements, particles,
-            and config entries that would be cascade-deleted.
+            DeleteImpact with counts of cells, measurements, and
+            config entries that would be cascade-deleted.
         """
         cells = self._conn.execute(
-            "SELECT COUNT(*) FROM cells WHERE segmentation_id = ?", (run_id,),
+            "SELECT COUNT(*) FROM cells WHERE segmentation_id = ?",
+            (segmentation_id,),
         ).fetchone()[0]
 
-        cell_ids_rows = self._conn.execute(
-            "SELECT id FROM cells WHERE segmentation_id = ?", (run_id,),
-        ).fetchall()
-        cell_ids = [r[0] for r in cell_ids_rows]
-
-        measurements = 0
-        particles = 0
-        if cell_ids:
-            # Count in batches to avoid bind-param limit
-            for i in range(0, len(cell_ids), 500):
-                batch = cell_ids[i:i + 500]
-                placeholders = ",".join("?" * len(batch))
-                measurements += self._conn.execute(
-                    f"SELECT COUNT(*) FROM measurements WHERE cell_id IN ({placeholders})",
-                    batch,
-                ).fetchone()[0]
-                particles += self._conn.execute(
-                    f"SELECT COUNT(*) FROM particles WHERE cell_id IN ({placeholders})",
-                    batch,
-                ).fetchone()[0]
+        measurements = self._conn.execute(
+            "SELECT COUNT(*) FROM measurements WHERE segmentation_id = ?",
+            (segmentation_id,),
+        ).fetchone()[0]
 
         config_entries = self._conn.execute(
-            "SELECT COUNT(*) FROM measurement_config_entries WHERE segmentation_run_id = ?",
-            (run_id,),
+            "SELECT COUNT(*) FROM fov_config WHERE segmentation_id = ?",
+            (segmentation_id,),
         ).fetchone()[0]
+
+        fov_rows = self._conn.execute(
+            "SELECT DISTINCT f.display_name FROM fov_config fc "
+            "JOIN fovs f ON fc.fov_id = f.id "
+            "WHERE fc.segmentation_id = ?",
+            (segmentation_id,),
+        ).fetchall()
+        affected_fovs = [r[0] for r in fov_rows]
 
         return DeleteImpact(
             cells=cells,
             measurements=measurements,
-            particles=particles,
             config_entries=config_entries,
+            affected_fovs=affected_fovs,
         )
 
-    def get_threshold_run_impact(self, run_id: int) -> DeleteImpact:
-        """Preview what would be deleted if this threshold run were removed.
+    def delete_segmentation(self, segmentation_id: int) -> None:
+        """Delete a segmentation, its cells, measurements, config entries, and Zarr data."""
+        # Validate it exists
+        self.get_segmentation(segmentation_id)
+
+        # Determine affected FOVs for cache update
+        fov_rows = self._conn.execute(
+            "SELECT DISTINCT fov_id FROM fov_config WHERE segmentation_id = ?",
+            (segmentation_id,),
+        ).fetchall()
+        affected_fov_ids = [r[0] for r in fov_rows]
+
+        # CASCADE handles cells, measurements, fov_config entries in SQLite
+        queries.delete_segmentation(self._conn, segmentation_id)
+
+        # Clean up Zarr data
+        gp = zarr_io.label_group_path(segmentation_id)
+        zarr_io.delete_zarr_group(self.labels_zarr_path, gp)
+
+        # Refresh status cache for affected FOVs
+        if affected_fov_ids:
+            self.update_fov_status_cache_batch(affected_fov_ids)
+
+    # --- Thresholds (global entities) ---
+
+    def add_threshold(
+        self,
+        name: str,
+        method: str,
+        width: int,
+        height: int,
+        source_fov_id: int | None = None,
+        source_channel: str | None = None,
+        grouping_channel: str | None = None,
+        parameters: dict[str, object] | None = None,
+    ) -> int:
+        """Create a global threshold entity.
+
+        Args:
+            name: Unique threshold name.
+            method: Thresholding method name (e.g. "otsu").
+            width: Image width in pixels.
+            height: Image height in pixels.
+            source_fov_id: FOV where threshold was computed (provenance).
+            source_channel: Channel used for thresholding (provenance).
+            grouping_channel: Channel used for grouping (provenance).
+            parameters: Optional dict of threshold parameters.
+
+        Returns:
+            The threshold ID.
+        """
+        _validate_name(name, "threshold name")
+        try:
+            thr_id = queries.insert_threshold(
+                self._conn, name, method, width, height,
+                source_fov_id=source_fov_id, source_channel=source_channel,
+                grouping_channel=grouping_channel, parameters=parameters,
+            )
+        except DuplicateError:
+            raise
+        except sqlite3.IntegrityError:
+            raise RunNameError(name, f"a threshold named {name!r} already exists")
+        return thr_id
+
+    def get_thresholds(
+        self,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> list[ThresholdInfo]:
+        """Return all thresholds, optionally filtered by dimensions."""
+        return queries.select_thresholds(
+            self._conn, width=width, height=height,
+        )
+
+    def get_threshold(self, threshold_id: int) -> ThresholdInfo:
+        """Get a single threshold by ID."""
+        return queries.select_threshold(self._conn, threshold_id)
+
+    def update_threshold_value(self, threshold_id: int, threshold_value: float) -> None:
+        """Update the computed threshold value."""
+        queries.update_threshold_value(self._conn, threshold_id, threshold_value)
+
+    def get_threshold_impact(self, threshold_id: int) -> DeleteImpact:
+        """Preview what would be deleted if this threshold were removed.
 
         Returns:
             DeleteImpact with counts of measurements, particles, and
             config entries that would be cascade-deleted.
         """
         particles = self._conn.execute(
-            "SELECT COUNT(*) FROM particles WHERE threshold_run_id = ?", (run_id,),
+            "SELECT COUNT(*) FROM particles WHERE threshold_id = ?",
+            (threshold_id,),
         ).fetchone()[0]
 
         measurements = self._conn.execute(
-            "SELECT COUNT(*) FROM measurements WHERE threshold_run_id = ?", (run_id,),
+            "SELECT COUNT(*) FROM measurements WHERE threshold_id = ?",
+            (threshold_id,),
         ).fetchone()[0]
 
         config_entries = self._conn.execute(
-            "SELECT COUNT(*) FROM measurement_config_entries WHERE threshold_run_id = ?",
-            (run_id,),
+            "SELECT COUNT(*) FROM fov_config WHERE threshold_id = ?",
+            (threshold_id,),
         ).fetchone()[0]
+
+        fov_rows = self._conn.execute(
+            "SELECT DISTINCT f.display_name FROM fov_config fc "
+            "JOIN fovs f ON fc.fov_id = f.id "
+            "WHERE fc.threshold_id = ?",
+            (threshold_id,),
+        ).fetchall()
+        affected_fovs = [r[0] for r in fov_rows]
 
         return DeleteImpact(
             measurements=measurements,
             particles=particles,
             config_entries=config_entries,
+            affected_fovs=affected_fovs,
         )
 
-    def delete_segmentation_run(self, run_id: int) -> None:
-        """Delete a segmentation run, its cells, measurements, particles, and Zarr data."""
-        run = self.get_segmentation_run(run_id)
-        fov_id = run.fov_id
+    def delete_threshold(self, threshold_id: int) -> None:
+        """Delete a threshold, its particles, measurements, config entries, and Zarr data."""
+        # Validate it exists
+        self.get_threshold(threshold_id)
 
-        # CASCADE handles cells, measurements, particles, config entries in SQLite
-        queries.delete_segmentation_run(self._conn, run_id)
+        # Determine affected FOVs for cache update
+        fov_rows = self._conn.execute(
+            "SELECT DISTINCT fov_id FROM fov_config WHERE threshold_id = ?",
+            (threshold_id,),
+        ).fetchall()
+        affected_fov_ids = [r[0] for r in fov_rows]
 
-        # Clean up Zarr data
-        gp = zarr_io.label_group_path(fov_id, run_id)
-        group_dir = self.labels_zarr_path / gp
-        if not group_dir.exists():
-            logger.warning(
-                "Zarr label group missing during cleanup: %s/%s",
-                self.labels_zarr_path, gp,
-            )
-        zarr_io.delete_zarr_group(self.labels_zarr_path, gp)
+        # CASCADE handles particles, measurements, fov_config entries in SQLite
+        queries.delete_threshold(self._conn, threshold_id)
 
-        self.update_fov_status_cache(fov_id)
+        # Clean up Zarr data (thresh_{id}/ contains both mask/ and particles/)
+        thresh_group = f"thresh_{threshold_id}"
+        zarr_io.delete_zarr_group(self.masks_zarr_path, thresh_group)
 
-    def update_segmentation_run_cell_count(
-        self, run_id: int, cell_count: int
-    ) -> None:
-        """Update the cell count for a segmentation run."""
-        queries.update_segmentation_run_cell_count(self._conn, run_id, cell_count)
+        # Refresh status cache for affected FOVs
+        if affected_fov_ids:
+            self.update_fov_status_cache_batch(affected_fov_ids)
 
-    def copy_segmentation_to_fov(
-        self,
-        source_run_id: int,
-        target_fov_id: int,
-        name: str | None = None,
-    ) -> tuple[int, int]:
-        """Copy segmentation labels from a source run to a target FOV.
+    # --- Analysis Config + FOV Config ---
 
-        Reads the source label image, creates a new segmentation run on the
-        target FOV, writes the labels, and extracts cells via regionprops.
+    def get_or_create_analysis_config(self) -> AnalysisConfig:
+        """Get the experiment's analysis config, creating one if needed."""
+        return queries.get_or_create_analysis_config(self._conn)
 
-        Args:
-            source_run_id: Source segmentation run ID.
-            target_fov_id: Target FOV database ID.
-            name: Optional run name. Auto-generated if not provided.
+    def get_fov_config(self, fov_id: int) -> list[FovConfigEntry]:
+        """Return all config entries for a FOV."""
+        config = self.get_or_create_analysis_config()
+        return queries.select_fov_config(self._conn, config.id, fov_id=fov_id)
 
-        Returns:
-            Tuple of (new_run_id, cell_count).
-
-        Raises:
-            KeyError: If the source run has no labels in zarr.
-            ValueError: If label dimensions don't match target FOV.
-        """
-        from percell3.segment.label_processor import extract_cells
-
-        source_run = self.get_segmentation_run(source_run_id)
-        source_labels = self.read_labels(source_run.fov_id, source_run_id)
-
-        target_info = self.get_fov_by_id(target_fov_id)
-        expected_shape = (target_info.height, target_info.width)
-        if source_labels.shape != expected_shape:
-            raise ValueError(
-                f"Dimension mismatch: source labels are {source_labels.shape} "
-                f"but target FOV is {expected_shape}"
-            )
-
-        run_name = name or f"copy_from_fov{source_run.fov_id}"
-        parameters = {
-            "method": "label_copy",
-            "source_fov_id": source_run.fov_id,
-            "source_run_id": source_run_id,
-        }
-        new_run_id = self.add_segmentation_run(
-            fov_id=target_fov_id,
-            channel=source_run.channel,
-            model_name="label_copy",
-            parameters=parameters,
-            name=run_name,
-        )
-
-        self.write_labels(target_fov_id, source_labels, new_run_id)
-
-        cells = extract_cells(
-            source_labels, target_fov_id, new_run_id,
-            target_info.pixel_size_um,
-        )
-        if cells:
-            self.add_cells(cells)
-        self.update_segmentation_run_cell_count(new_run_id, len(cells))
-
-        return new_run_id, len(cells)
-
-    # --- Threshold Runs ---
-
-    def add_threshold_run(
+    def set_fov_config_entry(
         self,
         fov_id: int,
-        channel: str,
-        method: str,
-        parameters: dict[str, object] | None = None,
-        name: str | None = None,
+        segmentation_id: int,
+        threshold_id: int | None = None,
+        scopes: list[str] | None = None,
     ) -> int:
-        """Create a named threshold run for a FOV.
+        """Add a config entry linking a FOV to a segmentation (and optional threshold).
+
+        Validates that the segmentation dimensions match the FOV dimensions.
 
         Args:
-            fov_id: FOV to attach the run to.
-            channel: Channel name used for thresholding.
-            method: Thresholding method name (e.g. "otsu").
-            parameters: Optional dict of threshold parameters.
-            name: Run name. Auto-generated from method if not provided.
+            fov_id: FOV to configure.
+            segmentation_id: Segmentation to assign.
+            threshold_id: Optional threshold to assign.
+            scopes: Measurement scopes (default: ["whole_cell"]).
 
         Returns:
-            The threshold run ID.
-        """
-        ch = self.get_channel(channel)
-        if name is None:
-            name = self._generate_run_name(
-                method, fov_id, "threshold_runs", channel_id=ch.id,
-            )
-        else:
-            _validate_name(name, "run name")
-        try:
-            run_id = queries.insert_threshold_run(
-                self._conn, fov_id, ch.id, name, method, parameters,
-            )
-        except sqlite3.IntegrityError:
-            raise RunNameError(name, f"a threshold run named {name!r} already exists on this FOV+channel")
-        self.update_fov_status_cache(fov_id)
-        return run_id
-
-    def list_threshold_runs(
-        self, fov_id: int, channel: str | None = None,
-    ) -> list[ThresholdRunInfo]:
-        """List threshold runs for a FOV, optionally filtered by channel."""
-        return queries.select_threshold_runs_for_fov(
-            self._conn, fov_id, channel_name=channel,
-        )
-
-    def get_threshold_run(self, run_id: int) -> ThresholdRunInfo:
-        """Get a single threshold run by ID."""
-        return queries.select_threshold_run(self._conn, run_id)
-
-    def rename_threshold_run(self, run_id: int, new_name: str) -> None:
-        """Rename a threshold run."""
-        _validate_name(new_name, "run name")
-        try:
-            queries.rename_threshold_run(self._conn, run_id, new_name)
-        except sqlite3.IntegrityError:
-            raise RunNameError(new_name, f"a threshold run named {new_name!r} already exists on this FOV+channel")
-
-    def delete_threshold_run(self, run_id: int) -> None:
-        """Delete a threshold run, its particles, measurements, and Zarr data."""
-        run = self.get_threshold_run(run_id)
-        fov_id = run.fov_id
-
-        # CASCADE handles particles, measurements, config entries in SQLite
-        queries.delete_threshold_run(self._conn, run_id)
-
-        # Clean up Zarr data (mask + particle labels)
-        mask_gp = zarr_io.mask_group_path(fov_id, run.channel, run_id)
-        mask_dir = self.masks_zarr_path / mask_gp
-        if not mask_dir.exists():
-            logger.warning(
-                "Zarr mask group missing during cleanup: %s/%s",
-                self.masks_zarr_path, mask_gp,
-            )
-        zarr_io.delete_zarr_group(self.masks_zarr_path, mask_gp)
-
-        particle_gp = zarr_io.particle_label_group_path(fov_id, run.channel, run_id)
-        zarr_io.delete_zarr_group(self.masks_zarr_path, particle_gp)
-
-        self.update_fov_status_cache(fov_id)
-
-    def update_threshold_run_value(self, run_id: int, threshold_value: float) -> None:
-        """Update the computed threshold value for a run."""
-        queries.update_threshold_run_value(self._conn, run_id, threshold_value)
-
-    def combine_threshold_runs(
-        self,
-        run_ids: list[int],
-        operation: str,
-        name: str | None = None,
-    ) -> int:
-        """Combine multiple threshold masks into a new threshold run.
-
-        Creates a new mask from the pixel-level union or intersection of the
-        source masks. Particles are NOT extracted — deferred to measurement.
-
-        Args:
-            run_ids: List of threshold run IDs to combine (minimum 2).
-            operation: 'union' (OR) or 'intersect' (AND).
-            name: Optional run name. Auto-generated if not provided.
-
-        Returns:
-            New threshold run ID.
+            The config entry ID.
 
         Raises:
-            ValueError: If fewer than 2 runs, runs are on different FOVs or
-                channels, or operation is invalid.
+            ValueError: If segmentation/threshold dimensions don't match the FOV.
         """
-        import numpy as np
+        fov = self.get_fov_by_id(fov_id)
+        seg = self.get_segmentation(segmentation_id)
 
-        if operation not in ("union", "intersect"):
-            raise ValueError(f"operation must be 'union' or 'intersect', got {operation!r}")
-        if len(run_ids) < 2:
-            raise ValueError("Need at least 2 threshold runs to combine")
+        # Dimension validation
+        if fov.width is not None and fov.height is not None:
+            if seg.width != fov.width or seg.height != fov.height:
+                raise ValueError(
+                    f"Segmentation dimensions ({seg.width}x{seg.height}) "
+                    f"don't match FOV dimensions ({fov.width}x{fov.height})"
+                )
 
-        runs = [self.get_threshold_run(rid) for rid in run_ids]
+        if threshold_id is not None:
+            thr = self.get_threshold(threshold_id)
+            if fov.width is not None and fov.height is not None:
+                if thr.width != fov.width or thr.height != fov.height:
+                    raise ValueError(
+                        f"Threshold dimensions ({thr.width}x{thr.height}) "
+                        f"don't match FOV dimensions ({fov.width}x{fov.height})"
+                    )
 
-        # Validate same FOV and same channel
-        fov_ids = {r.fov_id for r in runs}
-        if len(fov_ids) > 1:
-            raise ValueError(
-                f"All runs must be on the same FOV, got FOV IDs: {fov_ids}"
-            )
-        channels = {r.channel for r in runs}
-        if len(channels) > 1:
-            raise ValueError(
-                f"All runs must be on the same channel, got: {channels}"
-            )
-
-        fov_id = runs[0].fov_id
-        channel = runs[0].channel
-
-        # Read and combine masks
-        masks = [self.read_mask(fov_id, channel, rid) for rid in run_ids]
-        if operation == "union":
-            combined = masks[0].copy()
-            for m in masks[1:]:
-                combined = np.maximum(combined, m)
-        else:  # intersect
-            combined = masks[0].copy()
-            for m in masks[1:]:
-                combined = np.minimum(combined, m)
-
-        # Generate name
-        if name is None:
-            run_names = [r.name for r in runs]
-            name = f"{operation}_{'_'.join(run_names)}"
-            # Truncate if too long for the name validator
-            if len(name) > 255:
-                name = name[:252] + "..."
-
-        parameters = {
-            "method": operation,
-            "source_run_ids": run_ids,
-        }
-        new_run_id = self.add_threshold_run(
-            fov_id=fov_id,
-            channel=channel,
-            method=operation,
-            parameters=parameters,
-            name=name,
+        config = self.get_or_create_analysis_config()
+        entry_id = queries.insert_fov_config_entry(
+            self._conn, config.id, fov_id, segmentation_id,
+            threshold_id=threshold_id, scopes=scopes,
         )
+        self.update_fov_status_cache(fov_id)
+        return entry_id
 
-        self.write_mask(fov_id, channel, combined, new_run_id)
-        return new_run_id
+    def get_config_matrix(self) -> list[FovConfigEntry]:
+        """Return the full config matrix for all FOVs."""
+        config = self.get_or_create_analysis_config()
+        return queries.select_fov_config(self._conn, config.id)
 
-    def copy_threshold_to_fov(
-        self,
-        source_run_id: int,
-        target_fov_id: int,
-        name: str | None = None,
-    ) -> int:
-        """Copy a threshold mask from a source run to a target FOV.
+    def delete_fov_config_entry(self, entry_id: int) -> None:
+        """Delete a single fov_config entry."""
+        queries.delete_fov_config_entry(self._conn, entry_id)
 
-        Reads the source mask, creates a new threshold run on the target FOV,
-        and writes the mask. Particles are NOT extracted — they are deferred
-        to the measurement step.
-
-        Args:
-            source_run_id: Source threshold run ID.
-            target_fov_id: Target FOV database ID.
-            name: Optional run name. Auto-generated if not provided.
-
-        Returns:
-            New threshold run ID.
-
-        Raises:
-            KeyError: If the source run has no mask in zarr.
-            ValueError: If mask dimensions don't match target FOV.
-        """
-        source_run = self.get_threshold_run(source_run_id)
-        source_mask = self.read_mask(
-            source_run.fov_id, source_run.channel, source_run_id,
-        )
-
-        target_info = self.get_fov_by_id(target_fov_id)
-        expected_shape = (target_info.height, target_info.width)
-        if source_mask.shape != expected_shape:
-            raise ValueError(
-                f"Dimension mismatch: source mask is {source_mask.shape} "
-                f"but target FOV is {expected_shape}"
-            )
-
-        run_name = name or f"copy_from_fov{source_run.fov_id}"
-        parameters = {
-            "method": "mask_copy",
-            "source_fov_id": source_run.fov_id,
-            "source_run_id": source_run_id,
-        }
-        new_run_id = self.add_threshold_run(
-            fov_id=target_fov_id,
-            channel=source_run.channel,
-            method="mask_copy",
-            parameters=parameters,
-            name=run_name,
-        )
-
-        self.write_mask(
-            target_fov_id, source_run.channel, source_mask, new_run_id,
-        )
-
-        return new_run_id
+    def delete_fov_config_for_fov(self, fov_id: int) -> None:
+        """Delete all config entries for a FOV."""
+        config = self.get_or_create_analysis_config()
+        queries.delete_fov_config_for_fov(self._conn, config.id, fov_id)
+        self.update_fov_status_cache(fov_id)
 
     # --- Analysis Runs ---
 
@@ -1078,23 +942,13 @@ class ExperimentStore:
         """Return all tag names."""
         return queries.select_tags(self._conn)
 
-    def get_segmentation_runs(self, fov_id: int | None = None) -> list[SegmentationRunInfo]:
-        """Return segmentation runs, optionally filtered by FOV."""
-        if fov_id is not None:
-            return queries.select_segmentation_runs_for_fov(self._conn, fov_id)
-        # All runs across all FOVs
-        rows = self._conn.execute(
-            "SELECT sr.id, sr.fov_id, ch.name AS channel, sr.name, sr.model_name, "
-            "sr.parameters, sr.cell_count, sr.created_at "
-            "FROM segmentation_runs sr "
-            "JOIN channels ch ON sr.channel_id = ch.id "
-            "ORDER BY sr.id",
-        ).fetchall()
-        return [queries._row_to_segmentation_run(r) for r in rows]
-
     def get_analysis_runs(self) -> list[dict]:
         """Return all analysis runs."""
         return queries.select_analysis_runs(self._conn)
+
+    def get_experiment_summary(self) -> list[dict]:
+        """Per-FOV summary of cells, measurements, thresholds, and particles."""
+        return queries.select_experiment_summary(self._conn)
 
     # --- Tags ---
 
@@ -1172,27 +1026,6 @@ class ExperimentStore:
 
         return result
 
-    def _resolve_config_cell_ids(
-        self, config_id: int | None,
-    ) -> list[int] | None:
-        """Resolve cell IDs from a measurement config, or None if no filter."""
-        if config_id is None:
-            return None
-        entries = self.get_measurement_config_entries(config_id)
-        if not entries:
-            return []
-        cells_df = self.get_cells(is_valid=False)
-        if cells_df.empty:
-            return []
-        all_ids: list[int] = []
-        for entry in entries:
-            mask = (
-                (cells_df["segmentation_id"] == entry.segmentation_run_id)
-                & (cells_df["fov_id"] == entry.fov_id)
-            )
-            all_ids.extend(cells_df.loc[mask, "id"].tolist())
-        return all_ids
-
     def _merge_group_tags(
         self,
         df: pd.DataFrame,
@@ -1221,37 +1054,29 @@ class ExperimentStore:
                 df[col] = df[col].fillna("")
         return df, group_cols
 
-    # --- Particles ---
+    # --- Particles (keyed by fov_id + threshold_id) ---
 
     def add_particles(self, particles: list[ParticleRecord]) -> None:
         """Bulk insert particle records."""
         queries.insert_particles(self._conn, particles)
         # Update status cache for affected FOVs
-        cell_ids = {p.cell_id for p in particles}
-        if cell_ids:
-            placeholders = ",".join("?" * len(cell_ids))
-            rows = self._conn.execute(
-                f"SELECT DISTINCT fov_id FROM cells WHERE id IN ({placeholders})",
-                list(cell_ids),
-            ).fetchall()
-            for r in rows:
-                self.update_fov_status_cache(r["fov_id"])
+        fov_ids = {p.fov_id for p in particles}
+        for fov_id in fov_ids:
+            self.update_fov_status_cache(fov_id)
 
     def get_particles(
         self,
-        cell_ids: list[int] | None = None,
-        threshold_run_id: int | None = None,
+        fov_id: int | None = None,
+        threshold_id: int | None = None,
     ) -> pd.DataFrame:
         """Query particles with optional filters."""
         rows = queries.select_particles(
-            self._conn,
-            cell_ids=cell_ids,
-            threshold_run_id=threshold_run_id,
+            self._conn, fov_id=fov_id, threshold_id=threshold_id,
         )
         return pd.DataFrame(rows)
 
     def delete_particles_for_fov(self, fov_id: int) -> int:
-        """Delete all particles for cells in a FOV.
+        """Delete all particles for a FOV.
 
         Returns:
             Number of particles deleted.
@@ -1260,28 +1085,28 @@ class ExperimentStore:
         self.update_fov_status_cache(fov_id)
         return count
 
-    def delete_particles_for_threshold_run(self, threshold_run_id: int) -> int:
-        """Delete all particles for a specific threshold run."""
-        return queries.delete_particles_for_threshold_run(
-            self._conn, threshold_run_id,
+    def delete_particles_for_threshold(self, threshold_id: int) -> int:
+        """Delete all particles for a specific threshold."""
+        return queries.delete_particles_for_threshold(
+            self._conn, threshold_id,
         )
 
-    def get_threshold_runs(self, fov_id: int | None = None) -> list[ThresholdRunInfo]:
-        """Return threshold runs, optionally filtered by FOV."""
-        if fov_id is not None:
-            return queries.select_threshold_runs_for_fov(self._conn, fov_id)
-        rows = self._conn.execute(
-            "SELECT tr.id, tr.fov_id, ch.name AS channel, tr.name, tr.method, "
-            "tr.parameters, tr.threshold_value, tr.created_at "
-            "FROM threshold_runs tr "
-            "JOIN channels ch ON tr.channel_id = ch.id "
-            "ORDER BY tr.id",
-        ).fetchall()
-        return [queries._row_to_threshold_run(r) for r in rows]
+    # --- Particle Label I/O (keyed by threshold_id) ---
 
-    def get_experiment_summary(self) -> list[dict]:
-        """Per-FOV summary of cells, measurements, thresholds, and particles."""
-        return queries.select_experiment_summary(self._conn)
+    def write_particle_labels(
+        self, labels: np.ndarray, threshold_id: int,
+    ) -> None:
+        """Write a particle label image to masks.zarr.
+
+        Labels are stored at ``masks.zarr/thresh_{threshold_id}/particles/0``.
+        """
+        gp = zarr_io.particle_label_group_path(threshold_id)
+        zarr_io.write_particle_labels(self.masks_zarr_path, gp, labels)
+
+    def read_particle_labels(self, threshold_id: int) -> np.ndarray:
+        """Read a particle label image from masks.zarr."""
+        gp = zarr_io.particle_label_group_path(threshold_id)
+        return zarr_io.read_particle_labels(self.masks_zarr_path, gp)
 
     # --- FOV Status Cache ---
 
@@ -1320,364 +1145,7 @@ class ExperimentStore:
         rows = queries.select_fov_tags(self._conn, fov_id)
         return [r["name"] for r in rows]
 
-    # --- Particle Label I/O ---
-
-    def write_particle_labels(
-        self, fov_id: int, channel: str, labels: np.ndarray, threshold_run_id: int,
-    ) -> None:
-        """Write a particle label image to masks.zarr."""
-        fov_info = self.get_fov_by_id(fov_id)
-        gp = zarr_io.particle_label_group_path(fov_id, channel, threshold_run_id)
-        zarr_io.write_particle_labels(
-            self.masks_zarr_path, gp, labels,
-            pixel_size_um=fov_info.pixel_size_um,
-        )
-
-    def read_particle_labels(
-        self, fov_id: int, channel: str, threshold_run_id: int,
-    ) -> np.ndarray:
-        """Read a particle label image from masks.zarr."""
-        gp = zarr_io.particle_label_group_path(fov_id, channel, threshold_run_id)
-        return zarr_io.read_particle_labels(self.masks_zarr_path, gp)
-
-    # --- Measurement Configs ---
-
-    def create_measurement_config(self, name: str) -> int:
-        """Create a measurement configuration and set it as active.
-
-        Args:
-            name: Config name (must be unique).
-
-        Returns:
-            The config ID.
-        """
-        _validate_name(name, "config name")
-        try:
-            config_id = queries.insert_measurement_config(self._conn, name)
-        except sqlite3.IntegrityError:
-            raise DuplicateError("measurement config", name)
-        # Auto-set as active (most recently created is active by default)
-        self.set_active_measurement_config(config_id)
-        return config_id
-
-    def add_measurement_config_entry(
-        self,
-        config_id: int,
-        fov_id: int,
-        segmentation_run_id: int,
-        threshold_run_id: int | None = None,
-    ) -> int:
-        """Add an entry to a measurement config.
-
-        Args:
-            config_id: Config to add the entry to.
-            fov_id: FOV for this entry.
-            segmentation_run_id: Segmentation run to use.
-            threshold_run_id: Optional threshold run to use.
-
-        Returns:
-            The entry ID.
-
-        Raises:
-            ValueError: If threshold_run_id belongs to a different FOV.
-        """
-        # Validate threshold run belongs to same FOV
-        if threshold_run_id is not None:
-            run = self.get_threshold_run(threshold_run_id)
-            if run.fov_id != fov_id:
-                raise ValueError(
-                    f"Threshold run {threshold_run_id} belongs to FOV {run.fov_id}, "
-                    f"not FOV {fov_id}"
-                )
-        return queries.insert_measurement_config_entry(
-            self._conn, config_id, fov_id, segmentation_run_id, threshold_run_id,
-        )
-
-    def get_measurement_config_entries(
-        self, config_id: int,
-    ) -> list[MeasurementConfigEntry]:
-        """Return all entries for a measurement config."""
-        return queries.select_measurement_config_entries(self._conn, config_id)
-
-    def list_measurement_configs(self) -> list[MeasurementConfigInfo]:
-        """Return all measurement configurations."""
-        return queries.select_measurement_configs(self._conn)
-
-    def get_measurement_config(self, config_id: int) -> MeasurementConfigInfo:
-        """Get a single measurement config by ID."""
-        return queries.select_measurement_config(self._conn, config_id)
-
-    def delete_measurement_config(self, config_id: int) -> None:
-        """Delete a measurement config and its entries."""
-        # Clear active config if this was the active one
-        active_id = self.get_active_measurement_config_id()
-        queries.delete_measurement_config(self._conn, config_id)
-        if active_id == config_id:
-            queries.set_active_measurement_config(self._conn, None)
-
-    def get_active_measurement_config_id(self) -> int | None:
-        """Return the active measurement config ID, or None."""
-        return queries.select_active_measurement_config_id(self._conn)
-
-    def set_active_measurement_config(self, config_id: int) -> None:
-        """Set the active measurement config."""
-        queries.set_active_measurement_config(self._conn, config_id)
-
-    def auto_create_default_config(self) -> int:
-        """Create a default measurement config from latest runs per FOV.
-
-        Uses the latest segmentation run per FOV and pairs it with
-        all threshold runs for that FOV. Sets the new config as active.
-
-        Returns:
-            The config ID.
-
-        Raises:
-            ValueError: If no segmentation runs exist.
-        """
-        fovs = self.get_fovs()
-        if not fovs:
-            raise ValueError("No FOVs in experiment")
-
-        entries: list[tuple[int, int, int | None]] = []
-        for fov in fovs:
-            seg_runs = self.list_segmentation_runs(fov.id)
-            if not seg_runs:
-                continue
-            latest_seg = seg_runs[-1]
-
-            thr_runs = self.list_threshold_runs(fov_id=fov.id)
-            if thr_runs:
-                for tr in thr_runs:
-                    entries.append((fov.id, latest_seg.id, tr.id))
-            else:
-                entries.append((fov.id, latest_seg.id, None))
-
-        if not entries:
-            raise ValueError("No segmentation runs found in any FOV")
-
-        config_id = self.create_measurement_config("default")
-        for fov_id, seg_id, thr_id in entries:
-            self.add_measurement_config_entry(config_id, fov_id, seg_id, thr_id)
-        return config_id
-
-    def remove_measurement_config_entry(self, entry_id: int) -> None:
-        """Remove a single entry from a measurement config."""
-        self._conn.execute(
-            "DELETE FROM measurement_config_entries WHERE id = ?", (entry_id,),
-        )
-
-    # --- Run Name Generation ---
-
-    def _generate_run_name(
-        self,
-        base_name: str,
-        fov_id: int,
-        table: str,
-        channel_id: int | None = None,
-    ) -> str:
-        """Generate a unique run name, appending _2, _3, etc. on collision.
-
-        Uses INSERT-catch-IntegrityError pattern atomically.
-        """
-        # Check if base name already exists
-        if table == "segmentation_runs":
-            where = "fov_id = ? AND name = ?"
-            params: list[object] = [fov_id, base_name]
-        else:  # threshold_runs
-            where = "fov_id = ? AND channel_id = ? AND name = ?"
-            params = [fov_id, channel_id, base_name]
-
-        row = self._conn.execute(
-            f"SELECT COUNT(*) FROM {table} WHERE {where}",
-            params,
-        ).fetchone()
-
-        if row[0] == 0:
-            return base_name
-
-        # Name collision — find next available suffix
-        for i in range(2, 1000):
-            candidate = f"{base_name}_{i}"
-            if table == "segmentation_runs":
-                params = [fov_id, candidate]
-            else:
-                params = [fov_id, channel_id, candidate]
-            row = self._conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE {where}",
-                params,
-            ).fetchone()
-            if row[0] == 0:
-                return candidate
-
-        raise RunNameError(base_name, "too many runs with this base name")
-
     # --- Export ---
-
-    def export_measurements(
-        self,
-        output_dir: Path,
-        config_id: int | None = None,
-    ) -> dict[str, int]:
-        """Export measurements organized by segmentation/threshold run.
-
-        Creates a directory tree::
-
-            {output_dir}/
-              {seg_name}/
-                whole_cell_measurements.csv
-                {threshold_name}/
-                  mask_measurements.csv
-                  particles.csv
-              summary/
-                segmentation_runs.csv
-                threshold_runs.csv
-
-        Args:
-            output_dir: Root output directory (created if needed).
-            config_id: Measurement config ID. If None, uses active config.
-
-        Returns:
-            Dict with 'files_written' count.
-        """
-        import re as re_mod
-
-        if config_id is None:
-            config_id = self.get_active_measurement_config_id()
-        if config_id is None:
-            return {"files_written": 0}
-
-        entries = self.get_measurement_config_entries(config_id)
-        if not entries:
-            return {"files_written": 0}
-
-        def _sanitize(name: str) -> str:
-            return re_mod.sub(r'[^\w\-. ()]', '_', name)
-
-        all_channels = self.get_channels()
-        channel_names = [ch.name for ch in all_channels]
-        files_written = 0
-
-        # Group entries by segmentation run
-        seg_entries: dict[int, list[MeasurementConfigEntry]] = {}
-        for entry in entries:
-            seg_entries.setdefault(entry.segmentation_run_id, []).append(entry)
-
-        for seg_run_id, seg_group in seg_entries.items():
-            seg_run = self.get_segmentation_run(seg_run_id)
-            seg_dir = output_dir / _sanitize(seg_run.name)
-            seg_dir.mkdir(parents=True, exist_ok=True)
-
-            # Gather all FOV IDs for this seg run
-            fov_ids = [e.fov_id for e in seg_group]
-            cells_df = self.get_cells(is_valid=False)
-            if cells_df.empty:
-                continue
-            seg_cells = cells_df[
-                (cells_df["segmentation_id"] == seg_run_id)
-                & (cells_df["fov_id"].isin(fov_ids))
-            ]
-            if seg_cells.empty:
-                continue
-            cell_ids = seg_cells["id"].tolist()
-
-            # Whole-cell measurements
-            wc_df = self.get_measurements(
-                cell_ids=cell_ids, scope="whole_cell",
-            )
-            if not wc_df.empty:
-                # Add provenance columns
-                cell_info = seg_cells[["id", "fov_name", "condition_name", "bio_rep_name"]].copy()
-                cell_info = cell_info.rename(columns={"id": "cell_id"})
-                wc_df = wc_df.merge(cell_info, on="cell_id", how="left")
-                wc_df["segmentation_run"] = seg_run.name
-                wc_path = seg_dir / "whole_cell_measurements.csv"
-                wc_df.to_csv(wc_path, index=False)
-                files_written += 1
-
-            # Threshold runs for this seg group
-            for entry in seg_group:
-                if entry.threshold_run_id is None:
-                    continue
-                thr_run = self.get_threshold_run(entry.threshold_run_id)
-                thr_dir = seg_dir / _sanitize(thr_run.name)
-                thr_dir.mkdir(parents=True, exist_ok=True)
-
-                # Mask-scoped measurements
-                fov_cells = seg_cells[seg_cells["fov_id"] == entry.fov_id]
-                if fov_cells.empty:
-                    continue
-                fov_cell_ids = fov_cells["id"].tolist()
-
-                for scope in ("mask_inside", "mask_outside"):
-                    mask_df = self.get_measurements(
-                        cell_ids=fov_cell_ids, scope=scope,
-                    )
-                    if not mask_df.empty:
-                        mask_df = mask_df[
-                            mask_df["threshold_run_id"] == entry.threshold_run_id
-                        ] if "threshold_run_id" in mask_df.columns else mask_df
-                        if not mask_df.empty:
-                            cell_info = fov_cells[
-                                ["id", "fov_name", "condition_name", "bio_rep_name"]
-                            ].copy().rename(columns={"id": "cell_id"})
-                            mask_df = mask_df.merge(cell_info, on="cell_id", how="left")
-                            mask_df["segmentation_run"] = seg_run.name
-                            mask_df["threshold_run"] = thr_run.name
-                            csv_path = thr_dir / f"{scope}_measurements.csv"
-                            mask_df.to_csv(csv_path, index=False)
-                            files_written += 1
-
-                # Particles
-                p_rows = queries.select_particles_with_cell_info(
-                    self._conn, threshold_run_id=entry.threshold_run_id,
-                )
-                if p_rows:
-                    p_df = pd.DataFrame(p_rows)
-                    p_df["segmentation_run"] = seg_run.name
-                    p_df["threshold_run"] = thr_run.name
-                    p_path = thr_dir / "particles.csv"
-                    p_df.to_csv(p_path, index=False)
-                    files_written += 1
-
-        # Summary CSVs
-        summary_dir = output_dir / "summary"
-        summary_dir.mkdir(parents=True, exist_ok=True)
-
-        seg_run_ids = list(seg_entries.keys())
-        seg_summaries = []
-        for rid in seg_run_ids:
-            run = self.get_segmentation_run(rid)
-            seg_summaries.append({
-                "id": run.id, "name": run.name, "fov_id": run.fov_id,
-                "channel": run.channel, "model_name": run.model_name,
-                "cell_count": run.cell_count, "created_at": run.created_at,
-            })
-        if seg_summaries:
-            pd.DataFrame(seg_summaries).to_csv(
-                summary_dir / "segmentation_runs.csv", index=False,
-            )
-            files_written += 1
-
-        thr_run_ids = {
-            e.threshold_run_id for e in entries if e.threshold_run_id is not None
-        }
-        thr_summaries = []
-        for rid in thr_run_ids:
-            run = self.get_threshold_run(rid)
-            thr_summaries.append({
-                "id": run.id, "name": run.name, "fov_id": run.fov_id,
-                "channel": run.channel, "method": run.method,
-                "threshold_value": run.threshold_value,
-                "created_at": run.created_at,
-            })
-        if thr_summaries:
-            pd.DataFrame(thr_summaries).to_csv(
-                summary_dir / "threshold_runs.csv", index=False,
-            )
-            files_written += 1
-
-        return {"files_written": files_written}
 
     def export_csv(
         self,
@@ -1685,7 +1153,6 @@ class ExperimentStore:
         channels: list[str] | None = None,
         metrics: list[str] | None = None,
         scope: str | None = None,
-        config_id: int | None = None,
     ) -> None:
         """Export measurements to a single flat CSV.
 
@@ -1694,15 +1161,11 @@ class ExperimentStore:
             channels: Optional channel filter.
             metrics: Optional metric filter.
             scope: Optional scope filter.
-            config_id: Optional measurement config ID for cell filtering.
         """
-        cell_ids = self._resolve_config_cell_ids(config_id)
         pivot = self.get_measurement_pivot(
             channels=channels, metrics=metrics, scope=scope,
             include_cell_info=True,
         )
-        if cell_ids is not None and not pivot.empty and "cell_id" in pivot.columns:
-            pivot = pivot[pivot["cell_id"].isin(cell_ids)]
         pivot.to_csv(path, index=False)
 
     def export_prism_csv(
@@ -1711,7 +1174,6 @@ class ExperimentStore:
         channels: list[str] | None = None,
         metrics: list[str] | None = None,
         scope: str = "whole_cell",
-        config_id: int | None = None,
     ) -> dict[str, int]:
         """Export measurements in Prism-friendly format.
 
@@ -1724,7 +1186,6 @@ class ExperimentStore:
             channels: Optional list of channels to include.
             metrics: Optional list of metrics to include.
             scope: Measurement scope ('whole_cell', 'mask_inside', 'mask_outside').
-            config_id: Optional measurement config ID for cell filtering.
 
         Returns:
             Dict with 'files_written' and 'channels_exported' counts.
@@ -1762,13 +1223,6 @@ class ExperimentStore:
         cells_df = self.get_cells(is_valid=True)
         if cells_df.empty:
             return {"files_written": 0, "channels_exported": 0}
-
-        # Apply config_id filter
-        config_cell_ids = self._resolve_config_cell_ids(config_id)
-        if config_cell_ids is not None:
-            cells_df = cells_df[cells_df["id"].isin(config_cell_ids)]
-            if cells_df.empty:
-                return {"files_written": 0, "channels_exported": 0}
 
         ctx_cols = ["id", "condition_name", "bio_rep_name", "pixel_size_um"]
         ctx_cols = [c for c in ctx_cols if c in cells_df.columns]
@@ -1841,12 +1295,9 @@ class ExperimentStore:
             channels_exported.add(str(channel))
 
         # --- Aggregate metrics (one value per group, not per cell) ---
-        # Compute pct_cells_with_particles from particle_count data.
         if want_aggregates:
-            # particle_count may already be in df, or we need to fetch it
             pc_df = df[df["metric"] == "particle_count"] if not df.empty else df
             if pc_df.empty:
-                # particle_count was filtered out or df was empty — re-query it
                 pc_raw = self.get_measurements(channels=channels, scope="whole_cell")
                 pc_raw = pc_raw[pc_raw["metric"] == "particle_count"]
                 if not pc_raw.empty:
@@ -1882,222 +1333,3 @@ class ExperimentStore:
             "files_written": files_written,
             "channels_exported": len(channels_exported),
         }
-
-    # Intensity field names that become per-channel when channels are specified
-    _PARTICLE_INTENSITY_FIELDS = {
-        "mean_intensity", "max_intensity", "integrated_intensity",
-    }
-
-    def export_particles_csv(
-        self,
-        path: Path,
-        channels: list[str] | None = None,
-        metrics: list[str] | None = None,
-        threshold_run_id: int | None = None,
-        segmentation_run_id: int | None = None,
-    ) -> None:
-        """Export per-particle data to CSV with cell context columns.
-
-        Args:
-            path: Output CSV file path.
-            channels: If provided, compute intensity metrics from each
-                channel image.  Original single-channel intensity columns
-                are replaced with ``{channel}_mean_intensity`` etc.
-            metrics: If provided, include only these particle fields
-                (plus context columns which are always included).
-                Intensity names (``mean_intensity`` etc.) are expanded
-                per channel when *channels* is set.
-            threshold_run_id: Optional filter by threshold run.
-            segmentation_run_id: Optional filter to particles from cells of
-                this segmentation run only.
-        """
-        rows = queries.select_particles_with_cell_info(
-            self._conn, threshold_run_id=threshold_run_id,
-        )
-        df = pd.DataFrame(rows)
-        if df.empty:
-            df.to_csv(path, index=False)
-            return
-
-        # Filter by segmentation run if specified
-        if segmentation_run_id is not None and "cell_id" in df.columns:
-            seg_cell_ids = self._conn.execute(
-                "SELECT id FROM cells WHERE segmentation_id = ?",
-                (segmentation_run_id,),
-            ).fetchall()
-            seg_cell_set = {r[0] for r in seg_cell_ids}
-            df = df[df["cell_id"].isin(seg_cell_set)]
-            if df.empty:
-                df.to_csv(path, index=False)
-                return
-
-        # Always expand intensity columns to per-channel format.
-        # The bare "mean_intensity" stored in particles is from the threshold
-        # channel only — replacing it with {channel}_mean_intensity for each
-        # channel makes the output unambiguous.
-        effective_channels = channels if channels else [
-            ch.name for ch in self.get_channels()
-        ]
-        if effective_channels:
-            df = self._add_particle_channel_intensities(df, effective_channels)
-            df = df.drop(
-                columns=list(self._PARTICLE_INTENSITY_FIELDS),
-                errors="ignore",
-            )
-
-        # Drop internal IDs
-        df = df.drop(columns=["id", "threshold_run_id"], errors="ignore")
-
-        # Merge group tags for parent cells
-        if "cell_id" in df.columns:
-            df, _ = self._merge_group_tags(df)
-
-        # Apply metric filter
-        context_cols = [
-            "cell_id", "condition_name", "bio_rep_name", "fov_name",
-            "cell_label_value", "label_value",
-        ]
-        if metrics:
-            keep = [c for c in context_cols if c in df.columns]
-            for m in metrics:
-                if m in self._PARTICLE_INTENSITY_FIELDS and effective_channels:
-                    for ch in effective_channels:
-                        col = f"{ch}_{m}"
-                        if col in df.columns:
-                            keep.append(col)
-                elif m in df.columns:
-                    keep.append(m)
-            df = df[keep]
-        else:
-            other = [c for c in df.columns if c not in context_cols]
-            df = df[[c for c in context_cols if c in df.columns] + other]
-
-        df.to_csv(path, index=False)
-
-    def _add_particle_channel_intensities(
-        self,
-        df: pd.DataFrame,
-        channels: list[str],
-    ) -> pd.DataFrame:
-        """Compute per-channel intensity columns for each particle.
-
-        Reconstructs each particle's mask from the stored threshold mask
-        and cell labels, then measures intensity from each channel image.
-        """
-        from scipy.ndimage import label as scipy_label
-
-        # Look up the threshold channel (needed to read the mask)
-        threshold_channel = None
-        if "threshold_run_id" in df.columns:
-            thr_id = df["threshold_run_id"].iloc[0]
-            if thr_id is not None:
-                for run in self.get_threshold_runs():
-                    if run.id == int(thr_id):
-                        threshold_channel = run.channel
-                        break
-
-        # Initialise result columns to 0
-        for ch in channels:
-            for suffix in ("mean_intensity", "max_intensity",
-                           "integrated_intensity"):
-                df[f"{ch}_{suffix}"] = 0.0
-
-        # Process one FOV at a time to avoid reading images repeatedly
-        # Group by fov_id which we get from cells
-        if "fov_id" not in df.columns:
-            # If fov_id is not in the particle query results, we need to add it
-            # by joining through cells
-            pass
-
-        # Use fov_name grouping to get unique FOV IDs from the cell context
-        fov_groups = df.groupby("fov_name")
-
-        for fov_name, gdf in fov_groups:
-            # Look up fov_id from display_name
-            try:
-                fov_info = queries.select_fov_by_display_name(self._conn, str(fov_name))
-                fov_id = fov_info.id
-            except Exception:
-                continue
-
-            # Resolve segmentation run from the particle's cell
-            first_cell_id = int(gdf["cell_id"].iloc[0])
-            seg_id_row = self._conn.execute(
-                "SELECT segmentation_id FROM cells WHERE id = ?",
-                (first_cell_id,),
-            ).fetchone()
-            if seg_id_row is None:
-                continue
-            seg_run_id = seg_id_row[0]
-
-            try:
-                labels = self.read_labels(fov_id, seg_run_id)
-            except Exception:
-                continue
-
-            # Read threshold mask for particle disambiguation
-            threshold_mask = None
-            if threshold_channel and "threshold_run_id" in gdf.columns:
-                try:
-                    thr_run_id = int(gdf["threshold_run_id"].iloc[0])
-                    raw = self.read_mask(fov_id, threshold_channel, thr_run_id)
-                    threshold_mask = raw > 0
-                except Exception:
-                    pass
-
-            # Read each requested channel image
-            ch_images: dict[str, np.ndarray] = {}
-            for ch in channels:
-                try:
-                    ch_images[ch] = self.read_image_numpy(fov_id, ch)
-                except Exception:
-                    pass
-            if not ch_images:
-                continue
-
-            for idx in gdf.index:
-                row = df.loc[idx]
-                cell_label = int(row["cell_label_value"])
-                bx, by = int(row["bbox_x"]), int(row["bbox_y"])
-                bw, bh = int(row["bbox_w"]), int(row["bbox_h"])
-                if bw <= 0 or bh <= 0:
-                    continue
-
-                # Reconstruct particle mask inside its bbox
-                label_crop = labels[by:by + bh, bx:bx + bw]
-                cell_mask = label_crop == cell_label
-
-                if threshold_mask is not None:
-                    mask_crop = threshold_mask[by:by + bh, bx:bx + bw]
-                    particle_mask = cell_mask & mask_crop
-
-                    # Disambiguate overlapping particles via centroid
-                    cc_labels, n_cc = scipy_label(particle_mask)
-                    if n_cc > 1:
-                        cx = float(row["centroid_x"]) - bx
-                        cy = float(row["centroid_y"]) - by
-                        ci = min(max(int(round(cx)), 0), bw - 1)
-                        cj = min(max(int(round(cy)), 0), bh - 1)
-                        target = cc_labels[cj, ci]
-                        if target > 0:
-                            particle_mask = cc_labels == target
-                else:
-                    particle_mask = cell_mask
-
-                if not np.any(particle_mask):
-                    continue
-
-                for ch, ch_img in ch_images.items():
-                    pixels = ch_img[by:by + bh, bx:bx + bw][particle_mask]
-                    if len(pixels) > 0:
-                        df.at[idx, f"{ch}_mean_intensity"] = float(
-                            np.mean(pixels)
-                        )
-                        df.at[idx, f"{ch}_max_intensity"] = float(
-                            np.max(pixels)
-                        )
-                        df.at[idx, f"{ch}_integrated_intensity"] = float(
-                            np.sum(pixels)
-                        )
-
-        return df

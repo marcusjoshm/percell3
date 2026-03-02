@@ -70,13 +70,22 @@ class Measurer:
             if cells_df.empty:
                 return 0
 
-        # Resolve segmentation run
+        # Resolve segmentation run (use latest)
         if segmentation_run_id is None:
             seg_runs = store.list_segmentation_runs(fov_id)
             if not seg_runs:
                 logger.info("No segmentation runs for fov_id=%d — skipping", fov_id)
                 return 0
-            segmentation_run_id = seg_runs[0].id
+            segmentation_run_id = seg_runs[-1].id
+
+        # Filter cells to only those belonging to this segmentation run
+        cells_df = cells_df[cells_df["segmentation_id"] == segmentation_run_id]
+        if cells_df.empty:
+            logger.info(
+                "No cells for seg run %d in fov_id=%d — skipping",
+                segmentation_run_id, fov_id,
+            )
+            return 0
 
         # Read label image once
         labels = store.read_labels(fov_id, segmentation_run_id)
@@ -133,7 +142,7 @@ class Measurer:
             seg_runs = store.list_segmentation_runs(fov_id)
             if not seg_runs:
                 return []
-            segmentation_run_id = seg_runs[0].id
+            segmentation_run_id = seg_runs[-1].id
         labels = store.read_labels(fov_id, segmentation_run_id)
         ch_info = store.get_channel(channel)
         image = store.read_image_numpy(fov_id, channel)

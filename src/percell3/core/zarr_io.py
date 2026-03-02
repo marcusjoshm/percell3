@@ -46,19 +46,19 @@ def image_group_path(fov_id: int) -> str:
     return fov_group_path(fov_id)
 
 
-def label_group_path(fov_id: int, segmentation_run_id: int) -> str:
-    """Zarr group path for a FOV's label image under a segmentation run."""
-    return f"fov_{fov_id}/seg_{segmentation_run_id}"
+def label_group_path(segmentation_id: int) -> str:
+    """Zarr group path for a segmentation's label image (flat by ID)."""
+    return f"seg_{segmentation_id}"
 
 
-def mask_group_path(fov_id: int, channel: str, threshold_run_id: int) -> str:
-    """Zarr group path for a FOV's threshold mask under a threshold run."""
-    return f"fov_{fov_id}/{channel}/run_{threshold_run_id}/mask"
+def mask_group_path(threshold_id: int) -> str:
+    """Zarr group path for a threshold's binary mask (flat by ID)."""
+    return f"thresh_{threshold_id}/mask"
 
 
-def particle_label_group_path(fov_id: int, channel: str, threshold_run_id: int) -> str:
-    """Zarr group path for a FOV's particle labels under a threshold run."""
-    return f"fov_{fov_id}/{channel}/run_{threshold_run_id}/particles"
+def particle_label_group_path(threshold_id: int) -> str:
+    """Zarr group path for a threshold's particle labels (flat by ID)."""
+    return f"thresh_{threshold_id}/particles"
 
 
 # ---------------------------------------------------------------------------

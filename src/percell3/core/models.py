@@ -53,62 +53,69 @@ class CellRecord:
 
 
 @dataclass(frozen=True)
-class SegmentationRunInfo:
-    """Metadata for a named segmentation run on a single FOV."""
+class SegmentationInfo:
+    """Metadata for a global segmentation entity."""
 
     id: int
-    fov_id: int
-    channel: str
     name: str
+    seg_type: str  # 'whole_field' | 'cellular'
+    source_fov_id: int | None
+    source_channel: str | None
     model_name: str
     parameters: dict | None
+    width: int
+    height: int
     cell_count: int
     created_at: str
 
 
 @dataclass(frozen=True)
-class ThresholdRunInfo:
-    """Metadata for a named threshold run on a single FOV."""
+class ThresholdInfo:
+    """Metadata for a global threshold entity."""
 
     id: int
-    fov_id: int
-    channel: str
     name: str
+    source_fov_id: int | None
+    source_channel: str | None
+    grouping_channel: str | None
     method: str
     parameters: dict | None
     threshold_value: float | None
+    width: int
+    height: int
     created_at: str
 
 
 @dataclass(frozen=True)
 class DeleteImpact:
-    """Summary of what will be deleted when a run is removed."""
+    """Summary of what will be deleted when a layer is removed."""
 
     cells: int = 0
     measurements: int = 0
     particles: int = 0
     config_entries: int = 0
+    affected_fovs: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
-class MeasurementConfigInfo:
-    """Metadata for a measurement configuration."""
+class AnalysisConfig:
+    """Metadata for an experiment's analysis configuration."""
 
     id: int
-    name: str
+    experiment_id: int
     created_at: str
-    entry_count: int
 
 
 @dataclass(frozen=True)
-class MeasurementConfigEntry:
-    """A single entry in a measurement configuration."""
+class FovConfigEntry:
+    """A single row in the config matrix: one FOV-threshold combination."""
 
     id: int
     config_id: int
     fov_id: int
-    segmentation_run_id: int
-    threshold_run_id: int | None
+    segmentation_id: int
+    threshold_id: int | None
+    scopes: list[str] = field(default_factory=lambda: ["whole_cell"])
 
 
 @dataclass(frozen=True)
@@ -120,15 +127,17 @@ class MeasurementRecord:
     metric: str
     value: float
     scope: str = "whole_cell"
-    threshold_run_id: int | None = None
+    segmentation_id: int | None = None
+    threshold_id: int | None = None
+    measured_at: str | None = None
 
 
 @dataclass(frozen=True)
 class ParticleRecord:
-    """A single particle detected within a cell's threshold mask."""
+    """A single particle detected within a threshold mask on a FOV."""
 
-    cell_id: int
-    threshold_run_id: int
+    fov_id: int
+    threshold_id: int
     label_value: int
     centroid_x: float
     centroid_y: float

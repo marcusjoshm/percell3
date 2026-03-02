@@ -45,6 +45,117 @@ class TestCreateSchema:
         row = db_conn.execute("SELECT percell_version FROM experiments").fetchone()
         assert row["percell_version"] == "4.0.0"
 
+    def test_no_active_measurement_config_column(self, db_conn):
+        """Experiments table should NOT have active_measurement_config_id."""
+        cols = {
+            r["name"]
+            for r in db_conn.execute("PRAGMA table_info(experiments)").fetchall()
+        }
+        assert "active_measurement_config_id" not in cols
+
+    def test_segmentations_table_structure(self, db_conn):
+        """segmentations table has global structure with seg_type."""
+        cols = {
+            r["name"]
+            for r in db_conn.execute("PRAGMA table_info(segmentations)").fetchall()
+        }
+        assert "seg_type" in cols
+        assert "source_fov_id" in cols
+        assert "width" in cols
+        assert "height" in cols
+        assert "name" in cols
+        # Should NOT have fov_id (global entity)
+        assert "fov_id" not in cols
+
+    def test_segmentations_seg_type_constraint(self, db_conn):
+        """seg_type CHECK constraint rejects invalid values."""
+        db_conn.execute(
+            "INSERT INTO conditions (name) VALUES ('c1')"
+        )
+        db_conn.execute(
+            "INSERT INTO bio_reps (name) VALUES ('N1')"
+        )
+        db_conn.execute(
+            "INSERT INTO fovs (display_name, condition_id, bio_rep_id, width, height) "
+            "VALUES ('fov1', 1, 1, 100, 100)"
+        )
+        db_conn.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            db_conn.execute(
+                "INSERT INTO segmentations (name, seg_type, width, height) "
+                "VALUES ('bad', 'invalid_type', 100, 100)"
+            )
+
+    def test_thresholds_table_structure(self, db_conn):
+        """thresholds table has global structure with source metadata."""
+        cols = {
+            r["name"]
+            for r in db_conn.execute("PRAGMA table_info(thresholds)").fetchall()
+        }
+        assert "source_fov_id" in cols
+        assert "source_channel" in cols
+        assert "grouping_channel" in cols
+        assert "width" in cols
+        assert "height" in cols
+        assert "name" in cols
+        # Should NOT have fov_id or channel_id (global entity)
+        assert "fov_id" not in cols
+        assert "channel_id" not in cols
+
+    def test_particles_table_uses_fov_and_threshold(self, db_conn):
+        """particles table uses fov_id + threshold_id, not cell_id."""
+        cols = {
+            r["name"]
+            for r in db_conn.execute("PRAGMA table_info(particles)").fetchall()
+        }
+        assert "fov_id" in cols
+        assert "threshold_id" in cols
+        assert "cell_id" not in cols
+
+    def test_measurements_has_segmentation_id(self, db_conn):
+        """measurements table has segmentation_id provenance column."""
+        cols = {
+            r["name"]
+            for r in db_conn.execute("PRAGMA table_info(measurements)").fetchall()
+        }
+        assert "segmentation_id" in cols
+        assert "threshold_id" in cols
+        assert "measured_at" in cols
+        # Old column name should not exist
+        assert "threshold_run_id" not in cols
+
+    def test_fov_config_table_structure(self, db_conn):
+        """fov_config table has config_id, fov_id, segmentation_id, threshold_id, scopes."""
+        cols = {
+            r["name"]
+            for r in db_conn.execute("PRAGMA table_info(fov_config)").fetchall()
+        }
+        assert "config_id" in cols
+        assert "fov_id" in cols
+        assert "segmentation_id" in cols
+        assert "threshold_id" in cols
+        assert "scopes" in cols
+
+    def test_analysis_config_table_structure(self, db_conn):
+        """analysis_config table has experiment_id FK."""
+        cols = {
+            r["name"]
+            for r in db_conn.execute("PRAGMA table_info(analysis_config)").fetchall()
+        }
+        assert "experiment_id" in cols
+        assert "created_at" in cols
+
+    def test_old_tables_do_not_exist(self, db_conn):
+        """segmentation_runs, threshold_runs, measurement_configs should not exist."""
+        rows = db_conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+        tables = {r["name"] for r in rows}
+        assert "segmentation_runs" not in tables
+        assert "threshold_runs" not in tables
+        assert "measurement_configs" not in tables
+        assert "measurement_config_entries" not in tables
+
 
 class TestOpenDatabase:
     def test_open_existing(self, db_path):
@@ -106,7 +217,6 @@ class TestEnsureMissingTables:
                 name TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
                 percell_version TEXT NOT NULL DEFAULT '4.0.0',
-                active_measurement_config_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
@@ -152,60 +262,6 @@ class TestEnsureMissingTables:
                 source_file TEXT
             );
 
-            CREATE TABLE segmentation_runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
-                channel_id INTEGER NOT NULL REFERENCES channels(id),
-                name TEXT NOT NULL,
-                model_name TEXT NOT NULL,
-                parameters TEXT,
-                cell_count INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                UNIQUE(fov_id, name)
-            );
-
-            CREATE TABLE cells (
-                id INTEGER PRIMARY KEY,
-                fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
-                segmentation_id INTEGER NOT NULL REFERENCES segmentation_runs(id) ON DELETE CASCADE,
-                label_value INTEGER NOT NULL,
-                centroid_x REAL NOT NULL,
-                centroid_y REAL NOT NULL,
-                bbox_x INTEGER NOT NULL,
-                bbox_y INTEGER NOT NULL,
-                bbox_w INTEGER NOT NULL,
-                bbox_h INTEGER NOT NULL,
-                area_pixels REAL NOT NULL,
-                area_um2 REAL,
-                perimeter REAL,
-                circularity REAL,
-                is_valid INTEGER NOT NULL DEFAULT 1,
-                UNIQUE(fov_id, segmentation_id, label_value)
-            );
-
-            CREATE TABLE threshold_runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                fov_id INTEGER NOT NULL REFERENCES fovs(id) ON DELETE CASCADE,
-                channel_id INTEGER NOT NULL REFERENCES channels(id),
-                name TEXT NOT NULL,
-                method TEXT NOT NULL,
-                parameters TEXT,
-                threshold_value REAL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                UNIQUE(fov_id, channel_id, name)
-            );
-
-            CREATE TABLE measurements (
-                id INTEGER PRIMARY KEY,
-                cell_id INTEGER NOT NULL REFERENCES cells(id) ON DELETE CASCADE,
-                channel_id INTEGER NOT NULL REFERENCES channels(id),
-                metric TEXT NOT NULL,
-                value REAL NOT NULL,
-                scope TEXT NOT NULL DEFAULT 'whole_cell'
-                    CHECK(scope IN ('whole_cell', 'mask_inside', 'mask_outside')),
-                threshold_run_id INTEGER REFERENCES threshold_runs(id) ON DELETE CASCADE
-            );
-
             INSERT INTO experiments (name, percell_version) VALUES ('Test', '4.0.0');
         """)
         conn.commit()
@@ -220,8 +276,12 @@ class TestEnsureMissingTables:
                 "AND name NOT LIKE 'sqlite_%'"
             ).fetchall()
         }
+        assert "segmentations" in tables
+        assert "thresholds" in tables
         assert "particles" in tables
         assert "fov_status_cache" in tables
         assert "fov_tags" in tables
+        assert "analysis_config" in tables
+        assert "fov_config" in tables
         assert tables >= EXPECTED_TABLES
         conn.close()

@@ -47,14 +47,17 @@ class TestPathHelpers:
     def test_image_group_path(self):
         assert zarr_io.image_group_path(1) == "fov_1"
 
-    def test_label_group_path(self):
-        assert zarr_io.label_group_path(1, 5) == "fov_1/seg_5"
+    def test_label_group_path_flat_by_id(self):
+        assert zarr_io.label_group_path(5) == "seg_5"
+        assert zarr_io.label_group_path(42) == "seg_42"
 
-    def test_mask_group_path(self):
-        assert zarr_io.mask_group_path(1, "GFP", 3) == "fov_1/GFP/run_3/mask"
+    def test_mask_group_path_flat_by_id(self):
+        assert zarr_io.mask_group_path(3) == "thresh_3/mask"
+        assert zarr_io.mask_group_path(10) == "thresh_10/mask"
 
-    def test_particle_label_group_path(self):
-        assert zarr_io.particle_label_group_path(1, "GFP", 3) == "fov_1/GFP/run_3/particles"
+    def test_particle_label_group_path_flat_by_id(self):
+        assert zarr_io.particle_label_group_path(3) == "thresh_3/particles"
+        assert zarr_io.particle_label_group_path(10) == "thresh_10/particles"
 
 
 class TestImageIO:
@@ -170,7 +173,7 @@ class TestLabelIO:
         labels = np.zeros((256, 256), dtype=np.int32)
         labels[50:100, 50:100] = 1
         labels[150:200, 150:200] = 2
-        gp = zarr_io.label_group_path(1, 1)
+        gp = zarr_io.label_group_path(1)
 
         zarr_io.write_labels(labels_zarr, gp, labels)
         result = zarr_io.read_labels(labels_zarr, gp)
@@ -178,7 +181,7 @@ class TestLabelIO:
 
     def test_label_dtype_int32(self, labels_zarr):
         labels = np.ones((64, 64), dtype=np.uint16) * 5
-        gp = zarr_io.label_group_path(1, 1)
+        gp = zarr_io.label_group_path(1)
         zarr_io.write_labels(labels_zarr, gp, labels)
 
         root = zarr.open(str(labels_zarr), mode="r")
@@ -187,21 +190,21 @@ class TestLabelIO:
 
     def test_label_ngff_metadata(self, labels_zarr):
         labels = np.zeros((64, 64), dtype=np.int32)
-        gp = zarr_io.label_group_path(1, 1)
+        gp = zarr_io.label_group_path(1)
         zarr_io.write_labels(
             labels_zarr, gp, labels,
             source_image_path="../../images.zarr/fov_1",
         )
 
         root = zarr.open(str(labels_zarr), mode="r")
-        group = root["fov_1/seg_1"]
+        group = root["seg_1"]
         attrs = dict(group.attrs)
         assert "image-label" in attrs
         assert attrs["image-label"]["version"] == "0.4"
         assert "multiscales" in attrs
 
     def test_overwrite_labels(self, labels_zarr):
-        gp = zarr_io.label_group_path(1, 1)
+        gp = zarr_io.label_group_path(1)
 
         labels1 = np.ones((64, 64), dtype=np.int32)
         zarr_io.write_labels(labels_zarr, gp, labels1)
@@ -217,7 +220,7 @@ class TestMaskIO:
     def test_write_and_read(self, masks_zarr):
         mask = np.zeros((128, 128), dtype=bool)
         mask[20:80, 20:80] = True
-        gp = zarr_io.mask_group_path(1, "GFP", 1)
+        gp = zarr_io.mask_group_path(1)
 
         zarr_io.write_mask(masks_zarr, gp, mask)
         result = zarr_io.read_mask(masks_zarr, gp)
@@ -228,8 +231,8 @@ class TestMaskIO:
         assert result[0, 0] == 0
 
     def test_mask_path(self):
-        gp = zarr_io.mask_group_path(1, "GFP", 1)
-        assert gp == "fov_1/GFP/run_1/mask"
+        gp = zarr_io.mask_group_path(1)
+        assert gp == "thresh_1/mask"
 
 
 # === ndim validation tests ===
@@ -247,13 +250,13 @@ class TestNdimValidation:
 
     def test_write_labels_rejects_3d(self, labels_zarr):
         data_3d = np.zeros((64, 64, 1), dtype=np.int32)
-        gp = zarr_io.label_group_path(1, 1)
+        gp = zarr_io.label_group_path(1)
         with pytest.raises(ValueError, match="Expected 2D"):
             zarr_io.write_labels(labels_zarr, gp, data_3d)
 
     def test_write_mask_rejects_1d(self, masks_zarr):
         data_1d = np.zeros((100,), dtype=bool)
-        gp = zarr_io.mask_group_path(1, "GFP", 1)
+        gp = zarr_io.mask_group_path(1)
         with pytest.raises(ValueError, match="Expected 2D"):
             zarr_io.write_mask(masks_zarr, gp, data_1d)
 
@@ -273,7 +276,7 @@ class TestParticleLabelIO:
         labels = np.zeros((128, 128), dtype=np.int32)
         labels[20:40, 20:40] = 1
         labels[60:80, 60:80] = 2
-        gp = zarr_io.particle_label_group_path(1, "GFP", 1)
+        gp = zarr_io.particle_label_group_path(1)
 
         zarr_io.write_particle_labels(masks_zarr, gp, labels)
         result = zarr_io.read_particle_labels(masks_zarr, gp)
@@ -281,7 +284,7 @@ class TestParticleLabelIO:
 
     def test_dtype_int32(self, masks_zarr):
         labels = np.ones((64, 64), dtype=np.uint16) * 5
-        gp = zarr_io.particle_label_group_path(1, "GFP", 1)
+        gp = zarr_io.particle_label_group_path(1)
         zarr_io.write_particle_labels(masks_zarr, gp, labels)
 
         root = zarr.open(str(masks_zarr), mode="r")
@@ -289,7 +292,7 @@ class TestParticleLabelIO:
         assert arr.dtype == np.int32
 
     def test_overwrite(self, masks_zarr):
-        gp = zarr_io.particle_label_group_path(1, "GFP", 1)
+        gp = zarr_io.particle_label_group_path(1)
 
         labels1 = np.ones((64, 64), dtype=np.int32)
         zarr_io.write_particle_labels(masks_zarr, gp, labels1)
@@ -301,11 +304,11 @@ class TestParticleLabelIO:
         np.testing.assert_array_equal(result, labels2)
 
     def test_path(self):
-        gp = zarr_io.particle_label_group_path(1, "GFP", 1)
-        assert gp == "fov_1/GFP/run_1/particles"
+        gp = zarr_io.particle_label_group_path(1)
+        assert gp == "thresh_1/particles"
 
     def test_rejects_3d(self, masks_zarr):
         data_3d = np.zeros((1, 64, 64), dtype=np.int32)
-        gp = zarr_io.particle_label_group_path(1, "GFP", 1)
+        gp = zarr_io.particle_label_group_path(1)
         with pytest.raises(ValueError, match="Expected 2D"):
             zarr_io.write_particle_labels(masks_zarr, gp, data_3d)
