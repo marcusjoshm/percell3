@@ -988,7 +988,16 @@ class ExperimentStore:
         ).fetchall()
         affected_fov_ids = [r[0] for r in fov_rows]
 
-        # CASCADE handles particles, measurements, fov_config entries in SQLite
+        # Explicitly delete fov_config entries referencing this threshold
+        # before cascade delete. The CASCADE uses ON DELETE SET NULL which
+        # can create UNIQUE constraint violations when a (config, fov, seg, NULL)
+        # row already exists.
+        self._conn.execute(
+            "DELETE FROM fov_config WHERE threshold_id = ?",
+            (threshold_id,),
+        )
+
+        # CASCADE handles particles and measurements in SQLite
         queries.delete_threshold(self._conn, threshold_id)
 
         # Clean up Zarr data (thresh_{id}/ contains both mask/ and particles/)

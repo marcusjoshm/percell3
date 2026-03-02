@@ -280,18 +280,17 @@ images.zarr/
 **Success criteria**: Creating a segmentation triggers whole_cell measurements. Creating a threshold triggers particle extraction + mask measurements. Editing labels incrementally updates measurements for **all FOVs referencing that segmentation**. Config changes fill measurement gaps. Zero-measurement outcomes log warnings. Measurement failures never roll back layer creation.
 
 #### Phase 6: CLI Configuration Manager
-- [ ] Remove old config management menu (~365 lines from `_config_management_menu`)
-- [ ] Add new `_config_manager_menu()` with matrix table view using Rich
-- [ ] Display matrix: FOV | Segmentation | Threshold | Scopes (one row per FOV-threshold combo)
-- [ ] Add "Assign Segmentation" action: pick from list of global segmentations, assign to selected FOVs (with dimension validation)
-- [ ] Add "Assign Threshold" action: pick from list of global thresholds, assign to selected FOVs
-- [ ] Add "Set Scopes" action: pick scopes for selected rows
-- [ ] Add "Rename Segmentation" and "Rename Threshold" actions
-- [ ] Add "Delete Segmentation" action: show impact preview (affected FOVs, cell count, measurement count). If seg is active in fov_config, affected FOVs revert to whole_field after deletion. Cascade-delete cells, measurements, zarr group.
-- [ ] Add "Delete Threshold" action: same pattern — impact preview, cascade-delete particles + mask measurements + zarr group, remove from fov_config
-- [ ] Keep menu handlers as thin dispatchers (1-3 lines, delegate to ExperimentStore)
-- [ ] Config changes trigger auto-measurement via `on_config_changed()`
-- [ ] Write CLI integration tests
+- [x] Remove old config management menu (~365 lines replaced with ~200 lines)
+- [x] Add new `_config_management_menu()` with matrix table view using Rich
+- [x] Display matrix: FOV | Segmentation | Threshold | Scopes (one row per FOV-threshold combo)
+- [x] Add "Assign Segmentation" action: pick from list of global segmentations, assign to selected FOVs (with dimension validation)
+- [x] Add "Assign Threshold" action: pick from list of global thresholds, assign to selected FOVs
+- [x] Add "Rename Segmentation" and "Rename Threshold" actions
+- [x] Add "Delete Segmentation" action: show impact preview, cascade-delete cells, measurements, zarr group
+- [x] Add "Delete Threshold" action: impact preview, explicit fov_config cleanup (fixes SET NULL/UNIQUE conflict), cascade-delete particles + measurements + zarr group
+- [x] Menu handlers are thin dispatchers (delegate to ExperimentStore)
+- [x] Config changes trigger auto-measurement via `on_config_changed()`
+- [x] Write CLI integration tests (10 tests: matrix display, assign seg/thr, rename, delete)
 
 **Files**: `src/percell3/cli/menu.py`, `tests/test_cli/test_menu_config.py` (new)
 

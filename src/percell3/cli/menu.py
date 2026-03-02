@@ -1250,370 +1250,277 @@ def _select_fovs_from_table(fovs: list) -> list:
 
 
 def _config_management_menu(state: MenuState) -> None:
-    """Measurement configuration management sub-menu."""
+    """Layer-based configuration management sub-menu."""
     Menu("CONFIG MANAGEMENT", [
-        MenuItem("1", "Show active config", "Display the active measurement configuration", _show_active_config),
-        MenuItem("2", "Auto-create config", "Create config from latest runs per FOV", _auto_create_config),
-        MenuItem("3", "Apply seg run to all FOVs", "Use one seg run for all FOVs in config", _apply_seg_run_to_all),
-        MenuItem("4", "Apply seg run to condition", "Use one seg run for FOVs in a condition", _apply_seg_run_to_condition),
-        MenuItem("5", "Edit individual FOV config", "Add/remove entries for a single FOV", _edit_fov_config),
-        MenuItem("6", "List/switch configs", "View all configs and set active", _list_switch_configs),
-        MenuItem("7", "Delete config", "Delete a measurement configuration", _delete_config),
+        MenuItem("1", "Show config matrix", "Display FOV-segmentation-threshold matrix", _show_config_matrix),
+        MenuItem("2", "Assign segmentation", "Assign a segmentation to selected FOVs", _assign_segmentation),
+        MenuItem("3", "Assign threshold", "Assign a threshold to selected FOVs", _assign_threshold),
+        MenuItem("4", "Rename segmentation", "Rename a segmentation entity", _rename_segmentation),
+        MenuItem("5", "Rename threshold", "Rename a threshold entity", _rename_threshold),
+        MenuItem("6", "Delete segmentation", "Delete a segmentation with impact preview", _delete_segmentation),
+        MenuItem("7", "Delete threshold", "Delete a threshold with impact preview", _delete_threshold),
     ], state).run()
     raise _MenuCancel()
 
 
-def _show_active_config(state: MenuState) -> None:
-    """Display the active measurement config with a summary table."""
+def _show_config_matrix(state: MenuState) -> None:
+    """Display the config matrix: FOV | Segmentation | Threshold | Scopes."""
     from rich.table import Table
 
     store = state.require_experiment()
-    active_id = store.get_active_measurement_config_id()
-    if active_id is None:
-        console.print("\n[yellow]No active measurement config.[/yellow]")
-        console.print("[dim]Use 'Auto-create config' to generate one from latest runs.[/dim]")
+    matrix = store.get_config_matrix()
+
+    if not matrix:
+        console.print("\n[dim]Config matrix is empty. No segmentations or thresholds assigned.[/dim]")
         return
 
-    config = store.get_measurement_config(active_id)
-    entries = store.get_measurement_config_entries(active_id)
-
-    console.print(f"\n[bold]Active config:[/bold] {config.name} (ID {config.id})")
-    console.print(f"  Created: {config.created_at}")
-    console.print(f"  Entries: {config.entry_count}")
-
-    if not entries:
-        console.print("  [dim]No entries.[/dim]")
-        return
-
-    table = Table(title="Config Entries")
+    table = Table(title="Configuration Matrix")
     table.add_column("#", style="dim")
     table.add_column("FOV")
-    table.add_column("Seg Run")
-    table.add_column("Threshold Run")
+    table.add_column("Segmentation")
+    table.add_column("Threshold")
+    table.add_column("Scopes")
 
     fovs = {f.id: f for f in store.get_fovs()}
-    for i, entry in enumerate(entries, 1):
+    for i, entry in enumerate(matrix, 1):
         fov = fovs.get(entry.fov_id)
-        fov_name = fov.display_name if fov else f"FOV #{entry.fov_id}"
+        fov_name = fov.display_name if fov else f"fov_{entry.fov_id}"
 
-        seg_runs = store.list_segmentation_runs(entry.fov_id)
-        seg_run = next((r for r in seg_runs if r.id == entry.segmentation_run_id), None)
-        seg_name = seg_run.name if seg_run else f"#{entry.segmentation_run_id}"
+        try:
+            seg = store.get_segmentation(entry.segmentation_id)
+            seg_label = f"{seg.name} ({seg.cell_count or 0} cells)"
+        except Exception:
+            seg_label = f"seg_{entry.segmentation_id}"
 
-        thr_name = "(none)"
-        if entry.threshold_run_id is not None:
-            thr_runs = store.list_threshold_runs(fov_id=entry.fov_id)
-            thr_run = next((r for r in thr_runs if r.id == entry.threshold_run_id), None)
-            thr_name = f"{thr_run.channel}/{thr_run.name}" if thr_run else f"#{entry.threshold_run_id}"
+        thr_label = "(none)"
+        if entry.threshold_id is not None:
+            try:
+                thr = store.get_threshold(entry.threshold_id)
+                thr_label = thr.name
+            except Exception:
+                thr_label = f"thr_{entry.threshold_id}"
 
-        table.add_row(str(i), fov_name, seg_name, thr_name)
+        scopes_str = ", ".join(sorted(entry.scopes)) if entry.scopes else "(default)"
+        table.add_row(str(i), fov_name, seg_label, thr_label, scopes_str)
 
     console.print(table)
 
 
-def _auto_create_config(state: MenuState) -> None:
-    """Auto-create a default config from latest runs per FOV."""
+def _assign_segmentation(state: MenuState) -> None:
+    """Assign a segmentation to selected FOVs."""
     store = state.require_experiment()
 
-    try:
-        config_id = store.auto_create_default_config()
-    except ValueError as e:
-        console.print(f"[red]Cannot create config:[/red] {e}")
+    segs = store.get_segmentations(seg_type="cellular")
+    if not segs:
+        console.print("[red]No cellular segmentations found.[/red] Run segmentation first.")
         return
 
-    config = store.get_measurement_config(config_id)
-    console.print(f"\n[green]Created config '{config.name}' with {config.entry_count} entries.[/green]")
-    console.print(f"  Set as active config.")
+    seg_labels = [f"{s.name} ({s.cell_count or 0} cells, {s.width}x{s.height})" for s in segs]
+    console.print("\n[bold]Select segmentation:[/bold]")
+    selected = numbered_select_one(seg_labels, "Segmentation")
+    seg = segs[seg_labels.index(selected)]
 
-
-def _apply_seg_run_to_all(state: MenuState) -> None:
-    """Create/update config applying one seg run to all FOVs."""
-    store = state.require_experiment()
-
-    # Pick a FOV to source the seg run from
     fovs = store.get_fovs()
     if not fovs:
         console.print("[red]No FOVs found.[/red]")
         return
 
-    # Collect all seg runs across all FOVs
-    all_seg_runs = []
-    for fov in fovs:
-        for run in store.list_segmentation_runs(fov.id):
-            fov_info = next(f for f in fovs if f.id == fov.id)
-            all_seg_runs.append((run, fov_info))
+    fov_labels = [f.display_name for f in fovs]
+    console.print(f"\n[bold]Select FOVs to assign '{seg.name}' to:[/bold]")
+    selected_names = numbered_select_many(fov_labels, "FOVs")
+    target_fovs = [f for f in fovs if f.display_name in selected_names]
 
-    if not all_seg_runs:
-        console.print("[red]No segmentation runs found.[/red]")
-        return
-
-    # Display seg runs and let user choose
-    run_labels = [
-        f"{fov.display_name} / {run.name} ({run.cell_count} cells)"
-        for run, fov in all_seg_runs
-    ]
-    console.print("\n[bold]Select seg run to apply to all FOVs:[/bold]")
-    console.print("[dim]Note: the selected run's labels will be copied to FOVs that lack them.[/dim]\n")
-    selected_label = numbered_select_one(run_labels, "Seg run")
-    idx = run_labels.index(selected_label)
-    selected_run, _ = all_seg_runs[idx]
-
-    # Create config
-    config_name = menu_prompt("Config name", default="all_fovs_config")
-    try:
-        config_id = store.create_measurement_config(config_name)
-    except Exception as e:
-        console.print(f"[red]Error creating config:[/red] {e}")
-        return
-
-    entries_added = 0
-    for fov in fovs:
-        # Find matching seg run on this FOV (same name), or use the source run
-        local_seg_runs = store.list_segmentation_runs(fov.id)
-        local_match = next((r for r in local_seg_runs if r.name == selected_run.name), None)
-        if local_match:
-            seg_id = local_match.id
-        elif local_seg_runs:
-            seg_id = local_seg_runs[-1].id
-        else:
+    assigned = 0
+    skipped = 0
+    for fov in target_fovs:
+        if fov.width != seg.width or fov.height != seg.height:
+            console.print(
+                f"  [yellow]Skipped {fov.display_name}: "
+                f"dimension mismatch ({fov.width}x{fov.height} vs {seg.width}x{seg.height})[/yellow]"
+            )
+            skipped += 1
             continue
 
-        thr_runs = store.list_threshold_runs(fov_id=fov.id)
-        if thr_runs:
-            for tr in thr_runs:
-                store.add_measurement_config_entry(config_id, fov.id, seg_id, tr.id)
-                entries_added += 1
-        else:
-            store.add_measurement_config_entry(config_id, fov.id, seg_id, None)
-            entries_added += 1
+        # Replace existing config with new segmentation
+        existing = store.get_fov_config(fov.id)
+        for entry in existing:
+            store.delete_fov_config_entry(entry.id)
+        store.set_fov_config_entry(fov.id, seg.id)
+        # Re-add any existing thresholds
+        for entry in existing:
+            if entry.threshold_id is not None:
+                store.set_fov_config_entry(
+                    fov.id, seg.id,
+                    threshold_id=entry.threshold_id,
+                    scopes=entry.scopes,
+                )
+        assigned += 1
 
-    console.print(f"\n[green]Config '{config_name}' created with {entries_added} entries.[/green]")
+    console.print(f"\n[green]Assigned to {assigned} FOVs.[/green]")
+    if skipped:
+        console.print(f"[yellow]Skipped {skipped} FOVs (dimension mismatch).[/yellow]")
+
+    # Trigger auto-measurement for affected FOVs
+    if assigned:
+        from percell3.measure.auto_measure import on_config_changed
+        for fov in target_fovs:
+            if fov.width == seg.width and fov.height == seg.height:
+                on_config_changed(store, fov.id)
 
 
-def _apply_seg_run_to_condition(state: MenuState) -> None:
-    """Apply a seg run name to all FOVs in a specific condition."""
+def _assign_threshold(state: MenuState) -> None:
+    """Assign a threshold to selected FOVs."""
     store = state.require_experiment()
 
-    conditions = store.get_conditions()
-    if not conditions:
-        console.print("[red]No conditions found.[/red]")
+    thresholds = store.get_thresholds()
+    if not thresholds:
+        console.print("[red]No thresholds found.[/red] Run thresholding first.")
         return
 
-    console.print("\n[bold]Select condition:[/bold]")
-    condition = numbered_select_one(conditions, "Condition")
-
-    # Get FOVs in this condition
-    fovs = [f for f in store.get_fovs() if f.condition == condition]
-    if not fovs:
-        console.print(f"[red]No FOVs in condition '{condition}'.[/red]")
-        return
-
-    # Collect seg runs from these FOVs
-    seg_runs = []
-    for fov in fovs:
-        for run in store.list_segmentation_runs(fov.id):
-            seg_runs.append((run, fov))
-    if not seg_runs:
-        console.print("[red]No segmentation runs in this condition.[/red]")
-        return
-
-    run_labels = [
-        f"{fov.display_name} / {run.name} ({run.cell_count} cells)"
-        for run, fov in seg_runs
-    ]
-    console.print("\n[bold]Select seg run to apply:[/bold]")
-    selected_label = numbered_select_one(run_labels, "Seg run")
-    idx = run_labels.index(selected_label)
-    selected_run, _ = seg_runs[idx]
-
-    # Check active config exists; if not, auto-create first
-    active_id = store.get_active_measurement_config_id()
-    if active_id is None:
-        console.print("[yellow]No active config — creating default first...[/yellow]")
-        try:
-            active_id = store.auto_create_default_config()
-        except ValueError as e:
-            console.print(f"[red]Cannot create config:[/red] {e}")
-            return
-
-    # Update entries for FOVs in this condition
-    entries = store.get_measurement_config_entries(active_id)
-    updated = 0
-    for fov in fovs:
-        local_seg_runs = store.list_segmentation_runs(fov.id)
-        local_match = next((r for r in local_seg_runs if r.name == selected_run.name), None)
-        if not local_match:
-            continue
-
-        # Remove old entries for this FOV
-        fov_entries = [e for e in entries if e.fov_id == fov.id]
-        for e in fov_entries:
-            store.remove_measurement_config_entry(e.id)
-
-        # Add new entries with the selected seg run
-        thr_runs = store.list_threshold_runs(fov_id=fov.id)
-        if thr_runs:
-            for tr in thr_runs:
-                store.add_measurement_config_entry(active_id, fov.id, local_match.id, tr.id)
-                updated += 1
-        else:
-            store.add_measurement_config_entry(active_id, fov.id, local_match.id, None)
-            updated += 1
-
-    console.print(f"\n[green]Updated {updated} entries in active config.[/green]")
-
-
-def _edit_fov_config(state: MenuState) -> None:
-    """Edit config entries for a single FOV."""
-    store = state.require_experiment()
-
-    active_id = store.get_active_measurement_config_id()
-    if active_id is None:
-        console.print("[yellow]No active config. Create one first.[/yellow]")
-        return
+    thr_labels = [f"{t.name} ({t.width}x{t.height})" for t in thresholds]
+    console.print("\n[bold]Select threshold:[/bold]")
+    selected = numbered_select_one(thr_labels, "Threshold")
+    thr = thresholds[thr_labels.index(selected)]
 
     fovs = store.get_fovs()
-    fov_names = [f.display_name for f in fovs]
-    console.print("\n[bold]Select FOV to edit:[/bold]")
-    selected_name = numbered_select_one(fov_names, "FOV")
-    fov = next(f for f in fovs if f.display_name == selected_name)
-
-    # Show current entries for this FOV
-    entries = store.get_measurement_config_entries(active_id)
-    fov_entries = [e for e in entries if e.fov_id == fov.id]
-
-    if fov_entries:
-        console.print(f"\n[bold]Current entries for {fov.display_name}:[/bold]")
-        for i, e in enumerate(fov_entries, 1):
-            seg_runs = store.list_segmentation_runs(fov.id)
-            seg_run = next((r for r in seg_runs if r.id == e.segmentation_run_id), None)
-            seg_name = seg_run.name if seg_run else f"#{e.segmentation_run_id}"
-            thr_name = "(none)"
-            if e.threshold_run_id is not None:
-                thr_runs = store.list_threshold_runs(fov_id=fov.id)
-                thr_run = next((r for r in thr_runs if r.id == e.threshold_run_id), None)
-                thr_name = f"{thr_run.channel}/{thr_run.name}" if thr_run else f"#{e.threshold_run_id}"
-            console.print(f"  [{i}] Seg: {seg_name} | Thr: {thr_name}")
-
-    # Options
-    console.print("\n[bold]Actions:[/bold]")
-    action = numbered_select_one(
-        ["Add entry", "Remove entry", "Replace all entries"],
-        "Action",
-    )
-
-    if action == "Add entry":
-        seg_runs = store.list_segmentation_runs(fov.id)
-        if not seg_runs:
-            console.print("[red]No segmentation runs for this FOV.[/red]")
-            return
-        seg_names = [f"{r.name} ({r.cell_count} cells)" for r in seg_runs]
-        seg_choice = numbered_select_one(seg_names, "Seg run")
-        seg_run = seg_runs[seg_names.index(seg_choice)]
-
-        thr_runs = store.list_threshold_runs(fov_id=fov.id)
-        thr_run_id = None
-        if thr_runs:
-            thr_options = ["(none)"] + [f"{r.channel}/{r.name}" for r in thr_runs]
-            thr_choice = numbered_select_one(thr_options, "Threshold run")
-            if thr_choice != "(none)":
-                thr_run = thr_runs[thr_options.index(thr_choice) - 1]
-                thr_run_id = thr_run.id
-
-        store.add_measurement_config_entry(active_id, fov.id, seg_run.id, thr_run_id)
-        console.print("[green]Entry added.[/green]")
-
-    elif action == "Remove entry":
-        if not fov_entries:
-            console.print("[dim]No entries to remove.[/dim]")
-            return
-        entry_labels = []
-        for e in fov_entries:
-            seg_runs = store.list_segmentation_runs(fov.id)
-            seg_run = next((r for r in seg_runs if r.id == e.segmentation_run_id), None)
-            seg_name = seg_run.name if seg_run else f"#{e.segmentation_run_id}"
-            entry_labels.append(f"Seg: {seg_name} | Thr: #{e.threshold_run_id or 'none'}")
-        selected_label = numbered_select_one(entry_labels, "Entry to remove")
-        idx = entry_labels.index(selected_label)
-        store.remove_measurement_config_entry(fov_entries[idx].id)
-        console.print("[green]Entry removed.[/green]")
-
-    elif action == "Replace all entries":
-        for e in fov_entries:
-            store.remove_measurement_config_entry(e.id)
-
-        seg_runs = store.list_segmentation_runs(fov.id)
-        if not seg_runs:
-            console.print("[red]No segmentation runs for this FOV.[/red]")
-            return
-        seg_names = [f"{r.name} ({r.cell_count} cells)" for r in seg_runs]
-        seg_choice = numbered_select_one(seg_names, "Seg run")
-        seg_run = seg_runs[seg_names.index(seg_choice)]
-
-        thr_runs = store.list_threshold_runs(fov_id=fov.id)
-        if thr_runs:
-            for tr in thr_runs:
-                store.add_measurement_config_entry(active_id, fov.id, seg_run.id, tr.id)
-        else:
-            store.add_measurement_config_entry(active_id, fov.id, seg_run.id, None)
-        console.print("[green]Entries replaced.[/green]")
-
-
-def _list_switch_configs(state: MenuState) -> None:
-    """List all configs and optionally switch the active one."""
-    store = state.require_experiment()
-
-    configs = store.list_measurement_configs()
-    if not configs:
-        console.print("\n[dim]No measurement configs exist.[/dim]")
+    if not fovs:
+        console.print("[red]No FOVs found.[/red]")
         return
 
-    active_id = store.get_active_measurement_config_id()
+    fov_labels = [f.display_name for f in fovs]
+    console.print(f"\n[bold]Select FOVs to assign '{thr.name}' to:[/bold]")
+    selected_names = numbered_select_many(fov_labels, "FOVs")
+    target_fovs = [f for f in fovs if f.display_name in selected_names]
 
-    console.print("\n[bold]Measurement Configurations:[/bold]")
-    labels = []
-    for c in configs:
-        marker = " [green](active)[/green]" if c.id == active_id else ""
-        labels.append(f"{c.name} ({c.entry_count} entries){marker}")
+    assigned = 0
+    skipped = 0
+    for fov in target_fovs:
+        if fov.width != thr.width or fov.height != thr.height:
+            console.print(
+                f"  [yellow]Skipped {fov.display_name}: "
+                f"dimension mismatch ({fov.width}x{fov.height} vs {thr.width}x{thr.height})[/yellow]"
+            )
+            skipped += 1
+            continue
 
-    for i, label in enumerate(labels, 1):
-        console.print(f"  \\[{i}] {label}")
+        existing = store.get_fov_config(fov.id)
+        if not existing:
+            console.print(
+                f"  [yellow]Skipped {fov.display_name}: no segmentation configured.[/yellow]"
+            )
+            skipped += 1
+            continue
 
-    if len(configs) > 1 or (configs and configs[0].id != active_id):
-        raw = menu_prompt("Set active (number, or blank to keep)")
-        if raw:
-            try:
-                idx = int(raw) - 1
-                if 0 <= idx < len(configs):
-                    store.set_active_measurement_config(configs[idx].id)
-                    console.print(f"[green]Active config set to '{configs[idx].name}'.[/green]")
-                else:
-                    console.print("[red]Invalid number.[/red]")
-            except ValueError:
-                console.print("[red]Invalid input.[/red]")
+        seg_id = existing[0].segmentation_id
+        store.set_fov_config_entry(
+            fov.id, seg_id,
+            threshold_id=thr.id,
+            scopes=["whole_cell", "mask_inside", "mask_outside"],
+        )
+        assigned += 1
+
+    console.print(f"\n[green]Assigned to {assigned} FOVs.[/green]")
+    if skipped:
+        console.print(f"[yellow]Skipped {skipped} FOVs.[/yellow]")
+
+    # Trigger auto-measurement for affected FOVs
+    if assigned:
+        from percell3.measure.auto_measure import on_config_changed
+        for fov in target_fovs:
+            if fov.width == thr.width and fov.height == thr.height:
+                existing = store.get_fov_config(fov.id)
+                if existing:
+                    on_config_changed(store, fov.id)
 
 
-def _delete_config(state: MenuState) -> None:
-    """Delete a measurement configuration."""
+def _rename_segmentation(state: MenuState) -> None:
+    """Rename a segmentation entity."""
     store = state.require_experiment()
-
-    configs = store.list_measurement_configs()
-    if not configs:
-        console.print("\n[dim]No configs to delete.[/dim]")
+    segs = store.get_segmentations()
+    if not segs:
+        console.print("[dim]No segmentations found.[/dim]")
         return
 
-    labels = [f"{c.name} ({c.entry_count} entries)" for c in configs]
-    console.print("\n[bold]Select config to delete:[/bold]")
-    selected = numbered_select_one(labels, "Config")
-    idx = labels.index(selected)
-    config = configs[idx]
+    seg_labels = [f"{s.name} ({s.seg_type})" for s in segs]
+    console.print("\n[bold]Select segmentation to rename:[/bold]")
+    selected = numbered_select_one(seg_labels, "Segmentation")
+    seg = segs[seg_labels.index(selected)]
 
-    if numbered_select_one(["No", "Yes"], f"Delete config '{config.name}'?") != "Yes":
+    new_name = menu_prompt(f"New name for '{seg.name}'")
+    store.rename_segmentation(seg.id, new_name)
+    console.print(f"[green]Renamed to '{new_name}'.[/green]")
+
+
+def _rename_threshold(state: MenuState) -> None:
+    """Rename a threshold entity."""
+    store = state.require_experiment()
+    thresholds = store.get_thresholds()
+    if not thresholds:
+        console.print("[dim]No thresholds found.[/dim]")
+        return
+
+    thr_labels = [t.name for t in thresholds]
+    console.print("\n[bold]Select threshold to rename:[/bold]")
+    selected = numbered_select_one(thr_labels, "Threshold")
+    thr = thresholds[thr_labels.index(selected)]
+
+    new_name = menu_prompt(f"New name for '{thr.name}'")
+    store.rename_threshold(thr.id, new_name)
+    console.print(f"[green]Renamed to '{new_name}'.[/green]")
+
+
+def _delete_segmentation(state: MenuState) -> None:
+    """Delete a segmentation with impact preview."""
+    store = state.require_experiment()
+    segs = store.get_segmentations(seg_type="cellular")
+    if not segs:
+        console.print("[dim]No cellular segmentations to delete.[/dim]")
+        return
+
+    seg_labels = [f"{s.name} ({s.cell_count or 0} cells)" for s in segs]
+    console.print("\n[bold]Select segmentation to delete:[/bold]")
+    selected = numbered_select_one(seg_labels, "Segmentation")
+    seg = segs[seg_labels.index(selected)]
+
+    impact = store.get_segmentation_impact(seg.id)
+    console.print(f"\n[bold]Deleting '{seg.name}' will remove:[/bold]")
+    console.print(f"  Cells: {impact.cells}")
+    console.print(f"  Measurements: {impact.measurements}")
+    console.print(f"  Config entries: {impact.config_entries}")
+
+    if numbered_select_one(["No", "Yes"], "Proceed with deletion?") != "Yes":
         console.print("[dim]Deletion cancelled.[/dim]")
         return
 
-    store.delete_measurement_config(config.id)
-    console.print(f"[green]Config '{config.name}' deleted.[/green]")
+    store.delete_segmentation(seg.id)
+    console.print(f"[green]Segmentation '{seg.name}' deleted.[/green]")
+
+
+def _delete_threshold(state: MenuState) -> None:
+    """Delete a threshold with impact preview."""
+    store = state.require_experiment()
+    thresholds = store.get_thresholds()
+    if not thresholds:
+        console.print("[dim]No thresholds to delete.[/dim]")
+        return
+
+    thr_labels = [t.name for t in thresholds]
+    console.print("\n[bold]Select threshold to delete:[/bold]")
+    selected = numbered_select_one(thr_labels, "Threshold")
+    thr = thresholds[thr_labels.index(selected)]
+
+    impact = store.get_threshold_impact(thr.id)
+    console.print(f"\n[bold]Deleting '{thr.name}' will remove:[/bold]")
+    console.print(f"  Particles: {impact.particles}")
+    console.print(f"  Measurements: {impact.measurements}")
+    console.print(f"  Config entries: {impact.config_entries}")
+
+    if numbered_select_one(["No", "Yes"], "Proceed with deletion?") != "Yes":
+        console.print("[dim]Deletion cancelled.[/dim]")
+        return
+
+    store.delete_threshold(thr.id)
+    console.print(f"[green]Threshold '{thr.name}' deleted.[/green]")
 
 
 def _segment_cells(state: MenuState) -> None:
