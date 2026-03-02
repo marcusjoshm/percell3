@@ -19,13 +19,13 @@ def measure_experiment(tmp_path: Path) -> ExperimentStore:
         - Condition: "control"
         - FOVs: 2 FOVs (64x64)
         - Channels: "DAPI" (segmentation), "GFP" (measurement)
-        - Each FOV has its own segmentation run, label image, and 2 cell records.
+        - Each FOV has its own segmentation, label image, and 2 cell records.
 
     Cell 1: label=1, bbox (10,10,20,20) — filled with value 100 in GFP
     Cell 2: label=2, bbox (40,40,20,20) — filled with value 200 in GFP
 
     Access fov_ids via store._test_fov_ids dict (keyed "fov_1", "fov_2").
-    Access seg_run_ids via store._test_seg_ids dict (keyed "fov_1", "fov_2").
+    Access seg_ids via store._test_seg_ids dict (keyed "fov_1", "fov_2").
     """
     store = ExperimentStore.create(tmp_path / "test.percell")
     store.add_channel("DAPI", role="segmentation")
@@ -38,12 +38,13 @@ def measure_experiment(tmp_path: Path) -> ExperimentStore:
         fov_id = store.add_fov("control", width=64, height=64, pixel_size_um=0.65)
         fov_ids[key] = fov_id
 
-        # Per-FOV segmentation run
-        seg_run_id = store.add_segmentation_run(
-            fov_id=fov_id, channel="DAPI", model_name="mock",
+        # Per-FOV segmentation
+        seg_id = store.add_segmentation(
+            f"seg_{key}", "cellular", 64, 64,
+            source_fov_id=fov_id, source_channel="DAPI", model_name="mock",
             parameters={"diameter": 30.0},
         )
-        seg_ids[key] = seg_run_id
+        seg_ids[key] = seg_id
 
         # DAPI image — uniform background
         dapi = np.full((64, 64), 50, dtype=np.uint16)
@@ -59,12 +60,12 @@ def measure_experiment(tmp_path: Path) -> ExperimentStore:
         labels = np.zeros((64, 64), dtype=np.int32)
         labels[10:30, 10:30] = 1
         labels[40:60, 40:60] = 2
-        store.write_labels(fov_id, labels, seg_run_id)
+        store.write_labels(labels, seg_id)
 
         cells = [
             CellRecord(
                 fov_id=fov_id,
-                segmentation_id=seg_run_id,
+                segmentation_id=seg_id,
                 label_value=1,
                 centroid_x=20.0, centroid_y=20.0,
                 bbox_x=10, bbox_y=10, bbox_w=20, bbox_h=20,
@@ -72,7 +73,7 @@ def measure_experiment(tmp_path: Path) -> ExperimentStore:
             ),
             CellRecord(
                 fov_id=fov_id,
-                segmentation_id=seg_run_id,
+                segmentation_id=seg_id,
                 label_value=2,
                 centroid_x=50.0, centroid_y=50.0,
                 bbox_x=40, bbox_y=40, bbox_w=20, bbox_h=20,
@@ -101,17 +102,19 @@ def single_fov_experiment(tmp_path: Path) -> ExperimentStore:
     store.write_image(fov_id, "GFP", image)
 
     # Labels
-    seg_run_id = store.add_segmentation_run(
-        fov_id=fov_id, channel="GFP", model_name="mock", parameters={},
+    seg_id = store.add_segmentation(
+        "seg_test", "cellular", 32, 32,
+        source_fov_id=fov_id, source_channel="GFP", model_name="mock",
+        parameters={},
     )
     labels = np.zeros((32, 32), dtype=np.int32)
     labels[5:15, 5:15] = 1
-    store.write_labels(fov_id, labels, seg_run_id)
+    store.write_labels(labels, seg_id)
 
     # Cell
     cell = CellRecord(
         fov_id=fov_id,
-        segmentation_id=seg_run_id,
+        segmentation_id=seg_id,
         label_value=1,
         centroid_x=10.0, centroid_y=10.0,
         bbox_x=5, bbox_y=5, bbox_w=10, bbox_h=10,
@@ -120,5 +123,6 @@ def single_fov_experiment(tmp_path: Path) -> ExperimentStore:
     store.add_cells([cell])
 
     store._test_fov_id = fov_id
+    store._test_seg_id = seg_id
     yield store
     store.close()

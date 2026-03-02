@@ -248,32 +248,32 @@ images.zarr/
 **Success criteria**: Every new FOV has a whole_field segmentation and config entry. New seg/thresh auto-update config. Auto-naming produces descriptive unique names.
 
 #### Phase 5: Auto-Measurement Pipeline
-- [ ] Create `src/percell3/measure/auto_measure.py` — orchestrates automatic measurement
-- [ ] Implement `on_segmentation_created(store, segmentation_id, fov_ids)`:
+- [x] Create `src/percell3/measure/auto_measure.py` — orchestrates automatic measurement
+- [x] Implement `on_segmentation_created(store, segmentation_id, fov_ids)`:
   - Extract cells from labels for each FOV
   - Measure all channels, whole_cell scope, for each FOV
   - If thresholds exist in config, compute mask_inside/mask_outside and particle-cell assignment
   - Log measurement counts (fail loudly if 0 records)
-- [ ] Implement `on_threshold_created(store, threshold_id, fov_id)`:
+- [x] Implement `on_threshold_created(store, threshold_id, fov_id)`:
   - Extract particles (connected components)
   - Assign particles to cells using active segmentation
   - Measure all channels for mask_inside/mask_outside scopes
   - Log measurement counts
-- [ ] Implement `on_labels_edited(store, segmentation_id, fov_id, old_labels, new_labels)`:
+- [x] Implement `on_labels_edited(store, segmentation_id, fov_id, old_labels, new_labels)`:
   - Detect changed cells (added, removed, modified) via `np.unique` diff
   - Delete measurements for removed/modified cells
   - Measure new/modified cells
   - **Propagate to all FOVs**: query fov_config for all FOVs referencing this `segmentation_id` and trigger measurement updates for each, not just the FOV being viewed
-- [ ] Implement `on_config_changed(store, fov_id, old_config, new_config)`:
+- [x] Implement `on_config_changed(store, fov_id, old_config, new_config)`:
   - Detect unmeasured (seg, thresh) combinations
   - Auto-compute missing measurements
   - Do NOT delete old measurements (retained for history)
-- [ ] **Failure contract**: Auto-measurement failures do NOT roll back the layer creation. The segmentation/threshold entity persists regardless. Log specifics on failure: which channel missing, which FOV, which scope produced 0 records. Unmeasured combinations are retried on the next gap-detection trigger (config change or next layer operation).
-- [ ] Update `Measurer.measure_fov()` to accept `segmentation_id` directly (not resolved from per-FOV list)
-- [ ] Update `Measurer.measure_fov_masked()` to accept `segmentation_id` and `threshold_id` directly
-- [ ] Fix Bug: `measure_fov_masked()` still uses `seg_runs[0]` (change to explicit `segmentation_id` parameter)
-- [ ] Fix Bug: auto-measure must check return value and log warning if 0 measurements
-- [ ] Write comprehensive auto-measurement tests
+- [x] **Failure contract**: Auto-measurement failures do NOT roll back the layer creation. The segmentation/threshold entity persists regardless. Log specifics on failure: which channel missing, which FOV, which scope produced 0 records. Unmeasured combinations are retried on the next gap-detection trigger (config change or next layer operation).
+- [x] Update `Measurer.measure_fov()` to accept `segmentation_id` directly (not resolved from per-FOV list)
+- [x] Update `Measurer.measure_fov_masked()` to accept `segmentation_id` and `threshold_id` directly
+- [x] Fix Bug: `measure_fov_masked()` still uses `seg_runs[0]` (change to explicit `segmentation_id` parameter)
+- [x] Fix Bug: auto-measure must check return value and log warning if 0 measurements
+- [x] Write comprehensive auto-measurement tests
 
 **Files**: `src/percell3/measure/auto_measure.py` (new), `src/percell3/measure/measurer.py`, `src/percell3/measure/particle_analyzer.py`, `tests/test_measure/test_auto_measure.py` (new)
 

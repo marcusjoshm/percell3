@@ -308,10 +308,23 @@ class BatchMeasurer:
 
         for i, fov_info in enumerate(all_fovs):
             try:
+                # Resolve active segmentation from fov_config
+                config = store.get_fov_config(fov_info.id)
+                if not config:
+                    warnings.append(
+                        f"{fov_info.display_name}: no config entry (no segmentation)"
+                    )
+                    fovs_processed += 1
+                    if progress_callback:
+                        progress_callback(i + 1, total, fov_info.display_name)
+                    continue
+
+                seg_id = config[0].segmentation_id
                 count = measurer.measure_fov(
                     store,
                     fov_id=fov_info.id,
                     channels=channels,
+                    segmentation_id=seg_id,
                     metrics=metrics,
                 )
                 total_measurements += count
