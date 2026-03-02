@@ -34,7 +34,7 @@ def integration_store(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP", role="signal")
     store.add_condition("control")
     fov_id = store.add_fov("control", width=128, height=128, pixel_size_um=0.5)
-    seg_id = store.add_segmentation_run(fov_id=fov_id, channel="DAPI", model_name="cyto3")
+    seg_id = store.add_segmentation("seg_test", "cellular", 128, 128, source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3")
 
     rng = np.random.default_rng(42)
 
@@ -67,7 +67,7 @@ def integration_store(tmp_path: Path) -> ExperimentStore:
         ))
 
     cell_ids = store.add_cells(cells)
-    store.write_labels(fov_id, labels, seg_id)
+    store.write_labels(labels, seg_id)
     store.write_image(fov_id, "GFP", image)
 
     # Add measurements (mean_intensity of GFP for grouping)
@@ -81,6 +81,7 @@ def integration_store(tmp_path: Path) -> ExperimentStore:
         measurements.append(MeasurementRecord(
             cell_id=cid, channel_id=gfp.id,
             metric="mean_intensity", value=float(val),
+            segmentation_id=seg_id,
         ))
     store.add_measurements(measurements)
 
@@ -110,7 +111,7 @@ def multi_fov_store(tmp_path: Path) -> ExperimentStore:
     for key in ["fov_1", "fov_2"]:
         fov_id = store.add_fov("control", width=64, height=64, pixel_size_um=0.5)
         fov_ids[key] = fov_id
-        seg_id = store.add_segmentation_run(fov_id=fov_id, channel="DAPI", model_name="cyto3")
+        seg_id = store.add_segmentation(f"seg_{key}", "cellular", 64, 64, source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3")
         seg_ids[key] = seg_id
 
         labels = np.zeros((64, 64), dtype=np.int32)
@@ -140,7 +141,7 @@ def multi_fov_store(tmp_path: Path) -> ExperimentStore:
             ))
 
         cell_ids = store.add_cells(cells)
-        store.write_labels(fov_id, labels, seg_id)
+        store.write_labels(labels, seg_id)
         store.write_image(fov_id, "GFP", image)
 
         gfp = store.get_channel("GFP")
@@ -150,6 +151,7 @@ def multi_fov_store(tmp_path: Path) -> ExperimentStore:
             measurements.append(MeasurementRecord(
                 cell_id=cid, channel_id=gfp.id,
                 metric="mean_intensity", value=float(val),
+                segmentation_id=seg_id,
             ))
         store.add_measurements(measurements)
 
@@ -183,10 +185,10 @@ class TestFullPipeline:
         assert grouping.n_groups >= 1
 
         # Step 2: Threshold each group
-        labels = store.read_labels(fov_id, store._test_seg_id)
+        labels = store.read_labels(store._test_seg_id)
         image = store.read_image_numpy(fov_id, "GFP")
 
-        threshold_run_ids = []
+        threshold_ids = []
         for g_idx, tag_name in enumerate(grouping.tag_names):
             group_cells = store.get_cells(condition="control", tags=[tag_name])
             group_cell_ids = group_cells["id"].tolist()
@@ -200,14 +202,14 @@ class TestFullPipeline:
                 cell_ids=group_cell_ids, labels=labels, image=image,
                 threshold_value=threshold_value, group_tag=tag_name,
             )
-            threshold_run_ids.append(result.threshold_run_id)
+            threshold_ids.append(result.threshold_id)
 
-        # Step 3: Analyze particles for the last threshold run
-        all_cells = store.get_cells(fov_id=fov_id)
+        # Step 3: Analyze particles for the last threshold
         pa_result = analyzer.analyze_fov(
-            store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=threshold_run_ids[-1],
-            cell_ids=all_cells["id"].tolist(),
+            store, fov_id=fov_id,
+            threshold_id=threshold_ids[-1],
+            segmentation_id=store._test_seg_id,
+            channel="GFP",
         )
 
         assert isinstance(pa_result, ParticleAnalysisResult)
@@ -228,7 +230,7 @@ class TestFullPipeline:
             channel="GFP", metric="mean_intensity",
         )
 
-        labels = store.read_labels(fov_id, store._test_seg_id)
+        labels = store.read_labels(store._test_seg_id)
         image = store.read_image_numpy(fov_id, "GFP")
 
         # Threshold only the FIRST group, skip the second
@@ -247,14 +249,14 @@ class TestFullPipeline:
 
         # Analyze only the thresholded group
         pa_result = analyzer.analyze_fov(
-            store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=result.threshold_run_id,
-            cell_ids=group_cells["id"].tolist(),
+            store, fov_id=fov_id,
+            threshold_id=result.threshold_id,
+            segmentation_id=store._test_seg_id,
+            channel="GFP",
         )
 
-        # Particles should only be found in the thresholded group's cells
-        for p in pa_result.particles:
-            assert p.cell_id in group_cells["id"].tolist()
+        # Particles should only be in the thresholded FOV
+        assert all(p.fov_id == fov_id for p in pa_result.particles)
 
     def test_particle_label_image_zarr_roundtrip(self, integration_store: ExperimentStore):
         """Particle label images survive zarr write/read cycle."""
@@ -263,7 +265,7 @@ class TestFullPipeline:
         engine = ThresholdEngine()
         analyzer = ParticleAnalyzer(min_particle_area=5)
 
-        labels = store.read_labels(fov_id, store._test_seg_id)
+        labels = store.read_labels(store._test_seg_id)
         image = store.read_image_numpy(fov_id, "GFP")
         all_cells = store.get_cells(fov_id=fov_id)
         cell_ids = all_cells["id"].tolist()
@@ -280,16 +282,17 @@ class TestFullPipeline:
 
         # Analyze
         pa_result = analyzer.analyze_fov(
-            store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=thr_result.threshold_run_id,
-            cell_ids=cell_ids,
+            store, fov_id=fov_id,
+            threshold_id=thr_result.threshold_id,
+            segmentation_id=store._test_seg_id,
+            channel="GFP",
         )
 
         # Write to zarr
-        store.write_particle_labels(fov_id, "GFP", pa_result.particle_label_image, thr_result.threshold_run_id)
+        store.write_particle_labels(pa_result.particle_label_image, thr_result.threshold_id)
 
         # Read back
-        read_back = store.read_particle_labels(fov_id, "GFP", thr_result.threshold_run_id)
+        read_back = store.read_particle_labels(thr_result.threshold_id)
         np.testing.assert_array_equal(read_back, pa_result.particle_label_image)
         assert read_back.dtype == np.int32
 
@@ -304,7 +307,7 @@ class TestReThresholding:
         engine = ThresholdEngine()
         analyzer = ParticleAnalyzer(min_particle_area=5)
 
-        labels = store.read_labels(fov_id, store._test_seg_id)
+        labels = store.read_labels(store._test_seg_id)
         image = store.read_image_numpy(fov_id, "GFP")
         all_cells = store.get_cells(fov_id=fov_id)
         cell_ids = all_cells["id"].tolist()
@@ -320,8 +323,10 @@ class TestReThresholding:
             threshold_value=thresh,
         )
         pa1 = analyzer.analyze_fov(
-            store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=thr1.threshold_run_id, cell_ids=cell_ids,
+            store, fov_id=fov_id,
+            threshold_id=thr1.threshold_id,
+            segmentation_id=store._test_seg_id,
+            channel="GFP",
         )
         store.add_particles(pa1.particles)
         first_count = pa1.total_particles
@@ -333,15 +338,17 @@ class TestReThresholding:
             threshold_value=60000.0,  # Above max pixel value
         )
         pa2 = analyzer.analyze_fov(
-            store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=thr2.threshold_run_id, cell_ids=cell_ids,
+            store, fov_id=fov_id,
+            threshold_id=thr2.threshold_id,
+            segmentation_id=store._test_seg_id,
+            channel="GFP",
         )
 
         # Very high threshold should find zero particles
         assert pa2.total_particles == 0
 
-        # New run creates a new threshold_run_id
-        assert thr2.threshold_run_id != thr1.threshold_run_id
+        # New threshold creates a new threshold_id
+        assert thr2.threshold_id != thr1.threshold_id
 
     def test_regrouping_then_rethreshold(self, integration_store: ExperimentStore):
         """Re-grouping should clean old tags, then re-thresholding works."""
@@ -391,7 +398,7 @@ class TestMultiFovBatch:
                 channel="GFP", metric="mean_intensity",
             )
 
-            labels = store.read_labels(fov_id, seg_id)
+            labels = store.read_labels(seg_id)
             image = store.read_image_numpy(fov_id, "GFP")
 
             all_cells = store.get_cells(fov_id=fov_id)
@@ -409,9 +416,10 @@ class TestMultiFovBatch:
             )
 
             pa_result = analyzer.analyze_fov(
-                store, fov_id=fov_id, channel="GFP",
-                threshold_run_id=thr_result.threshold_run_id,
-                cell_ids=cell_ids,
+                store, fov_id=fov_id,
+                threshold_id=thr_result.threshold_id,
+                segmentation_id=seg_id,
+                channel="GFP",
             )
 
             results_per_fov[key] = pa_result
@@ -422,10 +430,11 @@ class TestMultiFovBatch:
             assert result.total_particles > 0
             assert len(result.summary_measurements) == 12 * 8
 
-        # Results should be independent
-        fov1_particles = {p.cell_id for p in results_per_fov["fov_1"].particles}
-        fov2_particles = {p.cell_id for p in results_per_fov["fov_2"].particles}
-        assert fov1_particles.isdisjoint(fov2_particles)
+        # Results should be independent (particles belong to different FOVs)
+        fov1_fov_ids = {p.fov_id for p in results_per_fov["fov_1"].particles}
+        fov2_fov_ids = {p.fov_id for p in results_per_fov["fov_2"].particles}
+        assert fov1_fov_ids == {fov_ids["fov_1"]}
+        assert fov2_fov_ids == {fov_ids["fov_2"]}
 
 
 class TestEdgeCases:
@@ -438,7 +447,7 @@ class TestEdgeCases:
         engine = ThresholdEngine()
         analyzer = ParticleAnalyzer(min_particle_area=5)
 
-        labels = store.read_labels(fov_id, store._test_seg_id)
+        labels = store.read_labels(store._test_seg_id)
         image = store.read_image_numpy(fov_id, "GFP")
         all_cells = store.get_cells(fov_id=fov_id)
         cell_ids = all_cells["id"].tolist()
@@ -455,9 +464,10 @@ class TestEdgeCases:
         )
 
         pa_result = analyzer.analyze_fov(
-            store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=thr_result.threshold_run_id,
-            cell_ids=cell_ids,
+            store, fov_id=fov_id,
+            threshold_id=thr_result.threshold_id,
+            segmentation_id=store._test_seg_id,
+            channel="GFP",
         )
 
         assert pa_result.cells_analyzed == 30
@@ -470,7 +480,7 @@ class TestEdgeCases:
         engine = ThresholdEngine()
         analyzer = ParticleAnalyzer(min_particle_area=5)
 
-        labels = store.read_labels(fov_id, store._test_seg_id)
+        labels = store.read_labels(store._test_seg_id)
         image = store.read_image_numpy(fov_id, "GFP")
         all_cells = store.get_cells(fov_id=fov_id)
         cell_ids = all_cells["id"].tolist()
@@ -482,9 +492,10 @@ class TestEdgeCases:
         )
 
         pa_result = analyzer.analyze_fov(
-            store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=thr_result.threshold_run_id,
-            cell_ids=cell_ids,
+            store, fov_id=fov_id,
+            threshold_id=thr_result.threshold_id,
+            segmentation_id=store._test_seg_id,
+            channel="GFP",
         )
 
         assert pa_result.total_particles == 0

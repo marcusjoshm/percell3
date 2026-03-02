@@ -37,14 +37,14 @@ class ThresholdResult:
     """Result of a thresholding operation.
 
     Attributes:
-        threshold_run_id: ID of the threshold run in the database.
+        threshold_id: ID of the threshold entity in the database.
         threshold_value: The computed (or manual) threshold value.
         positive_pixels: Number of pixels above the threshold.
         total_pixels: Total number of pixels in the image.
         positive_fraction: Fraction of pixels above the threshold.
     """
 
-    threshold_run_id: int
+    threshold_id: int
     threshold_value: float
     positive_pixels: int
     total_pixels: int
@@ -68,12 +68,16 @@ class ThresholdEngine:
     ) -> ThresholdResult:
         """Apply thresholding to a channel image in a FOV.
 
+        Creates a global threshold entity, writes the binary mask,
+        and triggers auto-measurement.
+
         Args:
             store: Target ExperimentStore.
             fov_id: FOV database ID.
             channel: Channel name to threshold.
             method: Thresholding method ("otsu", "adaptive", "manual", "triangle", "li").
             manual_value: Threshold value (required when method="manual").
+            gaussian_sigma: Optional Gaussian smoothing sigma.
 
         Returns:
             ThresholdResult with threshold value and statistics.
@@ -104,19 +108,26 @@ class ThresholdEngine:
         else:
             mask = image > threshold_value
 
-        # Record threshold run
+        h, w = mask.shape
+
+        # Record threshold as global entity
         parameters = {"method": method, "threshold_value": float(threshold_value)}
         if manual_value is not None:
             parameters["manual_value"] = float(manual_value)
         if gaussian_sigma is not None and gaussian_sigma > 0:
             parameters["gaussian_sigma"] = float(gaussian_sigma)
-        run_id = store.add_threshold_run(
-            fov_id=fov_id, channel=channel, method=method,
+
+        name = store._generate_threshold_name(channel, channel)
+        thr_id = store.add_threshold(
+            name=name, method=method,
+            width=w, height=h,
+            source_fov_id=fov_id, source_channel=channel,
             parameters=parameters,
         )
+        store.update_threshold_value(thr_id, float(threshold_value))
 
         # Write mask to masks.zarr
-        store.write_mask(fov_id, channel, mask.astype(np.uint8), run_id)
+        store.write_mask(mask.astype(np.uint8), thr_id)
 
         # Statistics
         positive_pixels = int(np.sum(mask))
@@ -124,7 +135,7 @@ class ThresholdEngine:
         positive_fraction = positive_pixels / total_pixels if total_pixels > 0 else 0.0
 
         return ThresholdResult(
-            threshold_run_id=run_id,
+            threshold_id=thr_id,
             threshold_value=float(threshold_value),
             positive_pixels=positive_pixels,
             total_pixels=total_pixels,
@@ -146,9 +157,8 @@ class ThresholdEngine:
     ) -> ThresholdResult:
         """Store a threshold result for a group of cells.
 
-        Creates a binary mask by applying the threshold to the group image
-        (image with non-group cells zeroed), records the threshold run,
-        and writes the mask to zarr.
+        Creates a global threshold entity with a binary mask by applying
+        the threshold to the group image (image with non-group cells zeroed).
 
         Args:
             store: Target ExperimentStore.
@@ -160,9 +170,10 @@ class ThresholdEngine:
             threshold_value: Otsu (or manually adjusted) threshold value.
             roi: Optional ROI rectangles used for Otsu computation.
             group_tag: Tag name for this group (stored in parameters).
+            gaussian_sigma: Optional Gaussian smoothing sigma.
 
         Returns:
-            ThresholdResult with run ID and statistics.
+            ThresholdResult with threshold entity ID and statistics.
         """
         from percell3.measure.threshold_viewer import create_group_image
 
@@ -179,7 +190,9 @@ class ThresholdEngine:
         # Create binary mask: threshold applied to full group image (not just ROI)
         mask = (group_image > threshold_value) & cell_mask
 
-        # Record threshold run with parameters
+        h, w = mask.shape
+
+        # Record threshold as global entity
         fov_info = store.get_fov_by_id(fov_id)
         parameters = {
             "method": "otsu",
@@ -194,13 +207,19 @@ class ThresholdEngine:
         if gaussian_sigma is not None and gaussian_sigma > 0:
             parameters["gaussian_sigma"] = float(gaussian_sigma)
 
-        run_id = store.add_threshold_run(
-            fov_id=fov_id, channel=channel, method="otsu",
+        grouping_ch = group_tag or ""
+        name = store._generate_threshold_name(grouping_ch, channel)
+        thr_id = store.add_threshold(
+            name=name, method="otsu",
+            width=w, height=h,
+            source_fov_id=fov_id, source_channel=channel,
+            grouping_channel=grouping_ch or None,
             parameters=parameters,
         )
+        store.update_threshold_value(thr_id, float(threshold_value))
 
         # Write mask
-        store.write_mask(fov_id, channel, mask.astype(np.uint8), run_id)
+        store.write_mask(mask.astype(np.uint8), thr_id)
 
         # Statistics
         positive_pixels = int(np.sum(mask))
@@ -208,7 +227,7 @@ class ThresholdEngine:
         positive_fraction = positive_pixels / total_pixels if total_pixels > 0 else 0.0
 
         return ThresholdResult(
-            threshold_run_id=run_id,
+            threshold_id=thr_id,
             threshold_value=float(threshold_value),
             positive_pixels=positive_pixels,
             total_pixels=total_pixels,

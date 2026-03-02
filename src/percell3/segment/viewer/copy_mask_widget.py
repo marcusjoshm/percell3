@@ -1,4 +1,9 @@
-"""Copy threshold mask dock widget for the napari viewer."""
+"""Assign threshold mask dock widget for the napari viewer.
+
+In the layer-based architecture, "copying" a mask to another FOV is
+actually a fov_config assignment — the same global threshold entity
+is shared by pointing the target FOV's config at it.
+"""
 
 from __future__ import annotations
 
@@ -14,11 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 class CopyMaskWidget:
-    """Dock widget for copying a threshold mask from one FOV to another.
+    """Dock widget for assigning a threshold to another FOV.
 
-    Provides source/target FOV dropdowns, a channel selector, and an Apply
-    button. Useful for applying an existing threshold mask to derived FOVs
-    that share the same geometry.
+    In the layer-based architecture, thresholds are global entities.
+    "Copying" a mask means pointing the target FOV's config at the same
+    threshold entity (with dimension validation).
 
     Args:
         viewer: The napari Viewer instance.
@@ -39,7 +44,6 @@ class CopyMaskWidget:
             QGroupBox,
             QLabel,
             QPushButton,
-            QSpinBox,
             QVBoxLayout,
             QWidget,
         )
@@ -49,9 +53,15 @@ class CopyMaskWidget:
         self._fov_id = fov_id
         self._channel_names = channel_names
 
-        # Build FOV list: {display_name: fov_id}
+        # Build FOV and threshold lists
         fovs = store.get_fovs()
         self._fov_map: dict[str, int] = {f.display_name: f.id for f in fovs}
+
+        thresholds = store.get_thresholds()
+        self._thr_map: dict[str, int] = {
+            f"{t.name} ({t.width}x{t.height})": t.id
+            for t in thresholds
+        }
 
         # --- Build the QWidget ---
         self.widget = QWidget()
@@ -59,23 +69,34 @@ class CopyMaskWidget:
         layout.setSpacing(6)
 
         # Title
-        title = QLabel("Copy Mask")
+        title = QLabel("Assign Threshold")
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(title)
 
-        # --- Source FOV ---
-        src_group = QGroupBox("Source FOV")
-        src_layout = QVBoxLayout()
-        self._source_combo = QComboBox()
-        for name in self._fov_map:
-            self._source_combo.addItem(name)
-        current_fov = store.get_fov_by_id(fov_id)
-        idx = self._source_combo.findText(current_fov.display_name)
-        if idx >= 0:
-            self._source_combo.setCurrentIndex(idx)
-        src_layout.addWidget(self._source_combo)
-        src_group.setLayout(src_layout)
-        layout.addWidget(src_group)
+        # --- Threshold selector ---
+        thr_group = QGroupBox("Threshold")
+        thr_layout = QVBoxLayout()
+        self._thr_combo = QComboBox()
+        for label in self._thr_map:
+            self._thr_combo.addItem(label)
+        thr_layout.addWidget(self._thr_combo)
+        thr_group.setLayout(thr_layout)
+        layout.addWidget(thr_group)
+
+        # --- Segmentation selector ---
+        segs = store.get_segmentations(seg_type="cellular")
+        self._seg_map: dict[str, int] = {
+            f"{s.name} ({s.cell_count or 0} cells)": s.id
+            for s in segs
+        }
+        seg_group = QGroupBox("Active Segmentation")
+        seg_layout = QVBoxLayout()
+        self._seg_combo = QComboBox()
+        for label in self._seg_map:
+            self._seg_combo.addItem(label)
+        seg_layout.addWidget(self._seg_combo)
+        seg_group.setLayout(seg_layout)
+        layout.addWidget(seg_group)
 
         # --- Target FOV ---
         tgt_group = QGroupBox("Target FOV")
@@ -87,28 +108,8 @@ class CopyMaskWidget:
         tgt_group.setLayout(tgt_layout)
         layout.addWidget(tgt_group)
 
-        # --- Channel ---
-        ch_group = QGroupBox("Mask Channel")
-        ch_layout = QVBoxLayout()
-        self._channel_combo = QComboBox()
-        for ch_name in channel_names:
-            self._channel_combo.addItem(ch_name)
-        ch_layout.addWidget(self._channel_combo)
-        ch_group.setLayout(ch_layout)
-        layout.addWidget(ch_group)
-
-        # --- Min particle area ---
-        area_group = QGroupBox("Min Particle Area (px)")
-        area_layout = QVBoxLayout()
-        self._min_area_spin = QSpinBox()
-        self._min_area_spin.setRange(1, 1000)
-        self._min_area_spin.setValue(5)
-        area_layout.addWidget(self._min_area_spin)
-        area_group.setLayout(area_layout)
-        layout.addWidget(area_group)
-
         # --- Apply button ---
-        self._apply_btn = QPushButton("Copy Mask")
+        self._apply_btn = QPushButton("Assign Threshold")
         self._apply_btn.setStyleSheet(
             "QPushButton { padding: 8px; font-weight: bold; }"
         )
@@ -124,35 +125,24 @@ class CopyMaskWidget:
         self.widget.setLayout(layout)
 
     def _on_apply(self) -> None:
-        """Copy mask from source FOV to target FOV."""
-        source_name = self._source_combo.currentText()
+        """Assign the selected threshold to the target FOV via config."""
+        thr_label = self._thr_combo.currentText()
+        seg_label = self._seg_combo.currentText()
         target_name = self._target_combo.currentText()
-        channel = self._channel_combo.currentText()
 
-        source_fov_id = self._fov_map.get(source_name)
+        thr_id = self._thr_map.get(thr_label)
+        seg_id = self._seg_map.get(seg_label)
         target_fov_id = self._fov_map.get(target_name)
 
-        if source_fov_id is None or target_fov_id is None:
-            self._status_label.setText("Invalid FOV selection.")
+        if thr_id is None or seg_id is None or target_fov_id is None:
+            self._status_label.setText("Invalid selection.")
             self._status_label.setStyleSheet("color: red;")
             return
-
-        if source_fov_id == target_fov_id:
-            self._status_label.setText("Source and target must be different FOVs.")
-            self._status_label.setStyleSheet("color: red;")
-            return
-
-        min_area = self._min_area_spin.value()
 
         try:
-            run_id, particle_count = copy_mask_to_fov(
-                self._store, source_fov_id, target_fov_id, channel,
-                min_particle_area=min_area,
+            assign_threshold_to_fov(
+                self._store, thr_id, seg_id, target_fov_id,
             )
-        except KeyError as exc:
-            self._status_label.setText(f"No mask found: {exc}")
-            self._status_label.setStyleSheet("color: red;")
-            return
         except ValueError as exc:
             self._status_label.setText(str(exc))
             self._status_label.setStyleSheet("color: red;")
@@ -160,63 +150,60 @@ class CopyMaskWidget:
         except Exception as exc:
             self._status_label.setText(f"Error: {exc}")
             self._status_label.setStyleSheet("color: red;")
-            logger.error(
-                "Mask copy failed %s → %s (%s): %s",
-                source_name, target_name, channel, exc,
-            )
+            logger.error("Threshold assign failed: %s", exc)
             return
 
         self._status_label.setText(
-            f"Copied {channel} mask from {source_name} to {target_name} "
-            f"({particle_count} particles)"
+            f"Assigned threshold to {target_name}"
         )
         self._status_label.setStyleSheet("color: green;")
         logger.info(
-            "Copied %s mask from FOV %d (%s) to FOV %d (%s), %d particles",
-            channel, source_fov_id, source_name,
-            target_fov_id, target_name, particle_count,
+            "Assigned threshold %d to FOV %d (%s)",
+            thr_id, target_fov_id, target_name,
         )
 
 
-def copy_mask_to_fov(
+def assign_threshold_to_fov(
     store: ExperimentStore,
-    source_fov_id: int,
+    threshold_id: int,
+    segmentation_id: int,
     target_fov_id: int,
-    channel: str,
-    min_particle_area: int = 5,
-) -> tuple[int, int]:
-    """Copy a threshold mask from one FOV to another.
+) -> None:
+    """Assign a global threshold to a FOV via fov_config.
 
-    Delegates to ``store.copy_threshold_to_fov()`` for the mask copy.
-    Particles are deferred to the measurement step — this function
-    returns 0 for particle_count.
+    Validates that dimensions match, then creates a config entry
+    linking the threshold to the segmentation on this FOV.
+    Triggers auto-measurement.
 
     Args:
         store: An open ExperimentStore.
-        source_fov_id: Source FOV database ID (must have a mask for this channel).
+        threshold_id: Global threshold entity ID.
+        segmentation_id: Segmentation to pair with.
         target_fov_id: Target FOV database ID.
-        channel: Channel name whose mask to copy.
-        min_particle_area: Deprecated, ignored. Particles are deferred to measurement.
-
-    Returns:
-        Tuple of (threshold_run_id, particle_count). particle_count is always 0.
 
     Raises:
-        KeyError: If the source FOV has no mask for the given channel.
-        ValueError: If source mask dimensions don't match target FOV.
+        ValueError: If threshold dimensions don't match FOV.
     """
-    # Resolve latest threshold run for source FOV + channel
-    source_thr_runs = store.list_threshold_runs(source_fov_id, channel=channel)
-    if not source_thr_runs:
-        raise KeyError(
-            f"No threshold run for channel '{channel}' on FOV {source_fov_id}"
-        )
-    source_thr_id = source_thr_runs[-1].id
+    thr = store.get_threshold(threshold_id)
+    fov = store.get_fov_by_id(target_fov_id)
 
-    run_id = store.copy_threshold_to_fov(source_thr_id, target_fov_id)
+    if thr.width != fov.width or thr.height != fov.height:
+        raise ValueError(
+            f"Dimension mismatch: threshold is {thr.width}x{thr.height} "
+            f"but FOV '{fov.display_name}' is {fov.width}x{fov.height}"
+        )
+
+    store.set_fov_config_entry(
+        target_fov_id, segmentation_id,
+        threshold_id=threshold_id,
+        scopes=["mask_inside", "mask_outside"],
+    )
+
+    # Trigger auto-measurement for the new config
+    from percell3.measure.auto_measure import on_config_changed
+    on_config_changed(store, target_fov_id)
 
     logger.info(
-        "Copied %s mask from FOV %d to FOV %d (run_id=%d, particles deferred)",
-        channel, source_fov_id, target_fov_id, run_id,
+        "Assigned threshold '%s' (%d) to FOV '%s' (%d) with seg %d",
+        thr.name, threshold_id, fov.display_name, target_fov_id, segmentation_id,
     )
-    return run_id, 0

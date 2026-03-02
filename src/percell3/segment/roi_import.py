@@ -8,43 +8,42 @@ import numpy as np
 
 from percell3.core import ExperimentStore
 from percell3.core.models import FovInfo
-from percell3.segment.label_processor import LabelProcessor
+from percell3.segment.label_processor import extract_cells
 
 
 def store_labels_and_cells(
     store: ExperimentStore,
     labels: np.ndarray,
-    fov_info: FovInfo,
-    run_id: int,
+    fov_id: int,
+    segmentation_id: int,
+    pixel_size_um: float | None = None,
 ) -> int:
-    """Write labels to zarr, extract cells, insert into DB, update run count.
+    """Write labels to zarr, extract cells, insert into DB, update seg count.
 
     This is the shared primitive used by both the napari viewer save-back
     and ``RoiImporter``. Callers are responsible for creating the
-    segmentation run (``store.add_segmentation_run``) beforehand.
+    segmentation entity (``store.add_segmentation``) beforehand.
 
     Args:
         store: An open ExperimentStore.
         labels: 2D int32 label array.
-        fov_info: FOV metadata (used for id and pixel_size_um).
-        run_id: Segmentation run ID (already created).
+        fov_id: FOV database ID.
+        segmentation_id: Segmentation entity ID (already created).
+        pixel_size_um: Physical pixel size for area calculations.
 
     Returns:
         Number of cells extracted and inserted.
     """
-    store.write_labels(fov_info.id, labels, run_id)
+    store.write_labels(labels, segmentation_id)
 
-    # Delete old cells before inserting new ones (prevents duplicates on re-segmentation)
-    store.delete_cells_for_fov(fov_info.id)
+    # Delete old cells for this segmentation before inserting new ones
+    store.delete_cells_for_fov(fov_id)
 
-    processor = LabelProcessor()
-    cells = processor.extract_cells(
-        labels, fov_info.id, run_id, fov_info.pixel_size_um,
-    )
+    cells = extract_cells(labels, fov_id, segmentation_id, pixel_size_um)
     if cells:
         store.add_cells(cells)
 
-    store.update_segmentation_run_cell_count(run_id, len(cells))
+    store.update_segmentation_cell_count(segmentation_id, len(cells))
     return len(cells)
 
 
@@ -66,15 +65,18 @@ class RoiImporter:
     ) -> int:
         """Import a pre-computed label image.
 
+        Creates a global segmentation entity, writes labels to zarr,
+        extracts cells, and triggers auto-measurement.
+
         Args:
             labels: 2D integer array where pixel value = cell ID, 0 = background.
             store: Target ExperimentStore.
             fov_id: FOV database ID.
-            channel: Channel name for segmentation run record.
-            source: Source identifier (stored as model_name in segmentation run).
+            channel: Channel name for the segmentation.
+            source: Source identifier (stored as model_name).
 
         Returns:
-            Segmentation run ID.
+            Segmentation entity ID.
 
         Raises:
             ValueError: If labels is not 2D or has non-integer dtype.
@@ -90,16 +92,27 @@ class RoiImporter:
             )
 
         labels_int32 = np.asarray(labels, dtype=np.int32)
-
         fov_info = store.get_fov_by_id(fov_id)
+        h, w = labels_int32.shape
 
-        run_id = store.add_segmentation_run(
-            fov_id=fov_id, channel=channel, model_name=source,
+        name = store._generate_segmentation_name(source, channel)
+        seg_id = store.add_segmentation(
+            name=name, seg_type="cellular",
+            width=w, height=h,
+            source_fov_id=fov_id, source_channel=channel,
+            model_name=source,
             parameters={"source": source, "imported": True},
         )
 
-        store_labels_and_cells(store, labels_int32, fov_info, run_id)
-        return run_id
+        store_labels_and_cells(
+            store, labels_int32, fov_id, seg_id, fov_info.pixel_size_um,
+        )
+
+        # Trigger auto-measurement
+        from percell3.measure.auto_measure import on_segmentation_created
+        on_segmentation_created(store, seg_id, [fov_id])
+
+        return seg_id
 
     def import_cellpose_seg(
         self,
@@ -121,10 +134,10 @@ class RoiImporter:
             seg_path: Path to the ``_seg.npy`` file.
             store: Target ExperimentStore.
             fov_id: FOV database ID.
-            channel: Channel name for segmentation run record.
+            channel: Channel name for the segmentation.
 
         Returns:
-            Segmentation run ID.
+            Segmentation entity ID.
 
         Raises:
             ValueError: If the file doesn't contain a "masks" key.
@@ -147,8 +160,8 @@ class RoiImporter:
             )
 
         masks = np.asarray(seg_data["masks"], dtype=np.int32)
-
         fov_info = store.get_fov_by_id(fov_id)
+        h, w = masks.shape
 
         params: dict = {"source": "cellpose-gui", "imported": True}
         if "est_diam" in seg_data:
@@ -156,10 +169,20 @@ class RoiImporter:
         if "model_path" in seg_data:
             params["model_path"] = str(seg_data["model_path"])
 
-        run_id = store.add_segmentation_run(
-            fov_id=fov_id, channel=channel, model_name="cellpose-gui",
-            parameters=params,
+        name = store._generate_segmentation_name("cellpose-gui", channel)
+        seg_id = store.add_segmentation(
+            name=name, seg_type="cellular",
+            width=w, height=h,
+            source_fov_id=fov_id, source_channel=channel,
+            model_name="cellpose-gui", parameters=params,
         )
 
-        store_labels_and_cells(store, masks, fov_info, run_id)
-        return run_id
+        store_labels_and_cells(
+            store, masks, fov_id, seg_id, fov_info.pixel_size_um,
+        )
+
+        # Trigger auto-measurement
+        from percell3.measure.auto_measure import on_segmentation_created
+        on_segmentation_created(store, seg_id, [fov_id])
+
+        return seg_id

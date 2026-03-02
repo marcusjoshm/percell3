@@ -433,7 +433,10 @@ class ExperimentStore:
     ) -> str:
         """Generate a unique threshold name like 'thresh_GFP_DAPI_1'."""
         existing = {t.name for t in self.get_thresholds()}
-        parts = list(filter(None, ["thresh", grouping_channel, threshold_channel]))
+        # Sanitize inputs: replace colons with underscores for name validity
+        gc = grouping_channel.replace(":", "_") if grouping_channel else ""
+        tc = threshold_channel.replace(":", "_") if threshold_channel else ""
+        parts = list(filter(None, ["thresh", gc, tc]))
         base = "_".join(parts)
         n = 1
         while True:

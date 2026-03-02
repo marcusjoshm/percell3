@@ -50,14 +50,14 @@ def threshold_store(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP", role="signal")
     store.add_condition("control")
     fov_id = store.add_fov("control", width=64, height=64)
-    seg_id = store.add_segmentation_run(fov_id=fov_id, channel="DAPI", model_name="cyto3")
+    seg_id = store.add_segmentation("seg_test", "cellular", 64, 64, source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3")
 
     # Label image
     labels = np.zeros((64, 64), dtype=np.int32)
     labels[10:30, 10:30] = 1
     labels[25:50, 25:50] = 2
     labels[50:60, 50:60] = 3
-    store.write_labels(fov_id, labels, seg_id)
+    store.write_labels(labels, seg_id)
 
     # Bimodal image
     rng = np.random.default_rng(42)
@@ -190,7 +190,7 @@ class TestThresholdGroup:
         fov_id = threshold_store._test_fov_id
         engine = ThresholdEngine()
 
-        labels = threshold_store.read_labels(fov_id, threshold_store._test_seg_id)
+        labels = threshold_store.read_labels(threshold_store._test_seg_id)
         image = threshold_store.read_image_numpy(fov_id, "GFP")
         cells_df = threshold_store.get_cells(fov_id=fov_id)
         cell_ids = cells_df["id"].tolist()[:2]  # Cells 1 and 2
@@ -201,17 +201,17 @@ class TestThresholdGroup:
             cell_ids=cell_ids,
             labels=labels, image=image,
             threshold_value=100.0,
-            group_tag="group:GFP:mean_intensity:g1",
+            group_tag="group_GFP_mean_intensity_g1",
         )
 
         assert isinstance(result, ThresholdResult)
-        assert result.threshold_run_id >= 1
+        assert result.threshold_id >= 1
         assert result.threshold_value == 100.0
         assert result.positive_pixels > 0
         assert result.total_pixels > 0
 
         # Mask should be stored
-        mask = threshold_store.read_mask(fov_id, "GFP", result.threshold_run_id)
+        mask = threshold_store.read_mask(result.threshold_id)
         assert mask.shape == (64, 64)
 
     def test_mask_only_within_group_cells(self, threshold_store: ExperimentStore):
@@ -219,7 +219,7 @@ class TestThresholdGroup:
         fov_id = threshold_store._test_fov_id
         engine = ThresholdEngine()
 
-        labels = threshold_store.read_labels(fov_id, threshold_store._test_seg_id)
+        labels = threshold_store.read_labels(threshold_store._test_seg_id)
         image = threshold_store.read_image_numpy(fov_id, "GFP")
         cells_df = threshold_store.get_cells(fov_id=fov_id)
         # Only cell 2 (in the bright region)
@@ -233,7 +233,7 @@ class TestThresholdGroup:
             threshold_value=50.0,
         )
 
-        mask = threshold_store.read_mask(fov_id, "GFP", result.threshold_run_id)
+        mask = threshold_store.read_mask(result.threshold_id)
         # No positive pixels outside cell 2
         cell2_area = labels == 2
         assert np.all(mask[~cell2_area] == 0)
@@ -241,7 +241,7 @@ class TestThresholdGroup:
     def test_roi_stored_in_parameters(self, threshold_store: ExperimentStore):
         fov_id = threshold_store._test_fov_id
         engine = ThresholdEngine()
-        labels = threshold_store.read_labels(fov_id, threshold_store._test_seg_id)
+        labels = threshold_store.read_labels(threshold_store._test_seg_id)
         image = threshold_store.read_image_numpy(fov_id, "GFP")
         cells_df = threshold_store.get_cells(fov_id=fov_id)
 
@@ -255,7 +255,7 @@ class TestThresholdGroup:
             roi=roi,
         )
 
-        runs = threshold_store.get_threshold_runs(fov_id=fov_id)
+        runs = threshold_store.get_thresholds()
         assert len(runs) >= 1
         latest = runs[-1]
         assert latest.parameters["roi"] == [[20, 20, 50, 50]]

@@ -121,7 +121,7 @@ def _launch(
     _load_channel_layers(viewer, store, fov_id, selected_channels)
 
     # --- Load labels ---
-    original_hash, parent_run_id, seg_channel = _load_label_layer(
+    original_hash, active_seg_id, seg_channel = _load_label_layer(
         viewer, store, fov_id, selected_channels,
     )
 
@@ -193,10 +193,10 @@ def _launch(
 
     # Labels changed (or created from scratch)
     channel_name = seg_channel or selected_channels[0].name
-    run_id = save_edited_labels(
-        store, fov_info, edited_labels, parent_run_id, channel_name,
+    seg_id = save_edited_labels(
+        store, fov_info, edited_labels, active_seg_id, channel_name,
     )
-    return run_id
+    return seg_id
 
 
 def _load_channel_layers(
@@ -224,32 +224,44 @@ def _load_label_layer(
     fov_id: int,
     channels: list[ChannelConfig],
 ) -> tuple[str | None, int | None, str | None]:
-    """Load the most recent label layer, or create an empty one.
+    """Load the active segmentation label layer from fov_config.
+
+    Looks up the fov_config for the most recent cellular segmentation
+    assigned to this FOV. If none exists, creates an empty labels layer
+    for painting from scratch.
 
     Returns:
-        (original_labels_hash, parent_run_id, segmentation_channel_name)
+        (original_labels_hash, segmentation_id, segmentation_channel_name)
         The hash is a SHA-256 hex digest used for change detection without
         keeping a full copy of the label array in memory.
     """
-    runs = store.list_segmentation_runs(fov_id)
-
-    # Pick the most recent run (highest id)
-    parent_run_id: int | None = None
+    # Find active cellular segmentation from fov_config
+    active_seg_id: int | None = None
     seg_channel: str | None = None
-    if runs:
-        latest = max(runs, key=lambda r: r.id)
-        parent_run_id = latest.id
-        seg_channel = latest.channel
+
+    config_entries = store.get_fov_config(fov_id)
+    for entry in config_entries:
+        try:
+            seg = store.get_segmentation(entry.segmentation_id)
+            if seg.seg_type == "cellular":
+                active_seg_id = seg.id
+                seg_channel = seg.source_channel
+                break
+        except Exception:
+            continue
 
     # Try to read existing labels
     original_hash: str | None = None
-    try:
-        labels = store.read_labels(fov_id, parent_run_id)
-        original_hash = hashlib.sha256(labels.tobytes()).hexdigest()
-        viewer.add_labels(labels, name="segmentation", opacity=0.5)
-    except KeyError:
-        # No labels exist in zarr — create empty layer for painting from scratch
-        # Get shape from the first image layer
+    if active_seg_id is not None:
+        try:
+            labels = store.read_labels(active_seg_id)
+            original_hash = hashlib.sha256(labels.tobytes()).hexdigest()
+            viewer.add_labels(labels, name="segmentation", opacity=0.5)
+        except KeyError:
+            active_seg_id = None  # Fall through to empty layer
+
+    if active_seg_id is None:
+        # No labels exist — create empty layer for painting from scratch
         if not viewer.layers:
             raise RuntimeError(
                 "Cannot create empty label layer: no image layers loaded."
@@ -258,7 +270,7 @@ def _load_label_layer(
         empty = np.zeros(shape, dtype=np.int32)
         viewer.add_labels(empty, name="segmentation", opacity=0.5)
 
-    return original_hash, parent_run_id, seg_channel
+    return original_hash, active_seg_id, seg_channel
 
 
 def _load_mask_layers(
@@ -266,55 +278,62 @@ def _load_mask_layers(
     store: ExperimentStore,
     fov_id: int,
 ) -> None:
-    """Load threshold mask layers for channels that have threshold runs."""
-    runs = store.get_threshold_runs(fov_id=fov_id)
-    if not runs:
+    """Load threshold mask layers from fov_config entries."""
+    config_entries = store.get_fov_config(fov_id)
+    if not config_entries:
         return
 
-    # One mask per unique channel (use the latest run for each)
-    channel_runs: dict[str, object] = {}
-    for run in runs:
-        channel_runs[run.channel] = run
+    # Collect unique threshold IDs from config
+    loaded_thresholds: set[int] = set()
+    for entry in config_entries:
+        if entry.threshold_id is None:
+            continue
+        if entry.threshold_id in loaded_thresholds:
+            continue
 
-    for channel, run in channel_runs.items():
         try:
-            mask = store.read_mask(fov_id, channel, run.id)
-        except KeyError:
+            thr = store.get_threshold(entry.threshold_id)
+            mask = store.read_mask(entry.threshold_id)
+        except (KeyError, Exception):
             continue
 
         viewer.add_image(
             mask,
-            name=f"{channel} mask",
+            name=f"{thr.name} mask",
             colormap="magenta",
             blending="additive",
             opacity=0.4,
             visible=False,
         )
-        logger.info("Loaded threshold mask for channel '%s'", channel)
+        loaded_thresholds.add(entry.threshold_id)
+        logger.info("Loaded threshold mask '%s'", thr.name)
 
 
 def save_edited_labels(
     store: ExperimentStore,
     fov_info: FovInfo,
     edited_labels: np.ndarray,
-    parent_run_id: int | None,
+    segmentation_id: int | None,
     channel: str,
 ) -> int:
     """Save edited labels back to ExperimentStore.
 
-    Creates a new segmentation run, writes labels to zarr, extracts cells,
-    and updates the run's cell count. This is the public API for saving
-    labels — usable from both the napari viewer and headless scripts.
+    If a segmentation entity exists (segmentation_id is not None), overwrites
+    it in place and triggers ``on_labels_edited()`` which propagates
+    measurement updates to all FOVs referencing this segmentation.
+
+    If no segmentation entity exists (painting from scratch), creates a new
+    global segmentation entity.
 
     Args:
         store: An open ExperimentStore.
         fov_info: FOV metadata (used for id and pixel_size_um).
         edited_labels: 2D int32 label array.
-        parent_run_id: ID of the parent segmentation run (or None).
-        channel: Channel name for the segmentation run.
+        segmentation_id: Existing segmentation to overwrite (or None).
+        channel: Channel name for the segmentation.
 
     Returns:
-        The new segmentation run ID.
+        The segmentation entity ID.
 
     Raises:
         ValueError: If labels are not 2D or contain negative values.
@@ -331,36 +350,72 @@ def save_edited_labels(
         raise ValueError("Labels contain negative values.")
 
     labels_int32 = np.asarray(edited_labels, dtype=np.int32)
+    h, w = labels_int32.shape
 
-    # Create segmentation run with provenance
-    parameters = {
-        "method": "napari_manual_edit",
-        "parent_run_id": parent_run_id,
-        "channel": channel,
-    }
-    run_id = store.add_segmentation_run(
-        fov_id=fov_info.id, channel=channel,
-        model_name="napari_edit", parameters=parameters,
-    )
+    if segmentation_id is not None:
+        # Overwrite existing segmentation in place
+        try:
+            old_labels = store.read_labels(segmentation_id)
+        except KeyError:
+            old_labels = None
 
-    # Write labels, extract cells, update count
-    try:
-        cell_count = store_labels_and_cells(
-            store, labels_int32, fov_info, run_id,
+        try:
+            cell_count = store_labels_and_cells(
+                store, labels_int32, fov_info.id, segmentation_id,
+                fov_info.pixel_size_um,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Cell extraction failed after label save: %s. "
+                "Labels are preserved; re-extract manually.",
+                exc,
+            )
+            cell_count = 0
+
+        # Trigger measurement propagation
+        if old_labels is not None:
+            try:
+                from percell3.measure.auto_measure import on_labels_edited
+                on_labels_edited(store, segmentation_id, old_labels, labels_int32)
+            except Exception as exc:
+                logger.warning("Auto-measurement after edit failed: %s", exc)
+
+    else:
+        # Create new segmentation entity (painting from scratch)
+        name = store._generate_segmentation_name("napari_edit", channel)
+        segmentation_id = store.add_segmentation(
+            name=name, seg_type="cellular",
+            width=w, height=h,
+            source_fov_id=fov_info.id, source_channel=channel,
+            model_name="napari_edit",
+            parameters={"method": "napari_manual_edit"},
         )
-    except Exception as exc:
-        logger.warning(
-            "Cell extraction failed after label save: %s. "
-            "Labels are preserved; re-extract manually.",
-            exc,
-        )
-        cell_count = 0
+
+        try:
+            cell_count = store_labels_and_cells(
+                store, labels_int32, fov_info.id, segmentation_id,
+                fov_info.pixel_size_um,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Cell extraction failed after label save: %s. "
+                "Labels are preserved; re-extract manually.",
+                exc,
+            )
+            cell_count = 0
+
+        # Trigger auto-measurement for the new segmentation
+        try:
+            from percell3.measure.auto_measure import on_segmentation_created
+            on_segmentation_created(store, segmentation_id, [fov_info.id])
+        except Exception as exc:
+            logger.warning("Auto-measurement for new seg failed: %s", exc)
 
     if cell_count == 0:
         logger.warning("All labels erased — saved empty label image with 0 cells.")
 
     logger.info(
-        "Saved %d cells from napari edit (run_id=%d, parent=%s)",
-        cell_count, run_id, parent_run_id,
+        "Saved %d cells from napari edit (segmentation_id=%d)",
+        cell_count, segmentation_id,
     )
-    return run_id
+    return segmentation_id

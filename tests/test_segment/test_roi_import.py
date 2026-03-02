@@ -64,7 +64,7 @@ class TestImportLabels:
 
         run_id = importer.import_labels(labels, store, store._test_fov_id, channel="manual")
 
-        stored = store.read_labels(store._test_fov_id, run_id)
+        stored = store.read_labels(run_id)
         np.testing.assert_array_equal(stored, labels)
 
     def test_non_integer_dtype_raises(
@@ -124,7 +124,7 @@ class TestImportLabels:
             channel="manual", source="imagej",
         )
 
-        runs = store.get_segmentation_runs()
+        runs = store.get_segmentations()
         run = [r for r in runs if r.id == run_id][0]
         assert run.model_name == "imagej"
 
@@ -143,7 +143,7 @@ class TestImportLabels:
             labels, store, store._test_fov_id, channel="manual"
         )
 
-        runs = store.get_segmentation_runs()
+        runs = store.get_segmentations()
         run = [r for r in runs if r.id == run_id][0]
         assert run.cell_count == 2
 
@@ -160,8 +160,8 @@ class TestImportLabels:
         with pytest.raises(FovNotFoundError):
             importer.import_labels(labels, store, 9999, channel="manual")
 
-        # No segmentation runs should have been created
-        runs = store.get_segmentation_runs()
+        # No cellular segmentation should have been created
+        runs = store.get_segmentations(seg_type="cellular")
         assert len(runs) == 0
 
 
@@ -215,7 +215,7 @@ class TestImportCellposeSeg:
             seg_path, store, store._test_fov_id, channel="manual"
         )
 
-        runs = store.get_segmentation_runs()
+        runs = store.get_segmentations()
         run = [r for r in runs if r.id == run_id][0]
         assert run.model_name == "cellpose-gui"
         assert run.parameters["diameter"] == 45.0
@@ -267,6 +267,6 @@ class TestImportCellposeSeg:
                 seg_path, store, 9999, channel="manual"
             )
 
-        # No segmentation runs should have been created
-        runs = store.get_segmentation_runs()
+        # No cellular segmentation should have been created
+        runs = store.get_segmentations(seg_type="cellular")
         assert len(runs) == 0

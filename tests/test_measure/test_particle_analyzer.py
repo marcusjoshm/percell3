@@ -30,14 +30,17 @@ def particle_experiment(tmp_path: Path) -> ExperimentStore:
     store.add_channel("GFP", role="signal")
     store.add_condition("control")
     fov_id = store.add_fov("control", width=64, height=64, pixel_size_um=0.5)
-    seg_id = store.add_segmentation_run(fov_id=fov_id, channel="DAPI", model_name="cyto3")
+    seg_id = store.add_segmentation(
+        "seg_particle", "cellular", 64, 64,
+        source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
+    )
 
     # Label image
     labels = np.zeros((64, 64), dtype=np.int32)
     labels[5:25, 5:25] = 1    # Cell 1
     labels[35:55, 35:55] = 2  # Cell 2
     labels[5:15, 40:50] = 3   # Cell 3
-    store.write_labels(fov_id, labels, seg_id)
+    store.write_labels(labels, seg_id)
 
     # Channel image: background=20, blobs=200
     image = np.full((64, 64), 20, dtype=np.uint16)
@@ -54,8 +57,11 @@ def particle_experiment(tmp_path: Path) -> ExperimentStore:
     mask[8:14, 8:14] = True   # Blob A
     mask[16:22, 16:22] = True # Blob B
     mask[40:48, 40:48] = True # Blob in cell 2
-    thr_id = store.add_threshold_run(fov_id=fov_id, channel="GFP", method="otsu")
-    store.write_mask(fov_id, "GFP", mask.astype(np.uint8), thr_id)
+    thr_id = store.add_threshold(
+        "thresh_particle", "otsu", 64, 64,
+        source_fov_id=fov_id, source_channel="GFP",
+    )
+    store.write_mask(mask.astype(np.uint8), thr_id)
 
     # Cells
     cells = [
@@ -97,8 +103,8 @@ class TestParticleAnalyzer:
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=thr_id, cell_ids=cell_ids,
-            segmentation_run_id=store._test_seg_id,
+            threshold_id=thr_id,
+            segmentation_id=store._test_seg_id,
         )
 
         assert isinstance(result, ParticleAnalysisResult)
@@ -112,13 +118,13 @@ class TestParticleAnalyzer:
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
-            segmentation_run_id=store._test_seg_id,
+            threshold_id=store._test_thr_id,
+            segmentation_id=store._test_seg_id,
         )
 
         # Check particle attributes
         for p in result.particles:
-            assert p.threshold_run_id == store._test_thr_id
+            assert p.threshold_id == store._test_thr_id
             assert p.area_pixels > 0
             assert p.centroid_x > 0
             assert p.centroid_y > 0
@@ -134,8 +140,8 @@ class TestParticleAnalyzer:
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
-            segmentation_run_id=store._test_seg_id,
+            threshold_id=store._test_thr_id,
+            segmentation_id=store._test_seg_id,
         )
 
         label_vals = [p.label_value for p in result.particles]
@@ -147,8 +153,8 @@ class TestParticleAnalyzer:
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
-            segmentation_run_id=store._test_seg_id,
+            threshold_id=store._test_thr_id,
+            segmentation_id=store._test_seg_id,
         )
 
         pli = result.particle_label_image
@@ -164,8 +170,8 @@ class TestParticleAnalyzer:
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
-            segmentation_run_id=store._test_seg_id,
+            threshold_id=store._test_thr_id,
+            segmentation_id=store._test_seg_id,
         )
 
         # 3 cells * 8 metrics = 24 summary measurements
@@ -183,8 +189,8 @@ class TestParticleAnalyzer:
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=store._test_thr_id, cell_ids=cell_ids,
-            segmentation_run_id=store._test_seg_id,
+            threshold_id=store._test_thr_id,
+            segmentation_id=store._test_seg_id,
         )
 
         # Find summary for cell 3
@@ -201,8 +207,8 @@ class TestParticleAnalyzer:
         analyzer = ParticleAnalyzer(min_particle_area=100)
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
-            segmentation_run_id=store._test_seg_id,
+            threshold_id=store._test_thr_id,
+            segmentation_id=store._test_seg_id,
         )
         assert result.total_particles == 0
 
@@ -214,14 +220,21 @@ class TestParticleAnalyzer:
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=store._test_thr_id, cell_ids=cell_ids,
-            segmentation_run_id=store._test_seg_id,
+            threshold_id=store._test_thr_id,
+            segmentation_id=store._test_seg_id,
         )
 
-        cell1_particles = [p for p in result.particles if p.cell_id == cell_ids[0]]
-        cell2_particles = [p for p in result.particles if p.cell_id == cell_ids[1]]
-        assert len(cell1_particles) == 2
-        assert len(cell2_particles) == 1
+        # Check per-cell particle counts via summary measurements
+        cell1_count = next(
+            m for m in result.summary_measurements
+            if m.cell_id == cell_ids[0] and m.metric == "particle_count"
+        )
+        cell2_count = next(
+            m for m in result.summary_measurements
+            if m.cell_id == cell_ids[1] and m.metric == "particle_count"
+        )
+        assert cell1_count.value == 2
+        assert cell2_count.value == 1
 
     def test_coverage_fraction(self, particle_experiment: ExperimentStore):
         """particle_coverage_fraction should be total_particle_area / cell_area."""
@@ -231,8 +244,8 @@ class TestParticleAnalyzer:
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=store._test_thr_id, cell_ids=cell_ids,
-            segmentation_run_id=store._test_seg_id,
+            threshold_id=store._test_thr_id,
+            segmentation_id=store._test_seg_id,
         )
 
         # Cell 1: area=400 (20x20), 2 blobs of ~36 pixels each
@@ -252,8 +265,8 @@ class TestParticleAnalyzer:
         analyzer = ParticleAnalyzer(min_particle_area=5)
         result = analyzer.analyze_fov(
             store, fov_id=fov_id, channel="GFP",
-            threshold_run_id=store._test_thr_id, cell_ids=store._test_cell_ids,
-            segmentation_run_id=store._test_seg_id,
+            threshold_id=store._test_thr_id,
+            segmentation_id=store._test_seg_id,
         )
 
         for p in result.particles:

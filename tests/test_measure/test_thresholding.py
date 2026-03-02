@@ -42,7 +42,7 @@ class TestThresholdEngine:
             channel="GFP", method="otsu",
         )
         assert isinstance(result, ThresholdResult)
-        assert result.threshold_run_id >= 1
+        assert result.threshold_id >= 1
         # Threshold should be between background (~20) and foreground (~200)
         assert 20 < result.threshold_value < 200
         assert result.positive_pixels > 0
@@ -122,7 +122,7 @@ class TestThresholdEngine:
             threshold_experiment, fov_id=fov_id,
             channel="GFP", method="otsu",
         )
-        mask = threshold_experiment.read_mask(fov_id, "GFP", result.threshold_run_id)
+        mask = threshold_experiment.read_mask(result.threshold_id)
         assert mask.shape == (64, 64)
         assert mask.dtype == np.uint8
         # Mask values may be 0/1 or 0/255 depending on zarr write/read roundtrip
@@ -137,7 +137,7 @@ class TestThresholdEngine:
             threshold_experiment, fov_id=fov_id,
             channel="GFP", method="otsu",
         )
-        assert result.threshold_run_id >= 1
+        assert result.threshold_id >= 1
 
     def test_supported_methods_constant(self):
         """SUPPORTED_METHODS should contain all 5 methods."""
@@ -211,5 +211,5 @@ class TestGaussianSmoothing:
             threshold_experiment, fov_id=fov_id,
             channel="GFP", method="otsu", gaussian_sigma=1.7,
         )
-        run = threshold_experiment.get_threshold_run(result.threshold_run_id)
-        assert run.parameters["gaussian_sigma"] == pytest.approx(1.7)
+        thr = threshold_experiment.get_threshold(result.threshold_id)
+        assert thr.parameters["gaussian_sigma"] == pytest.approx(1.7)

@@ -1,4 +1,4 @@
-"""SegmentationEngine — pipeline orchestration for segmentation runs."""
+"""SegmentationEngine — pipeline orchestration for segmentation batches."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from percell3.segment.base_segmenter import (
 )
 from percell3.segment.label_processor import (
     LabelProcessor,
+    extract_cells,
     filter_edge_cells,
     filter_small_cells,
 )
@@ -25,11 +26,11 @@ logger = logging.getLogger(__name__)
 
 
 class SegmentationEngine:
-    """Orchestrates a full segmentation run across experiment FOVs.
+    """Orchestrates a full segmentation batch across experiment FOVs.
 
-    Reads images from ExperimentStore, runs segmentation via a
-    ``BaseSegmenter`` backend, writes label images to ``labels.zarr``,
-    and populates the ``cells`` table with extracted cell properties.
+    Creates one global segmentation entity per FOV, writes label images
+    to ``labels.zarr``, populates the ``cells`` table, and triggers
+    auto-measurement via the auto_measure pipeline.
 
     Args:
         segmenter: Segmentation backend. If None, a ``CellposeAdapter``
@@ -53,6 +54,9 @@ class SegmentationEngine:
         **kwargs: object,
     ) -> SegmentationResult:
         """Run segmentation on experiment FOVs.
+
+        Creates one global segmentation entity per FOV, writes labels,
+        extracts cells, and triggers auto-measurement.
 
         Args:
             store: Target ExperimentStore.
@@ -114,24 +118,14 @@ class SegmentationEngine:
                 f"condition={condition!r}, fovs={fovs!r}"
             )
 
-        # 5. Process each FOV (one at a time for memory streaming)
-        processor = LabelProcessor()
+        # 5. Process each FOV (one global segmentation per FOV)
         total_cells = 0
         fovs_processed = 0
         total = len(all_fovs)
-        last_run_id: int | None = None
+        last_seg_id: int | None = None
 
         for i, fov_info in enumerate(all_fovs):
             try:
-                # Create per-FOV segmentation run
-                run_id = store.add_segmentation_run(
-                    fov_id=fov_info.id,
-                    channel=channel,
-                    model_name=params.model_name,
-                    parameters=params.to_dict(),
-                )
-                last_run_id = run_id
-
                 # Read image
                 image = store.read_image_numpy(fov_info.id, channel)
 
@@ -158,23 +152,48 @@ class SegmentationEngine:
                             n_small, params.min_area, fov_info.display_name,
                         )
 
+                h, w = labels.shape
+
+                # Create one global segmentation entity per FOV
+                name = store._generate_segmentation_name(
+                    params.model_name, channel,
+                )
+                seg_id = store.add_segmentation(
+                    name=name, seg_type="cellular",
+                    width=w, height=h,
+                    source_fov_id=fov_info.id, source_channel=channel,
+                    model_name=params.model_name,
+                    parameters=params.to_dict(),
+                )
+                last_seg_id = seg_id
+
                 # Write labels to zarr
-                store.write_labels(fov_info.id, labels, run_id)
+                store.write_labels(labels, seg_id)
 
                 # Extract cell properties
-                cells = processor.extract_cells(
+                cells = extract_cells(
                     labels,
                     fov_info.id,
-                    run_id,
+                    seg_id,
                     fov_info.pixel_size_um,
                 )
 
-                # Insert cells into DB (new run = new cells; old runs untouched)
+                # Insert cells into DB
                 if cells:
                     store.add_cells(cells)
 
-                # Update cell count for this run
-                store.update_segmentation_run_cell_count(run_id, len(cells))
+                # Update cell count
+                store.update_segmentation_cell_count(seg_id, len(cells))
+
+                # Trigger auto-measurement
+                try:
+                    from percell3.measure.auto_measure import on_segmentation_created
+                    on_segmentation_created(store, seg_id, [fov_info.id])
+                except Exception as exc:
+                    logger.warning(
+                        "Auto-measurement failed for FOV %s: %s",
+                        fov_info.display_name, exc,
+                    )
 
                 total_cells += len(cells)
                 fovs_processed += 1
@@ -182,7 +201,7 @@ class SegmentationEngine:
                 fov_stats.append({
                     "fov": fov_info.display_name,
                     "cell_count": len(cells),
-                    "run_id": run_id,
+                    "segmentation_id": seg_id,
                     "status": "ok",
                 })
 
@@ -214,7 +233,7 @@ class SegmentationEngine:
         elapsed = time.monotonic() - start
 
         return SegmentationResult(
-            run_id=last_run_id or 0,
+            run_id=last_seg_id or 0,
             cell_count=total_cells,
             fovs_processed=fovs_processed,
             warnings=warnings,

@@ -1,4 +1,9 @@
-"""Copy segmentation labels dock widget for the napari viewer."""
+"""Assign segmentation dock widget for the napari viewer.
+
+In the layer-based architecture, "copying" labels to another FOV is
+actually a fov_config assignment — the same global segmentation entity
+is shared by pointing the target FOV's config at it.
+"""
 
 from __future__ import annotations
 
@@ -14,11 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 class CopyLabelsWidget:
-    """Dock widget for copying segmentation labels from one FOV to another.
+    """Dock widget for assigning a segmentation to another FOV.
 
-    Provides source/target FOV dropdowns, a channel selector, and an Apply
-    button. Useful for applying an existing segmentation to derived FOVs
-    (``bg_sub_*``, ``condensed_phase_*``) that share the same geometry.
+    In the layer-based architecture, segmentations are global entities.
+    "Copying" labels means pointing the target FOV's config at the same
+    segmentation entity (with dimension validation).
 
     Args:
         viewer: The napari Viewer instance.
@@ -48,9 +53,15 @@ class CopyLabelsWidget:
         self._fov_id = fov_id
         self._channel_names = channel_names
 
-        # Build FOV list: {display_name: fov_id}
+        # Build FOV list and segmentation list
         fovs = store.get_fovs()
         self._fov_map: dict[str, int] = {f.display_name: f.id for f in fovs}
+
+        segs = store.get_segmentations(seg_type="cellular")
+        self._seg_map: dict[str, int] = {
+            f"{s.name} ({s.cell_count or 0} cells, {s.width}x{s.height})": s.id
+            for s in segs
+        }
 
         # --- Build the QWidget ---
         self.widget = QWidget()
@@ -58,24 +69,19 @@ class CopyLabelsWidget:
         layout.setSpacing(6)
 
         # Title
-        title = QLabel("Copy Labels")
+        title = QLabel("Assign Segmentation")
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(title)
 
-        # --- Source FOV ---
-        src_group = QGroupBox("Source FOV")
-        src_layout = QVBoxLayout()
-        self._source_combo = QComboBox()
-        for name in self._fov_map:
-            self._source_combo.addItem(name)
-        # Default to current FOV
-        current_fov = store.get_fov_by_id(fov_id)
-        idx = self._source_combo.findText(current_fov.display_name)
-        if idx >= 0:
-            self._source_combo.setCurrentIndex(idx)
-        src_layout.addWidget(self._source_combo)
-        src_group.setLayout(src_layout)
-        layout.addWidget(src_group)
+        # --- Segmentation selector ---
+        seg_group = QGroupBox("Segmentation")
+        seg_layout = QVBoxLayout()
+        self._seg_combo = QComboBox()
+        for label in self._seg_map:
+            self._seg_combo.addItem(label)
+        seg_layout.addWidget(self._seg_combo)
+        seg_group.setLayout(seg_layout)
+        layout.addWidget(seg_group)
 
         # --- Target FOV ---
         tgt_group = QGroupBox("Target FOV")
@@ -87,18 +93,8 @@ class CopyLabelsWidget:
         tgt_group.setLayout(tgt_layout)
         layout.addWidget(tgt_group)
 
-        # --- Channel ---
-        ch_group = QGroupBox("Segmentation Channel")
-        ch_layout = QVBoxLayout()
-        self._channel_combo = QComboBox()
-        for ch_name in channel_names:
-            self._channel_combo.addItem(ch_name)
-        ch_layout.addWidget(self._channel_combo)
-        ch_group.setLayout(ch_layout)
-        layout.addWidget(ch_group)
-
         # --- Apply button ---
-        self._apply_btn = QPushButton("Copy Labels")
+        self._apply_btn = QPushButton("Assign Segmentation")
         self._apply_btn.setStyleSheet(
             "QPushButton { padding: 8px; font-weight: bold; }"
         )
@@ -114,32 +110,20 @@ class CopyLabelsWidget:
         self.widget.setLayout(layout)
 
     def _on_apply(self) -> None:
-        """Copy labels from source FOV to target FOV."""
-        source_name = self._source_combo.currentText()
+        """Assign the selected segmentation to the target FOV via config."""
+        seg_label = self._seg_combo.currentText()
         target_name = self._target_combo.currentText()
-        channel = self._channel_combo.currentText()
 
-        source_fov_id = self._fov_map.get(source_name)
+        seg_id = self._seg_map.get(seg_label)
         target_fov_id = self._fov_map.get(target_name)
 
-        if source_fov_id is None or target_fov_id is None:
-            self._status_label.setText("Invalid FOV selection.")
-            self._status_label.setStyleSheet("color: red;")
-            return
-
-        if source_fov_id == target_fov_id:
-            self._status_label.setText("Source and target must be different FOVs.")
+        if seg_id is None or target_fov_id is None:
+            self._status_label.setText("Invalid selection.")
             self._status_label.setStyleSheet("color: red;")
             return
 
         try:
-            run_id, cell_count = copy_labels_to_fov(
-                self._store, source_fov_id, target_fov_id, channel,
-            )
-        except KeyError as exc:
-            self._status_label.setText(f"No labels found: {exc}")
-            self._status_label.setStyleSheet("color: red;")
-            return
+            assign_segmentation_to_fov(self._store, seg_id, target_fov_id)
         except ValueError as exc:
             self._status_label.setText(str(exc))
             self._status_label.setStyleSheet("color: red;")
@@ -148,56 +132,54 @@ class CopyLabelsWidget:
             self._status_label.setText(f"Error: {exc}")
             self._status_label.setStyleSheet("color: red;")
             logger.error(
-                "Label copy failed %s → %s: %s", source_name, target_name, exc,
+                "Segmentation assign failed: %s", exc,
             )
             return
 
         self._status_label.setText(
-            f"Copied {cell_count} cells from {source_name} to {target_name}"
+            f"Assigned segmentation to {target_name}"
         )
         self._status_label.setStyleSheet("color: green;")
         logger.info(
-            "Copied %d cells from FOV %d (%s) to FOV %d (%s), run_id=%d",
-            cell_count, source_fov_id, source_name,
-            target_fov_id, target_name, run_id,
+            "Assigned segmentation %d to FOV %d (%s)",
+            seg_id, target_fov_id, target_name,
         )
 
 
-def copy_labels_to_fov(
+def assign_segmentation_to_fov(
     store: ExperimentStore,
-    source_fov_id: int,
+    segmentation_id: int,
     target_fov_id: int,
-    channel: str,
-) -> tuple[int, int]:
-    """Copy segmentation labels from one FOV to another.
+) -> None:
+    """Assign a global segmentation to a FOV via fov_config.
 
-    Delegates to ``store.copy_segmentation_to_fov()``.
+    Validates that dimensions match, then creates a config entry.
+    Triggers auto-measurement for the new config.
 
     Args:
         store: An open ExperimentStore.
-        source_fov_id: Source FOV database ID (must have labels).
+        segmentation_id: Global segmentation entity ID.
         target_fov_id: Target FOV database ID.
-        channel: Channel name (used to resolve the source run).
-
-    Returns:
-        Tuple of (segmentation_run_id, cell_count).
 
     Raises:
-        KeyError: If the source FOV has no segmentation runs.
-        ValueError: If source label dimensions don't match target FOV.
+        ValueError: If segmentation dimensions don't match FOV.
     """
-    # Resolve latest segmentation run for source FOV
-    src_seg_runs = store.list_segmentation_runs(source_fov_id)
-    if not src_seg_runs:
-        raise KeyError(f"No segmentation runs for source FOV {source_fov_id}")
-    src_seg_run_id = src_seg_runs[-1].id
+    seg = store.get_segmentation(segmentation_id)
+    fov = store.get_fov_by_id(target_fov_id)
 
-    run_id, cell_count = store.copy_segmentation_to_fov(
-        src_seg_run_id, target_fov_id,
-    )
+    if seg.width != fov.width or seg.height != fov.height:
+        raise ValueError(
+            f"Dimension mismatch: segmentation is {seg.width}x{seg.height} "
+            f"but FOV '{fov.display_name}' is {fov.width}x{fov.height}"
+        )
+
+    store.set_fov_config_entry(target_fov_id, segmentation_id)
+
+    # Trigger auto-measurement for the new config
+    from percell3.measure.auto_measure import on_config_changed
+    on_config_changed(store, target_fov_id)
 
     logger.info(
-        "Copied %d cells from FOV %d to FOV %d (run_id=%d)",
-        cell_count, source_fov_id, target_fov_id, run_id,
+        "Assigned segmentation '%s' (%d) to FOV '%s' (%d)",
+        seg.name, segmentation_id, fov.display_name, target_fov_id,
     )
-    return run_id, cell_count

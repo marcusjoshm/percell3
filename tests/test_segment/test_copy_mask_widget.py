@@ -1,4 +1,4 @@
-"""Tests for copy_mask_to_fov() core logic."""
+"""Tests for assign_threshold_to_fov() core logic."""
 
 from __future__ import annotations
 
@@ -9,245 +9,88 @@ import pytest
 
 from percell3.core import ExperimentStore
 from percell3.core.models import CellRecord
-from percell3.segment.viewer.copy_mask_widget import copy_mask_to_fov
+from percell3.segment.viewer.copy_mask_widget import assign_threshold_to_fov
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+class TestAssignThresholdToFov:
+    """Tests for the assign_threshold_to_fov function."""
 
-
-def _create_experiment_with_mask(tmp_path: Path) -> tuple[ExperimentStore, int]:
-    """Create an experiment with one FOV that has labels, cells, and a mask.
-
-    Returns:
-        (store, source_fov_id)
-    """
-    store = ExperimentStore.create(tmp_path / "mask_test.percell")
-    store.add_channel("DAPI", role="segmentation")
-    store.add_channel("GFP")
-    store.add_condition("control")
-
-    fov_id = store.add_fov("control", width=40, height=40, pixel_size_um=0.65)
-
-    # Write images
-    dapi = np.full((40, 40), 100, dtype=np.uint16)
-    store.write_image(fov_id, "DAPI", dapi)
-    gfp = np.full((40, 40), 50, dtype=np.uint16)
-    gfp[12:18, 12:18] = 200  # Bright region inside cell
-    store.write_image(fov_id, "GFP", gfp)
-
-    # Write labels and cells
-    labels = np.zeros((40, 40), dtype=np.int32)
-    labels[5:25, 5:25] = 1  # One cell covering the mask region
-    seg_run_id = store.add_segmentation_run(
-        fov_id=fov_id, channel="DAPI", model_name="mock",
-        parameters={"diameter": 30.0},
-    )
-    store.write_labels(fov_id, labels, seg_run_id)
-    store.delete_cells_for_fov(fov_id)
-    cells = [
-        CellRecord(
-            fov_id=fov_id,
-            segmentation_id=seg_run_id,
-            label_value=1,
-            centroid_x=15.0, centroid_y=15.0,
-            bbox_x=5, bbox_y=5, bbox_w=20, bbox_h=20,
-            area_pixels=400.0,
-        ),
-    ]
-    store.add_cells(cells)
-    store.update_segmentation_run_cell_count(seg_run_id, 1)
-
-    # Write a threshold mask on GFP
-    tr_id = store.add_threshold_run(
-        fov_id=fov_id, channel="GFP", method="otsu",
-        parameters={"threshold_value": 100.0},
-    )
-    mask = np.zeros((40, 40), dtype=np.uint8)
-    mask[12:18, 12:18] = 255  # One bright region inside cell
-    store.write_mask(fov_id, "GFP", mask, tr_id)
-
-    return store, fov_id
-
-
-def _create_target_with_labels(
-    store: ExperimentStore,
-    display_name: str = "target_fov",
-) -> int:
-    """Create a target FOV with labels and cells (same geometry as source)."""
-    target_fov_id = store.add_fov(
-        "control", width=40, height=40, pixel_size_um=0.65,
-        display_name=display_name,
-    )
-
-    # Write images
-    dapi = np.full((40, 40), 80, dtype=np.uint16)
-    store.write_image(target_fov_id, "DAPI", dapi)
-    gfp = np.full((40, 40), 40, dtype=np.uint16)
-    gfp[12:18, 12:18] = 180  # Bright region
-    store.write_image(target_fov_id, "GFP", gfp)
-
-    # Same labels and cells as source
-    labels = np.zeros((40, 40), dtype=np.int32)
-    labels[5:25, 5:25] = 1
-    seg_run_id = store.add_segmentation_run(
-        fov_id=target_fov_id, channel="DAPI", model_name="label_copy",
-        parameters={},
-    )
-    store.write_labels(target_fov_id, labels, seg_run_id)
-    store.delete_cells_for_fov(target_fov_id)
-    cells = [
-        CellRecord(
-            fov_id=target_fov_id,
-            segmentation_id=seg_run_id,
-            label_value=1,
-            centroid_x=15.0, centroid_y=15.0,
-            bbox_x=5, bbox_y=5, bbox_w=20, bbox_h=20,
-            area_pixels=400.0,
-        ),
-    ]
-    store.add_cells(cells)
-    store.update_segmentation_run_cell_count(seg_run_id, 1)
-
-    return target_fov_id
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
-class TestCopyMaskToFov:
-    """Tests for the core copy_mask_to_fov function."""
-
-    def test_happy_path_copy(self, tmp_path: Path) -> None:
-        """Copy a mask from source FOV to a target FOV with labels."""
-        store, source_fov_id = _create_experiment_with_mask(tmp_path)
-        target_fov_id = _create_target_with_labels(store)
-
-        run_id, particle_count = copy_mask_to_fov(
-            store, source_fov_id, target_fov_id, "GFP",
-        )
-
-        assert run_id > 0
-        # Resolve source threshold run to read source mask
-        src_thr_runs = [
-            tr for tr in store.get_threshold_runs()
-            if tr.channel == "GFP" and tr.fov_id == source_fov_id
-        ]
-        src_thr_id = src_thr_runs[0].id
-        # Verify mask was written to target
-        target_mask = store.read_mask(target_fov_id, "GFP", run_id)
-        source_mask = store.read_mask(source_fov_id, "GFP", src_thr_id)
-        np.testing.assert_array_equal(target_mask, source_mask)
-
-    def test_particles_deferred_after_copy(self, tmp_path: Path) -> None:
-        """Particles are deferred to measurement — not extracted during copy."""
-        store, source_fov_id = _create_experiment_with_mask(tmp_path)
-        target_fov_id = _create_target_with_labels(store)
-
-        _, particle_count = copy_mask_to_fov(
-            store, source_fov_id, target_fov_id, "GFP",
-        )
-
-        assert particle_count == 0, "Particles should be deferred to measurement"
-
-    def test_error_on_no_source_mask(self, tmp_path: Path) -> None:
-        """Raise KeyError if source FOV has no mask for the channel."""
-        store = ExperimentStore.create(tmp_path / "no_mask.percell")
+    def test_happy_path_assign(self, tmp_path: Path) -> None:
+        """Assign a threshold to a target FOV creates a config entry."""
+        store = ExperimentStore.create(tmp_path / "assign.percell")
+        store.add_channel("DAPI", role="segmentation")
         store.add_channel("GFP")
         store.add_condition("control")
 
-        source_fov_id = store.add_fov("control", width=40, height=40)
-        target_fov_id = store.add_fov(
-            "control", width=40, height=40, display_name="target",
+        fov1 = store.add_fov("control", width=40, height=40)
+        fov2 = store.add_fov("control", width=40, height=40)
+
+        seg_id = store.add_segmentation(
+            "seg_test", "cellular", 40, 40,
+            source_fov_id=fov1, source_channel="DAPI", model_name="mock",
         )
 
-        with pytest.raises(KeyError):
-            copy_mask_to_fov(store, source_fov_id, target_fov_id, "GFP")
+        thr_id = store.add_threshold(
+            "thresh_test", "otsu", 40, 40,
+            source_fov_id=fov1, source_channel="GFP",
+        )
+        store.write_mask(np.zeros((40, 40), dtype=np.uint8), thr_id)
 
-    def test_error_on_dimension_mismatch(self, tmp_path: Path) -> None:
-        """Raise ValueError if source mask doesn't match target dimensions."""
-        store, source_fov_id = _create_experiment_with_mask(tmp_path)
+        assign_threshold_to_fov(store, thr_id, seg_id, fov2)
 
-        target_fov_id = store.add_fov(
-            "control", width=80, height=80, pixel_size_um=0.65,
-            display_name="big_target",
+        config = store.get_fov_config(fov2)
+        assert len(config) >= 1
+        entry = next(e for e in config if e.segmentation_id == seg_id)
+        assert entry.threshold_id == thr_id
+        store.close()
+
+    def test_dimension_mismatch_raises(self, tmp_path: Path) -> None:
+        """Raise ValueError if threshold dims don't match FOV."""
+        store = ExperimentStore.create(tmp_path / "mismatch.percell")
+        store.add_channel("GFP")
+        store.add_condition("control")
+
+        fov1 = store.add_fov("control", width=40, height=40)
+        fov2 = store.add_fov("control", width=80, height=80)
+
+        seg_id = store.add_segmentation(
+            "seg_test", "cellular", 40, 40,
+            source_fov_id=fov1, source_channel="GFP", model_name="mock",
+        )
+
+        thr_id = store.add_threshold(
+            "thresh_test", "otsu", 40, 40,
+            source_fov_id=fov1, source_channel="GFP",
         )
 
         with pytest.raises(ValueError, match="Dimension mismatch"):
-            copy_mask_to_fov(store, source_fov_id, target_fov_id, "GFP")
+            assign_threshold_to_fov(store, thr_id, seg_id, fov2)
+        store.close()
 
-    def test_overwrite_existing_mask(self, tmp_path: Path) -> None:
-        """Copying to a target that already has a mask overwrites it."""
-        store, source_fov_id = _create_experiment_with_mask(tmp_path)
-        target_fov_id = _create_target_with_labels(store)
+    def test_config_entry_includes_scopes(self, tmp_path: Path) -> None:
+        """Assigned threshold should have mask_inside and mask_outside scopes."""
+        store = ExperimentStore.create(tmp_path / "scopes.percell")
+        store.add_channel("GFP")
+        store.add_condition("control")
 
-        # Give target its own mask first
-        old_tr_id = store.add_threshold_run(
-            fov_id=target_fov_id, channel="GFP", method="manual",
-            parameters={},
-        )
-        old_mask = np.ones((40, 40), dtype=np.uint8) * 128
-        store.write_mask(target_fov_id, "GFP", old_mask, old_tr_id)
+        fov1 = store.add_fov("control", width=40, height=40)
+        fov2 = store.add_fov("control", width=40, height=40)
 
-        # Copy source mask to target
-        new_run_id, _ = copy_mask_to_fov(store, source_fov_id, target_fov_id, "GFP")
-
-        # Target should now have source's mask
-        target_mask = store.read_mask(target_fov_id, "GFP", new_run_id)
-        src_thr_runs = [
-            tr for tr in store.get_threshold_runs()
-            if tr.channel == "GFP" and tr.fov_id == source_fov_id
-        ]
-        source_mask = store.read_mask(source_fov_id, "GFP", src_thr_runs[0].id)
-        np.testing.assert_array_equal(target_mask, source_mask)
-
-    def test_threshold_run_provenance(self, tmp_path: Path) -> None:
-        """New threshold run records mask_copy method and source FOV ID."""
-        store, source_fov_id = _create_experiment_with_mask(tmp_path)
-        target_fov_id = _create_target_with_labels(store)
-
-        run_id, _ = copy_mask_to_fov(
-            store, source_fov_id, target_fov_id, "GFP",
+        seg_id = store.add_segmentation(
+            "seg_test", "cellular", 40, 40,
+            source_fov_id=fov1, source_channel="GFP", model_name="mock",
         )
 
-        runs = store.get_threshold_runs()
-        new_run = next(r for r in runs if r.id == run_id)
-        assert new_run.method == "mask_copy"
-
-    def test_no_particles_without_cells(self, tmp_path: Path) -> None:
-        """If target has no cells, mask is copied but particle count is 0."""
-        store, source_fov_id = _create_experiment_with_mask(tmp_path)
-
-        # Target with no labels or cells
-        target_fov_id = store.add_fov(
-            "control", width=40, height=40, pixel_size_um=0.65,
-            display_name="empty_target",
+        thr_id = store.add_threshold(
+            "thresh_test", "otsu", 40, 40,
+            source_fov_id=fov1, source_channel="GFP",
         )
+        store.write_mask(np.zeros((40, 40), dtype=np.uint8), thr_id)
 
-        run_id, particle_count = copy_mask_to_fov(
-            store, source_fov_id, target_fov_id, "GFP",
-        )
+        assign_threshold_to_fov(store, thr_id, seg_id, fov2)
 
-        assert particle_count == 0
-        # Mask should still be written
-        target_mask = store.read_mask(target_fov_id, "GFP", run_id)
-        src_thr_runs = [
-            tr for tr in store.get_threshold_runs()
-            if tr.channel == "GFP" and tr.fov_id == source_fov_id
-        ]
-        source_mask = store.read_mask(source_fov_id, "GFP", src_thr_runs[0].id)
-        np.testing.assert_array_equal(target_mask, source_mask)
-
-    def test_min_particle_area_ignored(self, tmp_path: Path) -> None:
-        """min_particle_area is ignored — particles are deferred to measurement."""
-        store, source_fov_id = _create_experiment_with_mask(tmp_path)
-        target_fov_id = _create_target_with_labels(store)
-
-        _, count = copy_mask_to_fov(
-            store, source_fov_id, target_fov_id, "GFP",
-            min_particle_area=1,
-        )
-        assert count == 0, "Particles should always be deferred"
+        config = store.get_fov_config(fov2)
+        entry = next(e for e in config if e.threshold_id == thr_id)
+        assert "mask_inside" in entry.scopes
+        assert "mask_outside" in entry.scopes
+        store.close()

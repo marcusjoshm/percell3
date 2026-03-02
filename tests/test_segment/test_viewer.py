@@ -40,19 +40,21 @@ def experiment_with_segmentation(tmp_path: Path) -> ExperimentStore:
     labels[10:30, 10:30] = 1  # Cell 1
     labels[35:55, 35:55] = 2  # Cell 2
 
-    run_id = store.add_segmentation_run(
-        fov_id=fov_id, channel="DAPI", model_name="cpsam",
+    seg_id = store.add_segmentation(
+        "seg_test", "cellular", 64, 64,
+        source_fov_id=fov_id, source_channel="DAPI", model_name="cpsam",
         parameters={"model": "cpsam"},
     )
-    store.write_labels(fov_id, labels, run_id)
+    store.write_labels(labels, seg_id)
 
     from percell3.segment.label_processor import extract_cells
 
-    cells = extract_cells(labels, fov_id, run_id, pixel_size_um=0.65)
+    cells = extract_cells(labels, fov_id, seg_id, pixel_size_um=0.65)
     store.add_cells(cells)
-    store.update_segmentation_run_cell_count(run_id, len(cells))
+    store.update_segmentation_cell_count(seg_id, len(cells))
 
     store._test_fov_id = fov_id
+    store._test_seg_id = seg_id
     yield store
     store.close()
 
@@ -174,7 +176,8 @@ class TestSaveEditedLabels:
         run_id = save_edited_labels(
             experiment_with_segmentation,
             fov_info, edited,
-            parent_run_id=1, channel="DAPI",
+            segmentation_id=experiment_with_segmentation._test_seg_id,
+            channel="DAPI",
         )
         assert isinstance(run_id, int)
         assert run_id > 0
@@ -193,10 +196,10 @@ class TestSaveEditedLabels:
         fov_info = _get_fov_info(store)
         run_id = save_edited_labels(
             store, fov_info, edited,
-            parent_run_id=1, channel="DAPI",
+            segmentation_id=store._test_seg_id, channel="DAPI",
         )
 
-        read_back = store.read_labels(store._test_fov_id, run_id)
+        read_back = store.read_labels(run_id)
         np.testing.assert_array_equal(read_back, edited)
 
     def test_cell_count_matches_unique_labels(
@@ -214,12 +217,13 @@ class TestSaveEditedLabels:
         run_id = save_edited_labels(
             experiment_with_segmentation,
             fov_info, edited,
-            parent_run_id=1, channel="DAPI",
+            segmentation_id=experiment_with_segmentation._test_seg_id,
+            channel="DAPI",
         )
 
-        runs = experiment_with_segmentation.get_segmentation_runs()
-        new_run = [r for r in runs if r.id == run_id][0]
-        assert new_run.cell_count == 3
+        segs = experiment_with_segmentation.get_segmentations()
+        new_seg = [s for s in segs if s.id == run_id][0]
+        assert new_seg.cell_count == 3
 
     def test_cell_properties_correct(
         self, experiment_with_segmentation: ExperimentStore,
@@ -234,7 +238,7 @@ class TestSaveEditedLabels:
         fov_info = _get_fov_info(store)
         run_id = save_edited_labels(
             store, fov_info, edited,
-            parent_run_id=None, channel="DAPI",
+            segmentation_id=None, channel="DAPI",
         )
 
         cells_df = store.get_cells(fov_id=store._test_fov_id)
@@ -255,40 +259,37 @@ class TestSaveEditedLabels:
         run_id = save_edited_labels(
             experiment_with_segmentation,
             fov_info, empty,
-            parent_run_id=1, channel="DAPI",
+            segmentation_id=experiment_with_segmentation._test_seg_id,
+            channel="DAPI",
         )
 
-        runs = experiment_with_segmentation.get_segmentation_runs()
-        new_run = [r for r in runs if r.id == run_id][0]
-        assert new_run.cell_count == 0
+        segs = experiment_with_segmentation.get_segmentations()
+        new_seg = [s for s in segs if s.id == run_id][0]
+        assert new_seg.cell_count == 0
 
-    def test_provenance_metadata_stored(
+    def test_overwrite_preserves_segmentation_id(
         self, experiment_with_segmentation: ExperimentStore,
     ) -> None:
-        """Segmentation run should have napari_edit model and provenance params."""
+        """Overwriting existing labels returns the same segmentation_id."""
         from percell3.segment.viewer._viewer import save_edited_labels
 
+        store = experiment_with_segmentation
         edited = np.zeros((64, 64), dtype=np.int32)
         edited[10:30, 10:30] = 1
 
-        fov_info = _get_fov_info(experiment_with_segmentation)
-        run_id = save_edited_labels(
-            experiment_with_segmentation,
-            fov_info, edited,
-            parent_run_id=1, channel="DAPI",
+        fov_info = _get_fov_info(store)
+        seg_id = save_edited_labels(
+            store, fov_info, edited,
+            segmentation_id=store._test_seg_id,
+            channel="DAPI",
         )
 
-        runs = experiment_with_segmentation.get_segmentation_runs()
-        new_run = [r for r in runs if r.id == run_id][0]
-        assert new_run.model_name == "napari_edit"
+        # Overwrite returns the same segmentation_id
+        assert seg_id == store._test_seg_id
 
-        params = new_run.parameters
-        if isinstance(params, str):
-            import json
-            params = json.loads(params)
-        assert params["method"] == "napari_manual_edit"
-        assert params["parent_run_id"] == 1
-        assert params["channel"] == "DAPI"
+        # Labels should be updated
+        read_back = store.read_labels(seg_id)
+        np.testing.assert_array_equal(read_back, edited)
 
     def test_invalid_3d_labels_rejected(
         self, experiment_with_segmentation: ExperimentStore,
@@ -302,7 +303,7 @@ class TestSaveEditedLabels:
             save_edited_labels(
                 experiment_with_segmentation,
                 fov_info, labels_3d,
-                parent_run_id=None, channel="DAPI",
+                segmentation_id=None, channel="DAPI",
             )
 
     def test_negative_labels_rejected(
@@ -317,32 +318,28 @@ class TestSaveEditedLabels:
             save_edited_labels(
                 experiment_with_segmentation,
                 fov_info, labels,
-                parent_run_id=None, channel="DAPI",
+                segmentation_id=None, channel="DAPI",
             )
 
-    def test_parent_run_id_null_for_scratch(
+    def test_scratch_segmentation_created(
         self, experiment_no_segmentation: ExperimentStore,
     ) -> None:
-        """Labels from scratch should have parent_run_id=None."""
+        """Painting from scratch (segmentation_id=None) should create a new segmentation."""
         from percell3.segment.viewer._viewer import save_edited_labels
 
         labels = np.zeros((64, 64), dtype=np.int32)
         labels[10:30, 10:30] = 1
 
         fov_info = _get_fov_info(experiment_no_segmentation)
-        run_id = save_edited_labels(
+        seg_id = save_edited_labels(
             experiment_no_segmentation,
             fov_info, labels,
-            parent_run_id=None, channel="DAPI",
+            segmentation_id=None, channel="DAPI",
         )
 
-        runs = experiment_no_segmentation.get_segmentation_runs()
-        new_run = [r for r in runs if r.id == run_id][0]
-        params = new_run.parameters
-        if isinstance(params, str):
-            import json
-            params = json.loads(params)
-        assert params["parent_run_id"] is None
+        segs = experiment_no_segmentation.get_segmentations()
+        new_seg = [s for s in segs if s.id == seg_id][0]
+        assert new_seg.model_name == "napari_edit"
 
 
 # ---------------------------------------------------------------------------

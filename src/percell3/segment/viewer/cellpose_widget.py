@@ -315,6 +315,7 @@ class CellposeWidget:
         try:
             # All store writes happen here on the main thread
             fov_info = self._store.get_fov_by_id(self._fov_id)
+            h, w = labels.shape
 
             run_params = {
                 "method": "napari_cellpose_widget",
@@ -327,23 +328,28 @@ class CellposeWidget:
             if params["nucleus_channel"]:
                 run_params["nucleus_channel"] = params["nucleus_channel"]
 
-            run_id = self._store.add_segmentation_run(
-                fov_id=fov_info.id, channel=params["primary_channel"],
-                model_name=params["model_name"], parameters=run_params,
+            # Create a global segmentation entity
+            name = self._store._generate_segmentation_name(
+                params["model_name"], params["primary_channel"],
+            )
+            seg_id = self._store.add_segmentation(
+                name=name, seg_type="cellular",
+                width=w, height=h,
+                source_fov_id=fov_info.id,
+                source_channel=params["primary_channel"],
+                model_name=params["model_name"],
+                parameters=run_params,
             )
 
             cell_count = store_labels_and_cells(
-                self._store, labels, fov_info, run_id,
+                self._store, labels, fov_info.id, seg_id,
+                fov_info.pixel_size_um,
             )
 
-            # Auto-measure all channels
+            # Trigger auto-measurement
             try:
-                from percell3.measure.measurer import Measurer
-
-                measurer = Measurer()
-                measurer.measure_fov(
-                    self._store, self._fov_id, self._channel_names,
-                )
+                from percell3.measure.auto_measure import on_segmentation_created
+                on_segmentation_created(self._store, seg_id, [self._fov_id])
             except Exception as exc:
                 logger.warning("Auto-measurement failed: %s", exc)
 
