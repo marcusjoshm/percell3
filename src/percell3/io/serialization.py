@@ -12,6 +12,7 @@ from typing import Any
 from percell3.io.models import (
     ChannelMapping,
     ImportPlan,
+    TileConfig,
     TokenConfig,
     ZTransform,
 )
@@ -55,6 +56,14 @@ def plan_to_yaml(plan: ImportPlan, path: Path) -> None:
         "fov_names": plan.fov_names,
     }
 
+    if plan.tile_config is not None:
+        data["tile_config"] = {
+            "grid_rows": plan.tile_config.grid_rows,
+            "grid_cols": plan.tile_config.grid_cols,
+            "grid_type": plan.tile_config.grid_type,
+            "order": plan.tile_config.order,
+        }
+
     if plan.condition_map:
         data["condition_map"] = plan.condition_map
 
@@ -63,6 +72,10 @@ def plan_to_yaml(plan: ImportPlan, path: Path) -> None:
 
     if plan.token_config.fov is not None:
         data["token_config"]["fov"] = plan.token_config.fov
+
+    # Always write series so that series=None round-trips correctly
+    # (distinguishes "disabled" from "key absent in old YAML")
+    data["token_config"]["series"] = plan.token_config.series
 
     for mapping in plan.channel_mappings:
         entry: dict[str, Any] = {
@@ -120,7 +133,19 @@ def plan_from_yaml(path: Path) -> ImportPlan:
         timepoint=tc_data.get("timepoint", r"_t(\d+)"),
         z_slice=tc_data.get("z_slice", r"_z(\d+)"),
         fov=tc_data.get("fov"),
+        series=tc_data.get("series", r"_s(\d+)"),
     )
+
+    # Parse tile_config
+    tile_config: TileConfig | None = None
+    tc_tile = data.get("tile_config")
+    if tc_tile is not None:
+        tile_config = TileConfig(
+            grid_rows=tc_tile["grid_rows"],
+            grid_cols=tc_tile["grid_cols"],
+            grid_type=tc_tile["grid_type"],
+            order=tc_tile["order"],
+        )
 
     # Parse channel_mappings
     channel_mappings = []
@@ -143,4 +168,5 @@ def plan_from_yaml(path: Path) -> ImportPlan:
         pixel_size_um=data.get("pixel_size_um"),
         token_config=token_config,
         condition_map=data.get("condition_map", {}),
+        tile_config=tile_config,
     )

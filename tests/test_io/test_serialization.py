@@ -7,6 +7,7 @@ import pytest
 from percell3.io.models import (
     ChannelMapping,
     ImportPlan,
+    TileConfig,
     TokenConfig,
     ZTransform,
 )
@@ -198,3 +199,101 @@ class TestTokenConfigSerialization:
         loaded = ImportPlan.from_yaml(yaml_path)
 
         assert loaded.token_config.fov is None
+
+
+class TestTileConfigSerialization:
+    def test_tile_config_round_trips(self, tmp_path):
+        plan = ImportPlan(
+            source_path=tmp_path / "tiffs",
+            condition="ctrl",
+            channel_mappings=[],
+            fov_names={},
+            z_transform=ZTransform(method="mip"),
+            pixel_size_um=None,
+            token_config=TokenConfig(),
+            tile_config=TileConfig(
+                grid_rows=3,
+                grid_cols=4,
+                grid_type="snake_by_row",
+                order="right_and_down",
+            ),
+        )
+        yaml_path = tmp_path / "plan.yaml"
+
+        plan.to_yaml(yaml_path)
+        loaded = ImportPlan.from_yaml(yaml_path)
+
+        assert loaded.tile_config is not None
+        assert loaded.tile_config.grid_rows == 3
+        assert loaded.tile_config.grid_cols == 4
+        assert loaded.tile_config.grid_type == "snake_by_row"
+        assert loaded.tile_config.order == "right_and_down"
+
+    def test_no_tile_config_round_trips_as_none(self, tmp_path):
+        plan = ImportPlan(
+            source_path=tmp_path / "tiffs",
+            condition="ctrl",
+            channel_mappings=[],
+            fov_names={},
+            z_transform=ZTransform(method="mip"),
+            pixel_size_um=None,
+            token_config=TokenConfig(),
+            tile_config=None,
+        )
+        yaml_path = tmp_path / "plan.yaml"
+
+        plan.to_yaml(yaml_path)
+        loaded = ImportPlan.from_yaml(yaml_path)
+
+        assert loaded.tile_config is None
+
+    def test_old_yaml_without_tile_config_loads(self, tmp_path):
+        """YAML files from before tile_config was added still load."""
+        yaml_path = tmp_path / "plan.yaml"
+        yaml_path.write_text(
+            "source_path: /some/path\n"
+            "condition: control\n"
+            "z_transform:\n"
+            "  method: mip\n"
+            "token_config:\n"
+            "  channel: '_ch(\\d+)'\n"
+        )
+
+        loaded = ImportPlan.from_yaml(yaml_path)
+        assert loaded.tile_config is None
+
+
+class TestSeriesTokenSerialization:
+    def test_custom_series_pattern_preserved(self, tmp_path):
+        plan = ImportPlan(
+            source_path=tmp_path / "tiffs",
+            condition="ctrl",
+            channel_mappings=[],
+            fov_names={},
+            z_transform=ZTransform(method="mip"),
+            pixel_size_um=None,
+            token_config=TokenConfig(series=r"_tile(\d+)"),
+        )
+        yaml_path = tmp_path / "plan.yaml"
+
+        plan.to_yaml(yaml_path)
+        loaded = ImportPlan.from_yaml(yaml_path)
+
+        assert loaded.token_config.series == r"_tile(\d+)"
+
+    def test_series_none_preserved(self, tmp_path):
+        plan = ImportPlan(
+            source_path=tmp_path / "tiffs",
+            condition="ctrl",
+            channel_mappings=[],
+            fov_names={},
+            z_transform=ZTransform(method="mip"),
+            pixel_size_um=None,
+            token_config=TokenConfig(series=None),
+        )
+        yaml_path = tmp_path / "plan.yaml"
+
+        plan.to_yaml(yaml_path)
+        loaded = ImportPlan.from_yaml(yaml_path)
+
+        assert loaded.token_config.series is None
