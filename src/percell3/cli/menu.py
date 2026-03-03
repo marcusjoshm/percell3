@@ -377,6 +377,8 @@ def _make_plugin_runner(registry, plugin_name: str):
             _run_bg_subtraction(state, registry)
         elif plugin_name == "split_halo_condensate_analysis":
             _run_condensate_analysis(state, registry)
+        elif plugin_name == "image_calculator":
+            _run_image_calculator(state, registry)
         else:
             # Generic plugin runner for future plugins
             _run_generic_plugin(state, registry, plugin_name)
@@ -409,6 +411,95 @@ def _run_generic_plugin(state: MenuState, registry, plugin_name: str) -> None:
     console.print(f"\n[green]Plugin complete[/green]")
     console.print(f"  Cells processed: {result.cells_processed}")
     console.print(f"  Measurements written: {result.measurements_written}")
+    if result.custom_outputs:
+        for key, val in result.custom_outputs.items():
+            console.print(f"  {key}: {val}")
+    for w in result.warnings:
+        console.print(f"  [yellow]Warning: {w}[/yellow]")
+
+
+def _run_image_calculator(state: MenuState, registry) -> None:
+    """Interactive handler for Image Calculator plugin."""
+    from percell3.plugins.builtin.image_calculator_core import OPERATIONS
+
+    store = state.require_experiment()
+
+    plugin = registry.get_plugin("image_calculator")
+    errors = plugin.validate(store)
+    if errors:
+        console.print("\n[red]Cannot run image calculator:[/red]")
+        for e in errors:
+            console.print(f"  - {e}")
+        return
+
+    # Step 1: Mode
+    console.print("\n[bold]Step 1: Mode[/bold]")
+    console.print("  [dim]Single channel (with constant) or two channel (between images).[/dim]\n")
+    mode = numbered_select_one(["single_channel", "two_channel"], "Mode")
+
+    # Step 2: Operation
+    console.print("\n[bold]Step 2: Operation[/bold]")
+    console.print("  [dim]Select the arithmetic operation to apply.[/dim]\n")
+    operation = numbered_select_one(list(OPERATIONS), "Operation")
+
+    # Step 3: FOV
+    all_fovs = store.get_fovs()
+    if not all_fovs:
+        console.print("\n[red]No FOVs found.[/red]")
+        return
+
+    console.print("\n[bold]Step 3: Select FOV[/bold]\n")
+    fov_names = [f.display_name for f in all_fovs]
+    chosen_name = numbered_select_one(fov_names, "FOV")
+    fov_id = next(f.id for f in all_fovs if f.display_name == chosen_name)
+
+    # Step 4: Channel A
+    channels = store.get_channels()
+    ch_names = [ch.name for ch in channels]
+
+    console.print("\n[bold]Step 4: Channel A[/bold]")
+    console.print("  [dim]Primary channel to operate on.[/dim]\n")
+    channel_a = numbered_select_one(ch_names, "Channel A")
+
+    # Step 5: Channel B or constant
+    params: dict = {
+        "mode": mode,
+        "operation": operation,
+        "fov_id": fov_id,
+        "channel_a": channel_a,
+    }
+
+    if mode == "single_channel":
+        console.print("\n[bold]Step 5: Constant[/bold]")
+        console.print("  [dim]Scalar value to apply with the operation.[/dim]")
+        raw = menu_prompt("Constant value")
+        try:
+            params["constant"] = float(raw)
+        except ValueError:
+            console.print(f"[red]Invalid number: {raw!r}[/red]")
+            return
+    else:
+        console.print("\n[bold]Step 5: Channel B[/bold]")
+        console.print("  [dim]Second channel for the operation.[/dim]\n")
+        params["channel_b"] = numbered_select_one(ch_names, "Channel B")
+
+    # Run
+    with make_progress() as progress:
+        task = progress.add_task(f"Running image calculator...", total=None)
+
+        def on_progress(current, total, fov_name):
+            progress.update(task, total=total, completed=current,
+                            description=f"Processing {fov_name}")
+
+        result = registry.run_plugin(
+            "image_calculator", store, parameters=params,
+            progress_callback=on_progress,
+        )
+
+    console.print("\n[green]Image calculator complete[/green]")
+    derived_fov_id = result.custom_outputs.get("derived_fov_id")
+    if derived_fov_id:
+        console.print(f"  Derived FOV ID: {derived_fov_id}")
     for w in result.warnings:
         console.print(f"  [yellow]Warning: {w}[/yellow]")
 
