@@ -186,17 +186,17 @@ images.zarr/
 **Success criteria**: `pytest tests/test_core/test_schema.py` passes. New tables created with correct constraints.
 
 #### Phase 2: Models and Zarr Paths
-- [ ] Rename `SegmentationRunInfo` → `SegmentationInfo` (remove `fov_id`, add `seg_type`, `source_fov_id`, `width`, `height`)
-- [ ] Rename `ThresholdRunInfo` → `ThresholdInfo` (remove `fov_id`, remove `channel_id` ownership, add `source_fov_id`, `source_channel`, `grouping_channel`, `width`, `height`)
-- [ ] Add `AnalysisConfig` dataclass
-- [ ] Add `FovConfigEntry` dataclass (fov_id, segmentation_id, threshold_id, scopes)
-- [ ] Remove `MeasurementConfigInfo` and `MeasurementConfigEntry` dataclasses
-- [ ] Update `MeasurementRecord` to include `segmentation_id` and `measured_at`
-- [ ] Update `ParticleRecord`: change `cell_id` → `fov_id` + `threshold_id`
-- [ ] Update `label_group_path(segmentation_id)` → returns `f"seg_{segmentation_id}"`
-- [ ] Update `mask_group_path(threshold_id)` → returns `f"thresh_{threshold_id}/mask"`
-- [ ] Update `particle_label_group_path(threshold_id)` → returns `f"thresh_{threshold_id}/particles"`
-- [ ] Write model and zarr path tests
+- [x] Rename `SegmentationRunInfo` → `SegmentationInfo` (remove `fov_id`, add `seg_type`, `source_fov_id`, `width`, `height`)
+- [x] Rename `ThresholdRunInfo` → `ThresholdInfo` (remove `fov_id`, remove `channel_id` ownership, add `source_fov_id`, `source_channel`, `grouping_channel`, `width`, `height`)
+- [x] Add `AnalysisConfig` dataclass
+- [x] Add `FovConfigEntry` dataclass (fov_id, segmentation_id, threshold_id, scopes)
+- [x] Remove `MeasurementConfigInfo` and `MeasurementConfigEntry` dataclasses
+- [x] Update `MeasurementRecord` to include `segmentation_id` and `measured_at`
+- [x] Update `ParticleRecord`: change `cell_id` → `fov_id` + `threshold_id`
+- [x] Update `label_group_path(segmentation_id)` → returns `f"seg_{segmentation_id}"`
+- [x] Update `mask_group_path(threshold_id)` → returns `f"thresh_{threshold_id}/mask"`
+- [x] Update `particle_label_group_path(threshold_id)` → returns `f"thresh_{threshold_id}/particles"`
+- [x] Write model and zarr path tests
 
 **Files**: `src/percell3/core/models.py`, `src/percell3/core/zarr_io.py`, `tests/test_core/test_zarr_io.py`
 
@@ -297,16 +297,16 @@ images.zarr/
 **Success criteria**: Matrix view displays correctly. Assignments validate dimensions. Config changes trigger auto-measurement. Menu handlers are thin (no business logic inline).
 
 #### Phase 7: Viewer and Engine Integration
-- [ ] Update `_viewer.py` `_load_label_layer()` — load exactly one label layer from config's active `segmentation_id` via flat zarr path. Viewer always shows one segmentation per FOV (no multi-layer ambiguity).
-- [ ] Update `_viewer.py` `_load_mask_layers()` — read threshold masks from flat zarr paths
-- [ ] Update `_viewer.py` `save_edited_labels()` — overwrite existing segmentation entity in place (zarr data + cells). Trigger `on_labels_edited()` which propagates measurement updates to all FOVs referencing this segmentation.
-- [ ] Update `cellpose_widget.py` — call `store.add_segmentation()` (global) + trigger `on_segmentation_created()`
-- [ ] Update `copy_labels_widget.py` — assigning seg to another FOV = config change, not a copy operation
-- [ ] Update `copy_mask_widget.py` — assigning threshold to another FOV = config change
-- [ ] Update `_engine.py` — `SegmentationEngine.run()` creates one global segmentation entity per batch
-- [ ] Update `thresholding.py` — `threshold_fov()` and `threshold_group()` create global threshold entities. When active seg is whole_field (N=1 cell), skip GMM grouping and apply global Otsu directly.
-- [ ] Update `particle_analyzer.py` — particles stored as FOV-level entities
-- [ ] Write viewer and engine tests
+- [x] Update `_viewer.py` `_load_label_layer()` — load exactly one label layer from config's active `segmentation_id` via flat zarr path. Viewer always shows one segmentation per FOV (no multi-layer ambiguity).
+- [x] Update `_viewer.py` `_load_mask_layers()` — read threshold masks from flat zarr paths
+- [x] Update `_viewer.py` `save_edited_labels()` — overwrite existing segmentation entity in place (zarr data + cells). Trigger `on_labels_edited()` which propagates measurement updates to all FOVs referencing this segmentation.
+- [x] Update `cellpose_widget.py` — call `store.add_segmentation()` (global) + trigger `on_segmentation_created()`
+- [x] Update `copy_labels_widget.py` — assigning seg to another FOV = config change, not a copy operation
+- [x] Update `copy_mask_widget.py` — assigning threshold to another FOV = config change
+- [x] Update `_engine.py` — `SegmentationEngine.run()` creates one global segmentation entity per batch
+- [x] Update `thresholding.py` — `threshold_fov()` and `threshold_group()` create global threshold entities. When active seg is whole_field (N=1 cell), skip GMM grouping and apply global Otsu directly.
+- [x] Update `particle_analyzer.py` — particles stored as FOV-level entities
+- [x] Write viewer and engine tests
 
 **Files**: `src/percell3/segment/viewer/_viewer.py`, `src/percell3/segment/viewer/cellpose_widget.py`, `src/percell3/segment/viewer/copy_labels_widget.py`, `src/percell3/segment/viewer/copy_mask_widget.py`, `src/percell3/segment/_engine.py`, `src/percell3/measure/thresholding.py`, `src/percell3/measure/particle_analyzer.py`
 
@@ -326,24 +326,24 @@ images.zarr/
 **Success criteria**: Exports include config provenance. Measurements filtered by active config. Particle exports work with FOV-level particles.
 
 #### Phase 9: Plugin Updates
-- [ ] Update `local_bg_subtraction.py` — use global segmentation/threshold entities
-- [ ] Update `split_halo_condensate_analysis.py` — use global entities, read active seg/thresh from fov_config (not `seg_runs[0]` heuristic). Derived FOVs created via `add_fov()` get auto-measured like all FOVs (whole_field seg + measurements). Plugin CSV exports coexist with standard measurements.
-- [ ] Update plugin input requirements if needed
-- [ ] Write plugin integration tests
+- [x] Update `local_bg_subtraction.py` — use global segmentation/threshold entities
+- [x] Update `split_halo_condensate_analysis.py` — use global entities, read active seg/thresh from fov_config (not `seg_runs[0]` heuristic). Derived FOVs created via `add_fov()` get auto-measured like all FOVs (whole_field seg + measurements). Plugin CSV exports coexist with standard measurements.
+- [x] Update plugin input requirements if needed
+- [x] Write plugin integration tests
 
 **Files**: `src/percell3/plugins/builtin/local_bg_subtraction.py`, `src/percell3/plugins/builtin/split_halo_condensate_analysis.py`, `tests/test_plugins/`
 
 **Success criteria**: Both plugins work with new architecture. Plugin tests pass.
 
 #### Phase 10: Cleanup and Final Validation
-- [ ] Remove dead code: old measurement config queries, models, CLI handlers
-- [ ] Run encapsulation check: no outer modules calling `queries.py` directly or accessing `store._conn`
-- [ ] Run full test suite: `pytest tests/ -v`
-- [ ] Verify no bare `except Exception:` in new code
-- [ ] Verify all `IN (?)` clauses have empty-list guards
-- [ ] Verify batch sizes of 900 for large ID lists
-- [ ] Remove old test files for deleted features (test_phase4_cli.py config tests)
-- [ ] Update `EXPECTED_TABLES` and `EXPECTED_INDEXES` frozensets
+- [x] Remove dead code: old measurement config queries, models, CLI handlers
+- [x] Run encapsulation check: no outer modules calling `queries.py` directly or accessing `store._conn`
+- [x] Run full test suite: `pytest tests/ -v`
+- [x] Verify no bare `except Exception:` in new code
+- [x] Verify all `IN (?)` clauses have empty-list guards
+- [x] Verify batch sizes of 900 for large ID lists
+- [x] Remove old test files for deleted features (test_phase4_cli.py config tests)
+- [x] Update `EXPECTED_TABLES` and `EXPECTED_INDEXES` frozensets
 
 **Files**: All modified files
 
@@ -353,38 +353,38 @@ images.zarr/
 
 ### Functional Requirements
 
-- [ ] Importing images auto-creates whole_field segmentation + config entry for each FOV
-- [ ] Running Cellpose creates a global cellular segmentation, auto-names it, auto-updates config, auto-measures
-- [ ] Hand-drawing labels in napari and saving creates a global cellular segmentation with auto-measurement
-- [ ] Running thresholding creates a global threshold, extracts FOV-level particles, auto-measures mask scopes
-- [ ] Editing labels in napari incrementally updates measurements (only changed cells)
-- [ ] Config manager displays matrix view (one row per FOV-threshold combo)
-- [ ] Assigning segmentation to FOV validates dimensions and triggers missing measurements
-- [ ] Assigning threshold to FOV triggers particle-cell assignment and mask measurements
-- [ ] Deleting a segmentation cascade-deletes cells, measurements, and zarr group
-- [ ] Deleting a threshold cascade-deletes particles, mask measurements, and zarr group
-- [ ] Renaming segmentation/threshold is SQLite-only (no zarr changes)
-- [ ] Export CSV includes config provenance header
-- [ ] Config persists across program restarts
-- [ ] `seg_type` correctly distinguishes `whole_field` from `cellular`
-- [ ] No FOV ever lacks a segmentation (thresholding is always available)
-- [ ] Particles are FOV-level entities; cell assignment computed at measurement time
+- [x] Importing images auto-creates whole_field segmentation + config entry for each FOV
+- [x] Running Cellpose creates a global cellular segmentation, auto-names it, auto-updates config, auto-measures
+- [x] Hand-drawing labels in napari and saving creates a global cellular segmentation with auto-measurement
+- [x] Running thresholding creates a global threshold, extracts FOV-level particles, auto-measures mask scopes
+- [x] Editing labels in napari incrementally updates measurements (only changed cells)
+- [x] Config manager displays matrix view (one row per FOV-threshold combo)
+- [x] Assigning segmentation to FOV validates dimensions and triggers missing measurements
+- [x] Assigning threshold to FOV triggers particle-cell assignment and mask measurements
+- [x] Deleting a segmentation cascade-deletes cells, measurements, and zarr group
+- [x] Deleting a threshold cascade-deletes particles, mask measurements, and zarr group
+- [x] Renaming segmentation/threshold is SQLite-only (no zarr changes)
+- [x] Export CSV includes config provenance header
+- [x] Config persists across program restarts
+- [x] `seg_type` correctly distinguishes `whole_field` from `cellular`
+- [x] No FOV ever lacks a segmentation (thresholding is always available)
+- [x] Particles are FOV-level entities; cell assignment computed at measurement time
 
 ### Non-Functional Requirements
 
-- [ ] Auto-measurement completes in <5s for a typical FOV (1024x1024, ~100 cells, 3 channels)
-- [ ] Zero-measurement outcomes produce log warnings (never silent success)
-- [ ] All `IN (?)` queries use batch_size=900
-- [ ] No bare `except Exception:` in new code
-- [ ] No outer modules import from `percell3.core.queries` directly
-- [ ] Menu handlers are thin dispatchers (1-3 lines of logic)
+- [x] Auto-measurement completes in <5s for a typical FOV (1024x1024, ~100 cells, 3 channels)
+- [x] Zero-measurement outcomes produce log warnings (never silent success)
+- [x] All `IN (?)` queries use batch_size=900
+- [x] No bare `except Exception:` in new code
+- [x] No outer modules import from `percell3.core.queries` directly
+- [x] Menu handlers are thin dispatchers (1-3 lines of logic)
 
 ### Quality Gates
 
-- [ ] Full test suite passes (`pytest tests/ -v`)
-- [ ] No regressions in existing 1076+ tests
-- [ ] New tests cover all auto-measurement triggers
-- [ ] Config matrix view integration tested
+- [x] Full test suite passes (`pytest tests/ -v`)
+- [x] No regressions in existing 1076+ tests
+- [x] New tests cover all auto-measurement triggers
+- [x] Config matrix view integration tested
 
 ## Resolved Design Decisions (from SpecFlow Analysis)
 
