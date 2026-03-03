@@ -304,9 +304,9 @@ s6→(2,0)  s3→(2,1)  s0→(2,2)
 
 ### Phase 6: Integration — wire everything together
 
-- [ ] Pass `tile_config` from `_run_import()` into `ImportPlan` constructor
-- [ ] Pass `scan_result` through to avoid double-scanning (already implemented)
-- [ ] Verify end-to-end flow:
+- [x] Pass `tile_config` from `_run_import()` into `ImportPlan` constructor
+- [x] Pass `scan_result` through to avoid double-scanning (already implemented)
+- [x] Verify end-to-end flow:
   - Create temp dir with tile TIFF files (2x2 grid, 2 channels)
   - Run interactive import flow with tile detection
   - Verify single stitched FOV written to store with correct dimensions

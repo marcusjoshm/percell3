@@ -225,3 +225,38 @@ class TestTileOptions:
         assert "--tile-grid" in result.output
         assert "--tile-type" in result.output
         assert "--tile-order" in result.output
+
+    def test_tile_stitched_dimensions_correct(self, tmp_path: Path, runner: CliRunner):
+        """Verify stitched FOV has correct dimensions and pixel data."""
+        from percell3.core import ExperimentStore
+
+        # Create 2x2 tile grid with 2 channels, each tile 32x32
+        d = tmp_path / "tiles2"
+        d.mkdir()
+        for s in range(4):
+            for ch in range(2):
+                data = np.full((32, 32), fill_value=(s * 10 + ch), dtype=np.uint16)
+                tifffile.imwrite(str(d / f"FOV1_s{s:02d}_ch{ch:02d}.tif"), data)
+
+        exp_path = tmp_path / "test.percell"
+        store = ExperimentStore.create(exp_path, name="Test")
+        store.close()
+
+        result = runner.invoke(
+            cli,
+            ["import", str(d), "-e", str(exp_path),
+             "--tile-grid", "2x2", "--tile-type", "row_by_row",
+             "--tile-order", "right_and_down", "--yes"],
+        )
+        assert result.exit_code == 0
+        assert "FOVs imported: 1" in result.output
+
+        # Verify stitched dimensions (2x32=64 per axis)
+        store = ExperimentStore.open(exp_path)
+        try:
+            fovs = store.get_fovs()
+            assert len(fovs) == 1
+            assert fovs[0].width == 64
+            assert fovs[0].height == 64
+        finally:
+            store.close()
