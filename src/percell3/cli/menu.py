@@ -925,6 +925,11 @@ def _import_images(state: MenuState) -> None:
     _show_preview(scan_result, str(source))
     show_file_group_table(groups)
 
+    # 2a. Tile detection and prompting
+    tile_config = None
+    if len(scan_result.tiles) > 1:
+        tile_config = _prompt_tile_config(scan_result.tiles, groups)
+
     # 2b. Auto/manual import mode choice
     import_mode = numbered_select_one(
         ["Auto-import all groups", "Manual configuration"],
@@ -949,6 +954,7 @@ def _import_images(state: MenuState) -> None:
             condition_map=condition_map, fov_names=fov_names,
             bio_rep_map=bio_rep_map,
             source_files=source_files, scan_result=scan_result,
+            tile_config=tile_config,
         )
         return
 
@@ -1059,6 +1065,90 @@ def _import_images(state: MenuState) -> None:
         condition_map=condition_map, fov_names=fov_names,
         bio_rep_map=bio_rep_map,
         source_files=source_files, scan_result=scan_result,
+        tile_config=tile_config,
+    )
+
+
+def _prompt_tile_config(
+    tiles: list[str],
+    groups: list,
+) -> TileConfig | None:
+    """Detect tiles and prompt user for grid parameters.
+
+    Args:
+        tiles: List of detected tile indices from scan result.
+        groups: File groups (for counting tiles per group).
+
+    Returns:
+        TileConfig if user wants stitching, None otherwise.
+    """
+    from percell3.io.models import TileConfig
+
+    num_tiles = len(tiles)
+    num_groups = len(groups)
+    console.print(
+        f"\n[bold]Tile scan detected:[/bold] "
+        f"{num_tiles} tile indices across {num_groups} file groups"
+    )
+
+    stitch = numbered_select_one(
+        ["Yes", "No"],
+        "Stitch tiles into single FOV?",
+    )
+    if stitch != "Yes":
+        return None
+
+    # Prompt for grid columns (A)
+    while True:
+        try:
+            cols_str = menu_prompt("Grid columns (A)")
+            grid_cols = int(cols_str)
+            if grid_cols < 1:
+                console.print("[red]Must be >= 1[/red]")
+                continue
+            break
+        except (ValueError, _MenuCancel):
+            console.print("[red]Enter an integer >= 1[/red]")
+            continue
+
+    # Prompt for grid rows (B)
+    while True:
+        try:
+            rows_str = menu_prompt("Grid rows (B)")
+            grid_rows = int(rows_str)
+            if grid_rows < 1:
+                console.print("[red]Must be >= 1[/red]")
+                continue
+            break
+        except (ValueError, _MenuCancel):
+            console.print("[red]Enter an integer >= 1[/red]")
+            continue
+
+    # Validate tile count
+    expected = grid_rows * grid_cols
+    if expected != num_tiles:
+        console.print(
+            f"[yellow]Warning:[/yellow] Grid {grid_cols}x{grid_rows} expects "
+            f"{expected} tiles, but {num_tiles} were detected."
+        )
+
+    # Grid type
+    grid_type = numbered_select_one(
+        ["row_by_row", "snake_by_row", "column_by_column", "snake_by_column"],
+        "Grid type",
+    )
+
+    # Order
+    order = numbered_select_one(
+        ["right_and_down", "left_and_down", "right_and_up", "left_and_up"],
+        "Tile order",
+    )
+
+    return TileConfig(
+        grid_rows=grid_rows,
+        grid_cols=grid_cols,
+        grid_type=grid_type,
+        order=order,
     )
 
 

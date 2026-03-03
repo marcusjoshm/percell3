@@ -15,7 +15,7 @@ from percell3.cli.utils import console, error_handler, make_progress, open_exper
 if TYPE_CHECKING:
     from percell3.core import ExperimentStore
     from percell3.io import ChannelMapping, ScanResult
-    from percell3.io.models import DiscoveredFile
+    from percell3.io.models import DiscoveredFile, TileConfig
 
 
 @click.command("import")
@@ -54,6 +54,27 @@ if TYPE_CHECKING:
     "--auto", is_flag=True, default=False,
     help="Auto-import: each FOV token becomes a condition. Cannot combine with --condition.",
 )
+@click.option(
+    "--tile-grid",
+    default=None,
+    help="Tile grid size as 'COLSxROWS' (e.g., '3x2' = 3 columns, 2 rows).",
+)
+@click.option(
+    "--tile-type",
+    type=click.Choice([
+        "row_by_row", "column_by_column", "snake_by_row", "snake_by_column",
+    ]),
+    default=None,
+    help="Tile grid traversal type.",
+)
+@click.option(
+    "--tile-order",
+    type=click.Choice([
+        "right_and_down", "left_and_down", "right_and_up", "left_and_up",
+    ]),
+    default=None,
+    help="Tile grid traversal order.",
+)
 @error_handler
 def import_cmd(
     source: str,
@@ -65,6 +86,9 @@ def import_cmd(
     files: tuple[str, ...],
     yes: bool,
     auto: bool,
+    tile_grid: str | None,
+    tile_type: str | None,
+    tile_order: str | None,
 ) -> None:
     """Import TIFF images into an experiment."""
     if auto and condition != "default":
@@ -72,6 +96,9 @@ def import_cmd(
             "[red]Error:[/red] --auto and --condition are mutually exclusive."
         )
         raise SystemExit(1)
+
+    # Parse tile grid options
+    tile_config = _parse_tile_options(tile_grid, tile_type, tile_order)
 
     store = open_experiment(experiment)
     try:
@@ -82,12 +109,14 @@ def import_cmd(
                 store, source, channel_map, z_projection, yes,
                 bio_rep=bio_rep,
                 source_files=source_files,
+                tile_config=tile_config,
             )
         else:
             _run_import(
                 store, source, condition, channel_map, z_projection, yes,
                 bio_rep=bio_rep,
                 source_files=source_files,
+                tile_config=tile_config,
             )
     finally:
         store.close()
@@ -101,6 +130,7 @@ def _run_auto_import(
     yes: bool,
     bio_rep: str = "N1",
     source_files: list[Path] | None = None,
+    tile_config: TileConfig | None = None,
 ) -> None:
     """Auto-import: each FOV token becomes a condition."""
     from percell3.io import FileScanner
@@ -139,6 +169,7 @@ def _run_auto_import(
         condition_map=condition_map, fov_names=fov_names,
         bio_rep_map=bio_rep_map,
         source_files=source_files, scan_result=scan_result,
+        tile_config=tile_config,
     )
 
 
@@ -155,6 +186,7 @@ def _run_import(
     bio_rep_map: dict[str, str] | None = None,
     source_files: list[Path] | None = None,
     scan_result: ScanResult | None = None,
+    tile_config: TileConfig | None = None,
 ) -> None:
     """Core import logic shared by CLI and interactive menu."""
     from percell3.io import (
@@ -196,6 +228,7 @@ def _run_import(
         condition_map=condition_map or {},
         bio_rep_map=bio_rep_map or {},
         source_files=source_files,
+        tile_config=tile_config,
     )
 
     # Execute with progress
@@ -235,6 +268,8 @@ def _show_preview(scan_result: ScanResult, source: str) -> None:
     table.add_row("FOVs", ", ".join(scan_result.fovs) or "default")
     table.add_row("Timepoints", ", ".join(scan_result.timepoints) or "none")
     table.add_row("Z-slices", ", ".join(scan_result.z_slices) or "none")
+    if scan_result.tiles:
+        table.add_row("Tiles", ", ".join(scan_result.tiles))
 
     if scan_result.files:
         first = scan_result.files[0]
@@ -438,3 +473,60 @@ def _parse_channel_maps(maps: tuple[str, ...]) -> list[ChannelMapping]:
         token, name = m.split(":", 1)
         mappings.append(ChannelMapping(token_value=token.strip(), name=name.strip()))
     return mappings
+
+
+def _parse_tile_options(
+    tile_grid: str | None,
+    tile_type: str | None,
+    tile_order: str | None,
+) -> TileConfig | None:
+    """Parse --tile-grid/type/order CLI options into a TileConfig.
+
+    Args:
+        tile_grid: Grid size as 'COLSxROWS' (e.g., '3x2').
+        tile_type: Grid traversal type.
+        tile_order: Grid traversal order.
+
+    Returns:
+        TileConfig if tile_grid is provided, None otherwise.
+
+    Raises:
+        SystemExit: If tile_grid is malformed or incomplete options.
+    """
+    if tile_grid is None and tile_type is None and tile_order is None:
+        return None
+
+    if tile_grid is None:
+        console.print(
+            "[red]Error:[/red] --tile-grid is required when using "
+            "--tile-type or --tile-order."
+        )
+        raise SystemExit(1)
+
+    from percell3.io.models import TileConfig
+
+    # Parse 'COLSxROWS' format
+    parts = tile_grid.lower().split("x")
+    if len(parts) != 2:
+        console.print(
+            f"[red]Error:[/red] Invalid --tile-grid '{tile_grid}'. "
+            "Expected format: 'COLSxROWS' (e.g., '3x2')."
+        )
+        raise SystemExit(1)
+
+    try:
+        grid_cols = int(parts[0])
+        grid_rows = int(parts[1])
+    except ValueError:
+        console.print(
+            f"[red]Error:[/red] Invalid --tile-grid '{tile_grid}'. "
+            "Values must be integers."
+        )
+        raise SystemExit(1)
+
+    return TileConfig(
+        grid_rows=grid_rows,
+        grid_cols=grid_cols,
+        grid_type=tile_type or "row_by_row",
+        order=tile_order or "right_and_down",
+    )

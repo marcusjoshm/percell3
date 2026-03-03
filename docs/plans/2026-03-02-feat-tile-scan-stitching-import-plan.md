@@ -281,26 +281,26 @@ s6→(2,0)  s3→(2,1)  s0→(2,2)
 
 #### import_cmd.py
 
-- [ ] Add CLI options to `import_cmd`:
+- [x] Add CLI options to `import_cmd`:
   - `--tile-grid TEXT` — grid size as "AxB" (e.g., "3x3")
   - `--tile-type` — choice of grid types
   - `--tile-order` — choice of orders
-- [ ] In `_run_import()`: when tile CLI options are provided, construct `TileConfig` and set on `ImportPlan`
-- [ ] CliRunner tests for `--tile-grid 2x2 --tile-type row_by_row --tile-order right_and_down`
+- [x] In `_run_import()`: when tile CLI options are provided, construct `TileConfig` and set on `ImportPlan`
+- [x] CliRunner tests for `--tile-grid 2x2 --tile-type row_by_row --tile-order right_and_down`
 
 #### menu.py — `_import_images()`
 
-- [ ] After `show_file_group_table(groups)` (line 926), detect tiles:
+- [x] After `show_file_group_table(groups)` (line 926), detect tiles:
   ```python
   has_tiles = bool(scan_result.tiles)
   ```
-- [ ] If `has_tiles` and more than 1 tile detected:
+- [x] If `has_tiles` and more than 1 tile detected:
   - Show tile detection summary: "Detected N tile indices across M file groups"
   - Prompt: "Stitch tiles into single FOV?" [Yes / No]
   - If Yes: prompt grid_cols (A), grid_rows (B), grid_type, order
   - Validate: total tiles per group == A * B (re-prompt on failure)
   - If No: proceed with normal import (tiles become individual FOVs)
-- [ ] Pass `tile_config` through to `_run_import()`
+- [x] Pass `tile_config` through to `_run_import()`
 
 ### Phase 6: Integration — wire everything together
 

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 import tifffile
 from click.testing import CliRunner
 
@@ -167,3 +168,60 @@ class TestFilesFlag:
         assert result.exit_code == 0
         assert "Import complete" in result.output
         assert "Images written: 2" in result.output
+
+
+class TestTileOptions:
+    @pytest.fixture
+    def tile_tiff_dir(self, tmp_path: Path) -> Path:
+        """Create a 2x2 tile grid with 1 channel."""
+        d = tmp_path / "tiles"
+        d.mkdir()
+        for s in range(4):
+            data = np.full((32, 32), fill_value=(s + 1) * 10, dtype=np.uint16)
+            tifffile.imwrite(str(d / f"FOV1_s{s:02d}_ch00.tif"), data)
+        return d
+
+    def test_tile_grid_import(
+        self, runner: CliRunner, experiment_path: Path, tile_tiff_dir: Path,
+    ):
+        """--tile-grid 2x2 stitches 4 tiles into a single FOV."""
+        result = runner.invoke(
+            cli,
+            ["import", str(tile_tiff_dir), "-e", str(experiment_path),
+             "--tile-grid", "2x2", "--tile-type", "row_by_row",
+             "--tile-order", "right_and_down", "--yes"],
+        )
+        assert result.exit_code == 0
+        assert "Import complete" in result.output
+        assert "FOVs imported: 1" in result.output
+        assert "Images written: 1" in result.output
+
+    def test_tile_grid_invalid_format(
+        self, runner: CliRunner, experiment_path: Path, tile_tiff_dir: Path,
+    ):
+        """--tile-grid with bad format produces an error."""
+        result = runner.invoke(
+            cli,
+            ["import", str(tile_tiff_dir), "-e", str(experiment_path),
+             "--tile-grid", "abc", "--yes"],
+        )
+        assert result.exit_code == 1
+        assert "Invalid" in result.output
+
+    def test_tile_type_without_grid_errors(
+        self, runner: CliRunner, experiment_path: Path, tile_tiff_dir: Path,
+    ):
+        """--tile-type without --tile-grid produces an error."""
+        result = runner.invoke(
+            cli,
+            ["import", str(tile_tiff_dir), "-e", str(experiment_path),
+             "--tile-type", "row_by_row", "--yes"],
+        )
+        assert result.exit_code == 1
+        assert "--tile-grid is required" in result.output
+
+    def test_help_shows_tile_options(self, runner: CliRunner):
+        result = runner.invoke(cli, ["import", "--help"])
+        assert "--tile-grid" in result.output
+        assert "--tile-type" in result.output
+        assert "--tile-order" in result.output
