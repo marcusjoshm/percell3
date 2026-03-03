@@ -937,6 +937,30 @@ def delete_particles_for_threshold(
     return count
 
 
+def delete_particles_for_fov_threshold(
+    conn: sqlite3.Connection,
+    fov_id: int,
+    threshold_id: int,
+) -> int:
+    """Delete particles for a specific FOV + threshold combination.
+
+    Returns:
+        Number of particles deleted.
+    """
+    count = conn.execute(
+        "SELECT COUNT(*) FROM particles WHERE fov_id = ? AND threshold_id = ?",
+        (fov_id, threshold_id),
+    ).fetchone()[0]
+    if count == 0:
+        return 0
+    conn.execute(
+        "DELETE FROM particles WHERE fov_id = ? AND threshold_id = ?",
+        (fov_id, threshold_id),
+    )
+    conn.commit()
+    return count
+
+
 # ---------------------------------------------------------------------------
 # Analysis Config
 # ---------------------------------------------------------------------------

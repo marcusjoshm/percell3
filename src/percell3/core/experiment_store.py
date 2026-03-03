@@ -1260,6 +1260,17 @@ class ExperimentStore:
             self._conn, threshold_id,
         )
 
+    def delete_particles_for_fov_threshold(
+        self, fov_id: int, threshold_id: int,
+    ) -> int:
+        """Delete particles for a specific FOV + threshold combination."""
+        count = queries.delete_particles_for_fov_threshold(
+            self._conn, fov_id, threshold_id,
+        )
+        if count:
+            self.update_fov_status_cache(fov_id)
+        return count
+
     # --- Particle Label I/O (keyed by threshold_id) ---
 
     def write_particle_labels(

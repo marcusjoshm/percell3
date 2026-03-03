@@ -195,6 +195,23 @@ class TestOnThresholdCreated:
         # Cell 2 does not overlap; no particles
         assert len(particles) >= 0  # At least no crash
 
+    def test_idempotent_rerun(self, threshold_experiment):
+        """Calling on_threshold_created twice does not crash on duplicate particles."""
+        store = threshold_experiment
+        fov_id = store._test_fov_id
+        seg_id = store._test_seg_id
+        thr_id = store._test_thr_id
+
+        total1 = on_threshold_created(store, thr_id, fov_id, seg_id)
+        particles1 = store.get_particles(threshold_id=thr_id)
+
+        # Second call should not crash
+        total2 = on_threshold_created(store, thr_id, fov_id, seg_id)
+        particles2 = store.get_particles(threshold_id=thr_id)
+
+        # Particle count should be the same after re-run
+        assert len(particles1) == len(particles2)
+
     def test_no_channels_returns_zero(self, tmp_path):
         store = ExperimentStore.create(tmp_path / "empty.percell")
         store.add_condition("control")

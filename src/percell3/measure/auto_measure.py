@@ -115,6 +115,9 @@ def on_threshold_created(
     total = 0
 
     try:
+        # Clean up stale particles so re-runs are idempotent
+        store.delete_particles_for_fov_threshold(fov_id, threshold_id)
+
         # Particle analysis
         analyzer = ParticleAnalyzer()
         result = analyzer.analyze_fov(
