@@ -100,8 +100,8 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
         if cell_count == 0:
             errors.append("No cells found. Run segmentation first.")
 
-        threshold_runs = store.get_threshold_runs()
-        if not threshold_runs:
+        thresholds = store.get_thresholds()
+        if not thresholds:
             errors.append("No threshold runs found. Run thresholding first to generate particle masks.")
 
         return errors
@@ -184,9 +184,9 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
         do_save_images = params.get("save_images", True)
 
         # Find threshold run for particle channel
-        all_threshold_runs = store.get_threshold_runs()
+        all_thresholds = store.get_thresholds()
         particle_runs = [
-            tr for tr in all_threshold_runs if tr.channel == particle_channel
+            tr for tr in all_thresholds if tr.source_channel == particle_channel
         ]
         if not particle_runs:
             raise RuntimeError(
@@ -223,9 +223,12 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
             fov_info = store.get_fov_by_id(fov_id)
 
             # Resolve per-FOV run IDs
-            seg_runs = store.list_segmentation_runs(fov_id)
+            seg_runs = [
+                s for s in store.get_segmentations(seg_type="cellular")
+                if s.source_fov_id == fov_id
+            ]
             seg_run_id = seg_runs[0].id if seg_runs else None
-            fov_thr_runs = [tr for tr in particle_runs if tr.fov_id == fov_id]
+            fov_thr_runs = [tr for tr in particle_runs if tr.source_fov_id == fov_id]
             thr_run_id = fov_thr_runs[-1].id if fov_thr_runs else None
 
             if seg_run_id is None or thr_run_id is None:
@@ -234,8 +237,8 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
 
             # Read images for this FOV
             try:
-                cell_labels = store.read_labels(fov_id, seg_run_id)
-                particle_labels = store.read_particle_labels(fov_id, particle_channel, thr_run_id)
+                cell_labels = store.read_labels(seg_run_id)
+                particle_labels = store.read_particle_labels(thr_run_id)
                 measurement_image = store.read_image_numpy(fov_id, meas_channel)
             except Exception as exc:
                 logger.warning(
@@ -250,11 +253,11 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
             if exclusion_channel:
                 try:
                     excl_thr_runs = [
-                        tr for tr in all_threshold_runs
-                        if tr.channel == exclusion_channel and tr.fov_id == fov_id
+                        tr for tr in all_thresholds
+                        if tr.source_channel == exclusion_channel and tr.source_fov_id == fov_id
                     ]
                     if excl_thr_runs:
-                        excl_raw = store.read_mask(fov_id, exclusion_channel, excl_thr_runs[-1].id)
+                        excl_raw = store.read_mask(excl_thr_runs[-1].id)
                         exclusion_mask = excl_raw > 0
                 except Exception:
                     logger.debug(

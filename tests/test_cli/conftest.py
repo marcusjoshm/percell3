@@ -54,11 +54,12 @@ def experiment_with_particles(experiment_with_data: ExperimentStore) -> Experime
     """Experiment with channels, conditions, FOVs, images, cells, and particles."""
     store = experiment_with_data
 
-    # Add segmentation run and cells
+    # Add segmentation and cells
     fovs = store.get_fovs(condition="control")
     fov_id = fovs[0].id
-    seg_id = store.add_segmentation_run(
-        fov_id=fov_id, channel="DAPI", model_name="cyto3",
+    seg_id = store.add_segmentation(
+        "seg_DAPI", "cellular", 64, 64,
+        source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
     )
 
     cells = [
@@ -78,33 +79,35 @@ def experiment_with_particles(experiment_with_data: ExperimentStore) -> Experime
         MeasurementRecord(
             cell_id=cid, channel_id=ch_info.id,
             metric="mean_intensity", value=100.0 + i * 10,
+            segmentation_id=seg_id,
         )
         for i, cid in enumerate(cell_ids)
     ]
     store.add_measurements(measurements)
 
-    # Add threshold run and particles
-    thr_id = store.add_threshold_run(
-        fov_id=fov_id, channel="GFP", method="otsu",
+    # Add threshold and particles
+    thr_id = store.add_threshold(
+        "thr_GFP_otsu", "otsu", 64, 64,
+        source_fov_id=fov_id, source_channel="GFP",
     )
 
     particles = [
         ParticleRecord(
-            cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
+            fov_id=fov_id, threshold_id=thr_id, label_value=1,
             centroid_x=12.0, centroid_y=22.0,
             bbox_x=8, bbox_y=18, bbox_w=8, bbox_h=8,
             area_pixels=50.0, mean_intensity=120.0,
             max_intensity=200.0, integrated_intensity=6000.0,
         ),
         ParticleRecord(
-            cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=2,
+            fov_id=fov_id, threshold_id=thr_id, label_value=2,
             centroid_x=15.0, centroid_y=25.0,
             bbox_x=11, bbox_y=21, bbox_w=6, bbox_h=6,
             area_pixels=30.0, mean_intensity=80.0,
             max_intensity=150.0, integrated_intensity=2400.0,
         ),
         ParticleRecord(
-            cell_id=cell_ids[1], threshold_run_id=thr_id, label_value=3,
+            fov_id=fov_id, threshold_id=thr_id, label_value=3,
             centroid_x=22.0, centroid_y=32.0,
             bbox_x=18, bbox_y=28, bbox_w=10, bbox_h=10,
             area_pixels=70.0, mean_intensity=90.0,
@@ -118,32 +121,32 @@ def experiment_with_particles(experiment_with_data: ExperimentStore) -> Experime
     cell_area = 200.0
     summary_measurements = [
         # cell_ids[0]: 2 particles (areas 50+30=80, intensities 120/80 mean, 6000/2400 integ)
-        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="particle_count", value=2.0),
-        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="total_particle_area", value=80.0),
-        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="mean_particle_area", value=40.0),
-        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="max_particle_area", value=50.0),
-        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="particle_coverage_fraction", value=80.0 / cell_area),
-        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="mean_particle_mean_intensity", value=100.0),
-        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="mean_particle_integrated_intensity", value=4200.0),
-        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="total_particle_integrated_intensity", value=8400.0),
+        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="particle_count", value=2.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="total_particle_area", value=80.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="mean_particle_area", value=40.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="max_particle_area", value=50.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="particle_coverage_fraction", value=80.0 / cell_area, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="mean_particle_mean_intensity", value=100.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="mean_particle_integrated_intensity", value=4200.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[0], channel_id=ch_info.id, metric="total_particle_integrated_intensity", value=8400.0, segmentation_id=seg_id),
         # cell_ids[1]: 1 particle (area 70, intensity 90 mean, 6300 integ)
-        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="particle_count", value=1.0),
-        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="total_particle_area", value=70.0),
-        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="mean_particle_area", value=70.0),
-        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="max_particle_area", value=70.0),
-        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="particle_coverage_fraction", value=70.0 / cell_area),
-        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="mean_particle_mean_intensity", value=90.0),
-        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="mean_particle_integrated_intensity", value=6300.0),
-        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="total_particle_integrated_intensity", value=6300.0),
+        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="particle_count", value=1.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="total_particle_area", value=70.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="mean_particle_area", value=70.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="max_particle_area", value=70.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="particle_coverage_fraction", value=70.0 / cell_area, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="mean_particle_mean_intensity", value=90.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="mean_particle_integrated_intensity", value=6300.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[1], channel_id=ch_info.id, metric="total_particle_integrated_intensity", value=6300.0, segmentation_id=seg_id),
         # cell_ids[2]: 0 particles
-        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="particle_count", value=0.0),
-        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="total_particle_area", value=0.0),
-        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="mean_particle_area", value=0.0),
-        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="max_particle_area", value=0.0),
-        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="particle_coverage_fraction", value=0.0),
-        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="mean_particle_mean_intensity", value=0.0),
-        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="mean_particle_integrated_intensity", value=0.0),
-        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="total_particle_integrated_intensity", value=0.0),
+        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="particle_count", value=0.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="total_particle_area", value=0.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="mean_particle_area", value=0.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="max_particle_area", value=0.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="particle_coverage_fraction", value=0.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="mean_particle_mean_intensity", value=0.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="mean_particle_integrated_intensity", value=0.0, segmentation_id=seg_id),
+        MeasurementRecord(cell_id=cell_ids[2], channel_id=ch_info.id, metric="total_particle_integrated_intensity", value=0.0, segmentation_id=seg_id),
     ]
     store.add_measurements(summary_measurements)
 
@@ -179,18 +182,20 @@ def experiment_with_particle_images(tmp_path: Path) -> ExperimentStore:
     labels = np.zeros((64, 64), dtype=np.int32)
     labels[15:30, 5:20] = 1
     labels[30:45, 20:35] = 2
-    seg_id = store.add_segmentation_run(
-        fov_id=fov_id, channel="DAPI", model_name="cyto3",
+    seg_id = store.add_segmentation(
+        "seg_DAPI", "cellular", 64, 64,
+        source_fov_id=fov_id, source_channel="DAPI", model_name="cyto3",
     )
-    store.write_labels(fov_id, labels, seg_id)
+    store.write_labels(labels, seg_id)
 
     # Threshold mask — only the bright spot
     mask = np.zeros((64, 64), dtype=np.uint8)
     mask[18:26, 8:16] = 1
-    thr_id = store.add_threshold_run(
-        fov_id=fov_id, channel="GFP", method="otsu",
+    thr_id = store.add_threshold(
+        "thr_GFP_otsu", "otsu", 64, 64,
+        source_fov_id=fov_id, source_channel="GFP",
     )
-    store.write_mask(fov_id, "GFP", mask, thr_id)
+    store.write_mask(mask, thr_id)
 
     # Cells
     cells = [
@@ -212,7 +217,7 @@ def experiment_with_particle_images(tmp_path: Path) -> ExperimentStore:
     # Particle in cell 1
     particles = [
         ParticleRecord(
-            cell_id=cell_ids[0], threshold_run_id=thr_id, label_value=1,
+            fov_id=fov_id, threshold_id=thr_id, label_value=1,
             centroid_x=12.0, centroid_y=22.0,
             bbox_x=8, bbox_y=18, bbox_w=8, bbox_h=8,
             area_pixels=64.0, mean_intensity=150.0,
@@ -227,6 +232,7 @@ def experiment_with_particle_images(tmp_path: Path) -> ExperimentStore:
         MeasurementRecord(
             cell_id=cid, channel_id=ch_info.id,
             metric="mean_intensity", value=100.0 + i * 10,
+            segmentation_id=seg_id,
         )
         for i, cid in enumerate(cell_ids)
     ]

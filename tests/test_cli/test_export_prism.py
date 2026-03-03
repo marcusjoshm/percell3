@@ -41,6 +41,7 @@ def prism_experiment(tmp_path: Path) -> ExperimentStore:
     img = np.zeros((64, 64), dtype=np.uint16)
 
     all_cell_ids: dict[str, list[int]] = {}
+    cell_seg_map: dict[int, int] = {}  # cell_id -> segmentation_id
 
     # Add FOVs, images, cells, and measurements
     for cond in ("Control", "HS"):
@@ -55,9 +56,11 @@ def prism_experiment(tmp_path: Path) -> ExperimentStore:
                 store.write_image(fov_id, "DAPI", img)
                 store.write_image(fov_id, "GFP", img)
 
-                # Per-FOV segmentation run
-                seg_id = store.add_segmentation_run(
-                    fov_id=fov_id, channel="DAPI", model_name="cyto3",
+                # Per-FOV segmentation
+                seg_id = store.add_segmentation(
+                    f"seg_{cond}_{bio_rep}_{fov_num}", "cellular", 64, 64,
+                    source_fov_id=fov_id, source_channel="DAPI",
+                    model_name="cyto3",
                 )
 
                 # Different cell counts: Control gets 3 cells/FOV, HS gets 2
@@ -73,6 +76,8 @@ def prism_experiment(tmp_path: Path) -> ExperimentStore:
                 ]
                 cell_ids = store.add_cells(cells)
                 all_cell_ids[key].extend(cell_ids)
+                for cid in cell_ids:
+                    cell_seg_map[cid] = seg_id
 
                 # Add measurements for both channels
                 measurements = []
@@ -81,10 +86,12 @@ def prism_experiment(tmp_path: Path) -> ExperimentStore:
                         measurements.append(MeasurementRecord(
                             cell_id=cid, channel_id=ch_info.id,
                             metric="mean_intensity", value=100.0 + cid,
+                            segmentation_id=seg_id,
                         ))
                         measurements.append(MeasurementRecord(
                             cell_id=cid, channel_id=ch_info.id,
                             metric="median_intensity", value=90.0 + cid,
+                            segmentation_id=seg_id,
                         ))
                 store.add_measurements(measurements)
 
@@ -98,25 +105,30 @@ def prism_experiment(tmp_path: Path) -> ExperimentStore:
         particle_summaries.append(MeasurementRecord(
             cell_id=cid, channel_id=gfp_ch.id,
             metric="particle_count", value=2.0,
+            segmentation_id=cell_seg_map[cid],
         ))
         particle_summaries.append(MeasurementRecord(
             cell_id=cid, channel_id=gfp_ch.id,
             metric="mean_particle_area", value=40.0,
+            segmentation_id=cell_seg_map[cid],
         ))
     for i, cid in enumerate(all_cell_ids["Control_N2"]):
         particle_summaries.append(MeasurementRecord(
             cell_id=cid, channel_id=gfp_ch.id,
             metric="particle_count", value=1.0 if i < 3 else 0.0,
+            segmentation_id=cell_seg_map[cid],
         ))
     for cid in all_cell_ids["HS_N1"]:
         particle_summaries.append(MeasurementRecord(
             cell_id=cid, channel_id=gfp_ch.id,
             metric="particle_count", value=0.0,
+            segmentation_id=cell_seg_map[cid],
         ))
     for i, cid in enumerate(all_cell_ids["HS_N2"]):
         particle_summaries.append(MeasurementRecord(
             cell_id=cid, channel_id=gfp_ch.id,
             metric="particle_count", value=3.0 if i < 2 else 0.0,
+            segmentation_id=cell_seg_map[cid],
         ))
     store.add_measurements(particle_summaries)
 
@@ -244,6 +256,7 @@ class TestPrismExportCore:
                 cell_id=row["id"], channel_id=gfp_ch.id,
                 metric="mean_intensity", value=50.0,
                 scope="mask_inside",
+                segmentation_id=row["segmentation_id"],
             )
             for _, row in cells_df.iterrows()
         ]

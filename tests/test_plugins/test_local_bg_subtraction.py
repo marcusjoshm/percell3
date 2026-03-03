@@ -38,8 +38,9 @@ def _create_bg_sub_experiment(tmp_path: Path) -> ExperimentStore:
     store.add_condition("control")
 
     fov_id = store.add_fov("control", width=80, height=80, pixel_size_um=0.65)
-    seg_run_id = store.add_segmentation_run(
-        fov_id=fov_id, channel="DAPI", model_name="mock",
+    seg_run_id = store.add_segmentation(
+        name="seg_test", seg_type="cellular", width=80, height=80,
+        source_fov_id=fov_id, source_channel="DAPI", model_name="mock",
         parameters={"diameter": 30.0},
     )
 
@@ -59,7 +60,7 @@ def _create_bg_sub_experiment(tmp_path: Path) -> ExperimentStore:
     labels = np.zeros((80, 80), dtype=np.int32)
     labels[10:30, 10:30] = 1
     labels[50:70, 50:70] = 2
-    store.write_labels(fov_id, labels, seg_run_id)
+    store.write_labels(labels, seg_run_id)
 
     # Cells
     cells = [
@@ -83,8 +84,9 @@ def _create_bg_sub_experiment(tmp_path: Path) -> ExperimentStore:
     cell_ids = store.add_cells(cells)
 
     # Threshold run + mask + particle labels for GFP
-    tr_id = store.add_threshold_run(
-        fov_id=fov_id, channel="GFP", method="otsu",
+    tr_id = store.add_threshold(
+        name="thresh_test", method="otsu", width=80, height=80,
+        source_fov_id=fov_id, source_channel="GFP",
         parameters={"threshold_value": 100.0},
     )
 
@@ -92,17 +94,17 @@ def _create_bg_sub_experiment(tmp_path: Path) -> ExperimentStore:
     mask = np.zeros((80, 80), dtype=np.uint8)
     mask[18:22, 18:22] = 255  # particle in cell 1
     mask[58:62, 58:62] = 255  # particle in cell 2
-    store.write_mask(fov_id, "GFP", mask, tr_id)
+    store.write_mask(mask, tr_id)
 
     # Particle labels (integer-coded, one label per connected component)
     particle_labels = np.zeros((80, 80), dtype=np.int32)
     particle_labels[18:22, 18:22] = 1
     particle_labels[58:62, 58:62] = 2
-    store.write_particle_labels(fov_id, "GFP", particle_labels, tr_id)
+    store.write_particle_labels(particle_labels, tr_id)
 
     store._test_fov_id = fov_id
     store._test_cell_ids = cell_ids
-    store._test_threshold_run_id = tr_id
+    store._test_threshold_id = tr_id
     return store
 
 
@@ -154,12 +156,14 @@ class TestLocalBGSubtractionValidation:
         store.add_channel("GFP")
         store.add_condition("control")
         fov_id = store.add_fov("control", width=32, height=32)
-        seg_id = store.add_segmentation_run(
-            fov_id=fov_id, channel="GFP", model_name="mock", parameters={},
+        seg_id = store.add_segmentation(
+            name="seg_nothresh", seg_type="cellular", width=32, height=32,
+            source_fov_id=fov_id, source_channel="GFP", model_name="mock",
+            parameters={},
         )
         labels = np.zeros((32, 32), dtype=np.int32)
         labels[5:15, 5:15] = 1
-        store.write_labels(fov_id, labels, seg_id)
+        store.write_labels(labels, seg_id)
         store.add_cells([CellRecord(
             fov_id=fov_id, segmentation_id=seg_id, label_value=1,
             centroid_x=10.0, centroid_y=10.0,
@@ -289,14 +293,15 @@ class TestLocalBGSubtractionRun:
         """Exclusion mask should not crash the plugin."""
         store = _create_bg_sub_experiment(tmp_path)
 
-        # Add a DAPI threshold run + mask for exclusion
-        tr_id = store.add_threshold_run(
-            fov_id=store._test_fov_id, channel="DAPI", method="otsu",
+        # Add a DAPI threshold + mask for exclusion
+        tr_id = store.add_threshold(
+            name="thresh_excl", method="otsu", width=80, height=80,
+            source_fov_id=store._test_fov_id, source_channel="DAPI",
             parameters={"threshold_value": 40.0},
         )
         excl_mask = np.zeros((80, 80), dtype=np.uint8)
         excl_mask[15:25, 15:25] = 255  # overlapping with cell 1 region
-        store.write_mask(store._test_fov_id, "DAPI", excl_mask, tr_id)
+        store.write_mask(excl_mask, tr_id)
 
         plugin = LocalBGSubtractionPlugin()
         result = plugin.run(store, parameters={

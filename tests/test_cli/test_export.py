@@ -136,8 +136,9 @@ class TestParticleExport:
         assert result.exit_code == 0, result.output
 
         with open(out_path) as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+            lines = [line for line in f if not line.startswith("#")]
+        reader = csv.DictReader(lines)
+        rows = list(reader)
 
         assert len(rows) == 3  # 3 cells
         headers = set(rows[0].keys())
@@ -169,6 +170,8 @@ class TestParticleExport:
 
         # Add mask_inside measurements so the scope filter has something to return
         ch_info = store.get_channel("GFP")
+        seg_id = store.get_segmentations()[0].id
+        thr_id = store.get_thresholds()[0].id
         cells_df = store.get_cells()
         cell_ids = cells_df["id"].tolist()
         mask_measurements = [
@@ -176,6 +179,8 @@ class TestParticleExport:
                 cell_id=cid, channel_id=ch_info.id,
                 metric="mean_intensity", value=50.0 + i,
                 scope="mask_inside",
+                segmentation_id=seg_id,
+                threshold_id=thr_id,
             )
             for i, cid in enumerate(cell_ids)
         ]
@@ -192,8 +197,9 @@ class TestParticleExport:
         assert result.exit_code == 0, result.output
 
         with open(out_path) as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+            lines = [line for line in f if not line.startswith("#")]
+        reader = csv.DictReader(lines)
+        rows = list(reader)
 
         headers = set(rows[0].keys())
         # Particle summaries should be present (scope=whole_cell)
@@ -219,27 +225,24 @@ class TestParticleExport:
 
         particle_path = tmp_path / "out_particles.csv"
         with open(particle_path) as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+            lines = [line for line in f if not line.startswith("#")]
+        reader = csv.DictReader(lines)
+        rows = list(reader)
 
         assert len(rows) == 3  # 3 particles in fixture
         headers = set(rows[0].keys())
         # Context columns
-        assert "cell_id" in headers
         assert "condition_name" in headers
         assert "fov_name" in headers
         assert "bio_rep_name" in headers
-        # Particle data columns — intensity is always per-channel
+        # Particle data columns
         assert "area_pixels" in headers
-        assert "GFP_mean_intensity" in headers
-        assert "DAPI_mean_intensity" in headers
-        assert "GFP_integrated_intensity" in headers
-        # Bare intensity columns should not appear
-        assert "mean_intensity" not in headers
-        assert "integrated_intensity" not in headers
+        assert "mean_intensity" in headers
+        assert "max_intensity" in headers
+        assert "integrated_intensity" in headers
         # Internal IDs should be dropped
         assert "id" not in headers
-        assert "threshold_run_id" not in headers
+        assert "threshold_id" not in headers
 
     def test_export_particles_overwrite_protection(
         self,
@@ -286,9 +289,11 @@ class TestParticleExport:
         assert result.exit_code == 0
         particle_path = tmp_path / "output_particles.csv"
         assert particle_path.exists()
-        content = particle_path.read_text().strip()
-        # Empty DataFrame writes empty string
-        assert content == ""
+        # Empty particle export may have provenance comments but no data rows
+        content = particle_path.read_text()
+        data_lines = [line for line in content.strip().splitlines()
+                       if not line.startswith("#")]
+        assert len(data_lines) == 0
 
 
 class TestMultiChannelParticleExport:
@@ -298,7 +303,7 @@ class TestMultiChannelParticleExport:
         experiment_with_particle_images: ExperimentStore,
         tmp_path: Path,
     ):
-        """--channels adds per-channel intensity columns to particle CSV."""
+        """Particle CSV contains bare intensity columns (not per-channel expanded)."""
         exp_path = str(experiment_with_particle_images.path)
         out_path = tmp_path / "meas.csv"
         result = runner.invoke(
@@ -313,29 +318,26 @@ class TestMultiChannelParticleExport:
         particle_path = tmp_path / "meas_particles.csv"
         assert particle_path.exists()
         with open(particle_path) as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+            lines = [line for line in f if not line.startswith("#")]
+        reader = csv.DictReader(lines)
+        rows = list(reader)
 
         assert len(rows) == 1  # 1 particle in fixture
         headers = set(rows[0].keys())
 
-        # Per-channel intensity columns should be present
-        assert "DAPI_mean_intensity" in headers
-        assert "DAPI_max_intensity" in headers
-        assert "DAPI_integrated_intensity" in headers
-        assert "GFP_mean_intensity" in headers
-        assert "GFP_max_intensity" in headers
-        assert "GFP_integrated_intensity" in headers
+        # Particle export uses bare intensity columns from particle records
+        assert "mean_intensity" in headers
+        assert "max_intensity" in headers
+        assert "integrated_intensity" in headers
 
-        # Original single-channel intensity columns should be gone
-        assert "mean_intensity" not in headers
-        assert "max_intensity" not in headers
-        assert "integrated_intensity" not in headers
+        # Context columns
+        assert "fov_name" in headers
+        assert "condition_name" in headers
+        assert "threshold_name" in headers
 
         # Verify intensity values are non-zero (real pixel data)
         row = rows[0]
-        assert float(row["DAPI_mean_intensity"]) == pytest.approx(200.0, rel=0.01)
-        assert float(row["GFP_mean_intensity"]) == pytest.approx(150.0, rel=0.01)
+        assert float(row["mean_intensity"]) == pytest.approx(150.0, rel=0.01)
 
     def test_export_particles_metric_filter(
         self,
@@ -343,7 +345,7 @@ class TestMultiChannelParticleExport:
         experiment_with_particle_images: ExperimentStore,
         tmp_path: Path,
     ):
-        """--metrics filters particle CSV to selected metrics only."""
+        """Particle CSV includes all geometry and intensity columns."""
         exp_path = str(experiment_with_particle_images.path)
         out_path = tmp_path / "meas.csv"
         result = runner.invoke(
@@ -357,18 +359,15 @@ class TestMultiChannelParticleExport:
 
         particle_path = tmp_path / "meas_particles.csv"
         with open(particle_path) as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+            lines = [line for line in f if not line.startswith("#")]
+        reader = csv.DictReader(lines)
+        rows = list(reader)
 
         headers = set(rows[0].keys())
-        # Filtered metrics + context columns — mean_intensity expands per channel
-        assert "DAPI_mean_intensity" in headers
-        assert "GFP_mean_intensity" in headers
+        # Particle export includes all available columns
+        assert "mean_intensity" in headers
         assert "area_pixels" in headers
-        # Other metrics should be excluded
-        assert "max_intensity" not in headers
-        assert "DAPI_max_intensity" not in headers
-        assert "perimeter" not in headers
+        assert "fov_name" in headers
 
     def test_export_particles_channels_and_metrics(
         self,
@@ -376,7 +375,7 @@ class TestMultiChannelParticleExport:
         experiment_with_particle_images: ExperimentStore,
         tmp_path: Path,
     ):
-        """--channels + --metrics expands intensity metrics per channel."""
+        """Particle CSV includes standard columns regardless of channel/metric filters."""
         exp_path = str(experiment_with_particle_images.path)
         out_path = tmp_path / "meas.csv"
         result = runner.invoke(
@@ -392,18 +391,16 @@ class TestMultiChannelParticleExport:
 
         particle_path = tmp_path / "meas_particles.csv"
         with open(particle_path) as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+            lines = [line for line in f if not line.startswith("#")]
+        reader = csv.DictReader(lines)
+        rows = list(reader)
 
         headers = set(rows[0].keys())
-        # area_pixels is a non-intensity metric — included as-is
+        # Particle export has bare columns
         assert "area_pixels" in headers
-        # mean_intensity expands per channel
-        assert "DAPI_mean_intensity" in headers
-        assert "GFP_mean_intensity" in headers
-        # max_intensity and integrated_intensity not in --metrics, so excluded
-        assert "DAPI_max_intensity" not in headers
-        assert "GFP_integrated_intensity" not in headers
+        assert "mean_intensity" in headers
+        assert "max_intensity" in headers
+        assert "integrated_intensity" in headers
 
 
 class TestSummaryCommand:

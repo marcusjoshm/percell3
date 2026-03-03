@@ -436,8 +436,8 @@ def _run_bg_subtraction(state: MenuState, registry) -> None:
 
     # Step 2: Particle mask channel
     # Find channels with threshold runs (i.e., particle masks exist)
-    threshold_runs = store.get_threshold_runs()
-    particle_channels = sorted({tr.channel for tr in threshold_runs})
+    thresholds = store.get_thresholds()
+    particle_channels = sorted({tr.source_channel for tr in thresholds if tr.source_channel})
     if not particle_channels:
         console.print("\n[red]No particle masks found.[/red]")
         console.print("[dim]Run 'Grouped intensity thresholding' first to generate particle masks.[/dim]")
@@ -574,8 +574,8 @@ def _run_condensate_analysis(state: MenuState, registry) -> None:
     meas_channel = numbered_select_one(ch_names, "Measurement channel")
 
     # Step 2: Particle mask channel
-    threshold_runs = store.get_threshold_runs()
-    particle_channels = sorted({tr.channel for tr in threshold_runs})
+    thresholds = store.get_thresholds()
+    particle_channels = sorted({tr.source_channel for tr in thresholds if tr.source_channel})
     if not particle_channels:
         console.print("\n[red]No particle masks found.[/red]")
         console.print("[dim]Run 'Grouped intensity thresholding' first to generate particle masks.[/dim]")
@@ -1678,12 +1678,11 @@ def _segment_cells(state: MenuState) -> None:
         if stat.get("status") == "ok" and stat.get("run_id"):
             fov_name = stat["fov"]
             run_id = stat["run_id"]
-            seg_runs = store.list_segmentation_runs(
-                next(f.id for f in selected_fovs if f.display_name == fov_name)
-            )
-            run = next((r for r in seg_runs if r.id == run_id), None)
-            if run:
-                console.print(f"  {fov_name}: run [cyan]{run.name}[/cyan] ({stat['cell_count']} cells)")
+            try:
+                seg_info = store.get_segmentation(run_id)
+                console.print(f"  {fov_name}: segmentation [cyan]{seg_info.name}[/cyan] ({stat['cell_count']} cells)")
+            except Exception:
+                console.print(f"  {fov_name}: segmentation #{run_id} ({stat['cell_count']} cells)")
 
     if result.warnings:
         console.print(f"\n[yellow]Warnings ({len(result.warnings)}):[/yellow]")
@@ -1713,14 +1712,15 @@ def _segment_cells(state: MenuState) -> None:
                     "Measuring...", total=len(selected_fovs),
                 )
                 for ai, fov_info in enumerate(selected_fovs):
-                    seg_run_id = fov_run_map.get(fov_info.display_name)
-                    count = auto_measurer.measure_fov(
-                        store,
-                        fov_id=fov_info.id,
-                        channels=ch_names,
-                        segmentation_run_id=seg_run_id,
-                    )
-                    total_auto += count
+                    seg_id = fov_run_map.get(fov_info.display_name)
+                    if seg_id is not None:
+                        count = auto_measurer.measure_fov(
+                            store,
+                            fov_id=fov_info.id,
+                            channels=ch_names,
+                            segmentation_id=seg_id,
+                        )
+                        total_auto += count
                     auto_progress.update(
                         auto_task, completed=ai + 1,
                         description=f"Measuring {fov_info.display_name}",
@@ -1798,19 +1798,6 @@ def _measure_channels(state: MenuState) -> None:
         console.print("[red]No cells found.[/red] Run segmentation first.")
         return
 
-    # Auto-create measurement config if none exists
-    active_config_id = store.get_active_measurement_config_id()
-    if active_config_id is None:
-        try:
-            config_id = store.auto_create_default_config()
-            config = store.get_measurement_config(config_id)
-            console.print(
-                f"[dim]Auto-created measurement config '{config.name}' "
-                f"with {config.entry_count} entries.[/dim]"
-            )
-        except ValueError:
-            pass  # No seg runs — config not needed for whole-cell measurement
-
     while True:
         # Mode selection
         console.print("\n[bold]Measurement mode:[/bold]")
@@ -1879,10 +1866,15 @@ def _measure_whole_cell(store, channels, all_fovs) -> None:
         total_measurements = 0
 
         for i, fov_info in enumerate(selected_fovs):
+            fov_config = store.get_fov_config(fov_info.id)
+            if not fov_config:
+                continue
+            seg_id = fov_config[0].segmentation_id
             count = measurer.measure_fov(
                 store,
                 fov_id=fov_info.id,
                 channels=selected_channels,
+                segmentation_id=seg_id,
             )
             total_measurements += count
             progress.update(
@@ -1899,26 +1891,27 @@ def _measure_whole_cell(store, channels, all_fovs) -> None:
 
 def _measure_masked(store, channels, all_fovs, scopes: list[str]) -> None:
     """Run mask-based measurement using threshold masks."""
-    # Check for threshold runs
-    threshold_runs = store.get_threshold_runs()
-    if not threshold_runs:
+    # Check for thresholds
+    all_thresholds = store.get_thresholds()
+    if not all_thresholds:
         console.print(
-            "[red]No threshold runs found.[/red] "
+            "[red]No thresholds found.[/red] "
             "Run 'Grouped intensity thresholding' (menu 6) first."
         )
         return
 
-    # Group threshold runs by channel, pick most recent per channel
-    runs_by_channel: dict[str, object] = {}
-    for run in threshold_runs:
-        runs_by_channel[run.channel] = run  # last wins = most recent
+    # Group thresholds by source_channel, pick most recent per channel
+    thresholds_by_channel: dict[str, object] = {}
+    for thr in all_thresholds:
+        if thr.source_channel:
+            thresholds_by_channel[thr.source_channel] = thr  # last wins = most recent
 
     # Select threshold channel
-    thresh_channels = list(runs_by_channel.keys())
+    thresh_channels = list(thresholds_by_channel.keys())
     console.print("\n[bold]Threshold channels available:[/bold]")
     threshold_channel = numbered_select_one(thresh_channels, "Threshold channel")
-    selected_run = runs_by_channel[threshold_channel]
-    threshold_run_id = selected_run.id
+    selected_thr = thresholds_by_channel[threshold_channel]
+    threshold_id = selected_thr.id
 
     # Select measurement channels
     ch_names = [ch.name for ch in channels]
@@ -1942,7 +1935,7 @@ def _measure_masked(store, channels, all_fovs, scopes: list[str]) -> None:
     scope_label = " + ".join(s.replace("mask_", "") for s in scopes)
     console.print(f"\n[bold]Measurement settings:[/bold]")
     console.print(f"  Mode:      Mask-based ({scope_label})")
-    console.print(f"  Threshold: {threshold_channel} (run #{threshold_run_id})")
+    console.print(f"  Threshold: {threshold_channel} (#{threshold_id})")
     console.print(f"  Channels:  {', '.join(selected_channels)}")
     console.print(f"  FOVs:      {len(selected_fovs)} selected")
 
@@ -1963,12 +1956,19 @@ def _measure_masked(store, channels, all_fovs, scopes: list[str]) -> None:
 
         for i, fov_info in enumerate(selected_fovs):
             try:
+                # Resolve segmentation_id from FOV config
+                fov_config = store.get_fov_config(fov_info.id)
+                if not fov_config:
+                    warnings.append(f"{fov_info.display_name}: no segmentation configured")
+                    continue
+                seg_id = fov_config[0].segmentation_id
+
                 count = measurer.measure_fov_masked(
                     store,
                     fov_id=fov_info.id,
                     channels=selected_channels,
-                    threshold_channel=threshold_channel,
-                    threshold_run_id=threshold_run_id,
+                    segmentation_id=seg_id,
+                    threshold_id=threshold_id,
                     scopes=scopes,
                 )
                 total_measurements += count
@@ -2004,7 +2004,7 @@ def _threshold_fov(
     grouping_metric: str,
     gaussian_sigma: float | None = None,
     min_particle_area: int = 5,
-    segmentation_run_id: int | None = None,
+    segmentation_id: int | None = None,
 ) -> tuple[int, int]:
     """Run grouping + threshold QC + particle analysis for one FOV.
 
@@ -2016,7 +2016,7 @@ def _threshold_fov(
         grouping_metric: Metric name for grouping (e.g. mean_intensity).
         gaussian_sigma: Optional Gaussian sigma for pre-threshold smoothing.
         min_particle_area: Minimum particle area in pixels for filtering.
-        segmentation_run_id: Which segmentation run to use (default: latest).
+        segmentation_id: Which segmentation to use (default: latest from config).
 
     Returns:
         (fovs_processed, total_particles) — 1 or 0 for fovs_processed.
@@ -2055,12 +2055,12 @@ def _threshold_fov(
         console.print(f"    {tag}: {n_cells} cells (mean={mean:.1f})")
 
     # Read images and labels for this FOV
-    if segmentation_run_id is None:
-        seg_runs = store.list_segmentation_runs(fov_id)
-        seg_run_id = seg_runs[-1].id if seg_runs else None
+    if segmentation_id is None:
+        fov_config = store.get_fov_config(fov_id)
+        seg_id = fov_config[0].segmentation_id if fov_config else None
     else:
-        seg_run_id = segmentation_run_id
-    labels = store.read_labels(fov_id, seg_run_id)
+        seg_id = segmentation_id
+    labels = store.read_labels(seg_id)
     image = store.read_image_numpy(fov_id, threshold_channel)
 
     accepted_groups: list[tuple[str, list[int], int]] = []  # (tag, cell_ids, run_id)
@@ -2149,24 +2149,24 @@ def _threshold_fov(
             f"threshold={result.threshold_value:.1f}, "
             f"positive={result.positive_fraction:.1%}"
         )
-        # Show threshold run name
-        thr_runs = store.list_threshold_runs(fov_id=fov_id, channel=threshold_channel)
-        thr_run = next((r for r in thr_runs if r.id == result.threshold_run_id), None)
-        if thr_run:
-            console.print(f"  Threshold run: [cyan]{thr_run.name}[/cyan]")
-        accepted_groups.append((tag_name, group_cell_ids, result.threshold_run_id))
+        # Show threshold name
+        try:
+            thr_info = store.get_threshold(result.threshold_id)
+            console.print(f"  Threshold: [cyan]{thr_info.name}[/cyan]")
+        except Exception:
+            console.print(f"  Threshold: #{result.threshold_id}")
+        accepted_groups.append((tag_name, group_cell_ids, result.threshold_id))
 
         # Accumulate this group's mask into the combined mask
-        group_written = store.read_mask(fov_id, threshold_channel, result.threshold_run_id)
+        group_written = store.read_mask(result.threshold_id)
         combined_mask |= (group_written > 0)
 
     # Write combined mask from all accepted groups
     if accepted_groups:
-        _, _, last_run_id = accepted_groups[-1]
+        _, _, last_thr_id = accepted_groups[-1]
         store.write_mask(
-            fov_id, threshold_channel,
             combined_mask.astype(np.uint8),
-            last_run_id,
+            last_thr_id,
         )
 
     # Particle analysis for accepted groups — accumulate into one label image
@@ -2175,12 +2175,12 @@ def _threshold_fov(
         combined_particle_labels = np.zeros(labels.shape, dtype=np.int32)
         next_label_offset = 0
 
-        for tag_name, group_cell_ids, thr_run_id in accepted_groups:
+        for tag_name, group_cell_ids, thr_id in accepted_groups:
             pa_result = analyzer.analyze_fov(
                 store, fov_id=fov_id,
+                threshold_id=thr_id,
+                segmentation_id=seg_id,
                 channel=threshold_channel,
-                threshold_run_id=thr_run_id,
-                cell_ids=group_cell_ids,
             )
 
             # Store results
@@ -2207,9 +2207,8 @@ def _threshold_fov(
 
         # Write the combined particle label image once
         store.write_particle_labels(
-            fov_id, threshold_channel,
             combined_particle_labels,
-            last_run_id,
+            last_thr_id,
         )
     else:
         console.print(f"  [dim]No groups accepted — skipping particle analysis.[/dim]")
@@ -2285,9 +2284,12 @@ def _apply_threshold(state: MenuState) -> None:
         with make_progress() as progress:
             task = progress.add_task("Measuring...", total=len(selected_fovs))
             for i, fov_info in enumerate(selected_fovs):
-                pre_measurer.measure_fov(
-                    store, fov_id=fov_info.id, channels=ch_names,
-                )
+                fov_config = store.get_fov_config(fov_info.id)
+                if fov_config:
+                    pre_measurer.measure_fov(
+                        store, fov_id=fov_info.id, channels=ch_names,
+                        segmentation_id=fov_config[0].segmentation_id,
+                    )
                 progress.update(
                     task, completed=i + 1,
                     description=f"Measuring {fov_info.display_name}",
@@ -2337,12 +2339,12 @@ def _apply_threshold(state: MenuState) -> None:
         console.print("[yellow]Thresholding cancelled.[/yellow]")
         return
 
-    # 6. Resolve segmentation run per FOV (use latest)
+    # 6. Resolve segmentation per FOV (from config)
     fov_seg_map: dict[int, int] = {}
     for fov_info in selected_fovs:
-        seg_runs = store.list_segmentation_runs(fov_info.id)
-        if seg_runs:
-            fov_seg_map[fov_info.id] = seg_runs[-1].id
+        fov_config = store.get_fov_config(fov_info.id)
+        if fov_config:
+            fov_seg_map[fov_info.id] = fov_config[0].segmentation_id
 
     # 7. Run per-FOV
     total_particles = 0
@@ -2357,7 +2359,7 @@ def _apply_threshold(state: MenuState) -> None:
             store, fov_info, threshold_channel, grouping_channel, grouping_metric,
             gaussian_sigma=gaussian_sigma,
             min_particle_area=min_particle_area,
-            segmentation_run_id=fov_seg_map.get(fov_info.id),
+            segmentation_id=fov_seg_map.get(fov_info.id),
         )
         fovs_processed += processed
         total_particles += particles
@@ -2671,8 +2673,8 @@ def _edit_menu(state: MenuState) -> None:
         MenuItem("4", "Rename channel", "Rename a channel", _rename_channel),
         MenuItem("5", "Rename bio-rep", "Rename a biological replicate", _rename_bio_rep),
         MenuItem("6", "Delete FOV", "Remove FOV(s) and all associated data", _delete_fov),
-        MenuItem("7", "Manage segmentation runs", "List, rename, or delete seg runs", _manage_seg_runs),
-        MenuItem("8", "Manage threshold runs", "List, rename, or delete threshold runs", _manage_thr_runs),
+        MenuItem("7", "Manage segmentations", "List, rename, or delete segmentations", _manage_seg_runs),
+        MenuItem("8", "Manage thresholds", "List, rename, or delete thresholds", _manage_thr_runs),
         MenuItem("9", "Combine masks", "Create new mask from union/intersect of existing masks", _combine_masks),
     ], state).run()
     raise _MenuCancel()
@@ -2768,55 +2770,44 @@ def _delete_fov(state: MenuState) -> None:
 
 
 def _manage_seg_runs(state: MenuState) -> None:
-    """Manage segmentation runs: list, rename, delete."""
+    """Manage segmentations: list, rename, delete."""
     store = state.require_experiment()
 
-    # Select FOV
-    fovs = store.get_fovs()
-    if not fovs:
-        console.print("[dim]No FOVs found.[/dim]")
+    segs = store.get_segmentations()
+    if not segs:
+        console.print("[dim]No segmentations found.[/dim]")
         return
 
-    fov_names = [f.display_name for f in fovs]
-    console.print("\n[bold]Select FOV:[/bold]")
-    selected_name = numbered_select_one(fov_names, "FOV")
-    fov = next(f for f in fovs if f.display_name == selected_name)
-
-    seg_runs = store.list_segmentation_runs(fov.id)
-    if not seg_runs:
-        console.print(f"[dim]No segmentation runs for {fov.display_name}.[/dim]")
-        return
-
-    console.print(f"\n[bold]Segmentation runs for {fov.display_name}:[/bold]")
-    for i, run in enumerate(seg_runs, 1):
+    console.print(f"\n[bold]Segmentations:[/bold]")
+    for i, seg in enumerate(segs, 1):
         console.print(
-            f"  \\[{i}] {run.name} — {run.cell_count} cells, "
-            f"model={run.model_name}, created={run.created_at}"
+            f"  \\[{i}] {seg.name} — {seg.cell_count} cells, "
+            f"model={seg.model_name}, created={seg.created_at}"
         )
 
     action = numbered_select_one(["Rename", "Delete", "Back"], "Action")
 
     if action == "Rename":
-        run_labels = [f"{r.name} ({r.cell_count} cells)" for r in seg_runs]
-        selected_label = numbered_select_one(run_labels, "Run to rename")
-        idx = run_labels.index(selected_label)
-        run = seg_runs[idx]
-        new_name = menu_prompt(f"New name for '{run.name}'")
+        seg_labels = [f"{s.name} ({s.cell_count} cells)" for s in segs]
+        selected_label = numbered_select_one(seg_labels, "Segmentation to rename")
+        idx = seg_labels.index(selected_label)
+        seg = segs[idx]
+        new_name = menu_prompt(f"New name for '{seg.name}'")
         try:
-            store.rename_segmentation_run(run.id, new_name)
-            console.print(f"[green]Run '{run.name}' → '{new_name}'[/green]")
+            store.rename_segmentation(seg.id, new_name)
+            console.print(f"[green]'{seg.name}' → '{new_name}'[/green]")
         except Exception as e:
             console.print(f"[red]Rename failed:[/red] {e}")
 
     elif action == "Delete":
-        run_labels = [f"{r.name} ({r.cell_count} cells)" for r in seg_runs]
-        selected_label = numbered_select_one(run_labels, "Run to delete")
-        idx = run_labels.index(selected_label)
-        run = seg_runs[idx]
+        seg_labels = [f"{s.name} ({s.cell_count} cells)" for s in segs]
+        selected_label = numbered_select_one(seg_labels, "Segmentation to delete")
+        idx = seg_labels.index(selected_label)
+        seg = segs[idx]
 
         # Show impact
-        impact = store.get_segmentation_run_impact(run.id)
-        console.print(f"\n[yellow]Deleting '{run.name}' will remove:[/yellow]")
+        impact = store.get_segmentation_impact(seg.id)
+        console.print(f"\n[yellow]Deleting '{seg.name}' will remove:[/yellow]")
         console.print(f"  Cells: {impact.cells}")
         console.print(f"  Measurements: {impact.measurements}")
         console.print(f"  Particles: {impact.particles}")
@@ -2826,60 +2817,51 @@ def _manage_seg_runs(state: MenuState) -> None:
             console.print("[dim]Deletion cancelled.[/dim]")
             return
 
-        store.delete_segmentation_run(run.id)
-        console.print(f"[green]Segmentation run '{run.name}' deleted.[/green]")
+        store.delete_segmentation(seg.id)
+        console.print(f"[green]Segmentation '{seg.name}' deleted.[/green]")
 
 
 def _manage_thr_runs(state: MenuState) -> None:
-    """Manage threshold runs: list, rename, delete."""
+    """Manage thresholds: list, rename, delete."""
     store = state.require_experiment()
 
-    # Select FOV
-    fovs = store.get_fovs()
-    if not fovs:
-        console.print("[dim]No FOVs found.[/dim]")
+    thresholds = store.get_thresholds()
+    if not thresholds:
+        console.print("[dim]No thresholds found.[/dim]")
         return
 
-    fov_names = [f.display_name for f in fovs]
-    console.print("\n[bold]Select FOV:[/bold]")
-    selected_name = numbered_select_one(fov_names, "FOV")
-    fov = next(f for f in fovs if f.display_name == selected_name)
-
-    thr_runs = store.list_threshold_runs(fov_id=fov.id)
-    if not thr_runs:
-        console.print(f"[dim]No threshold runs for {fov.display_name}.[/dim]")
-        return
-
-    console.print(f"\n[bold]Threshold runs for {fov.display_name}:[/bold]")
-    for i, run in enumerate(thr_runs, 1):
+    console.print(f"\n[bold]Thresholds:[/bold]")
+    for i, thr in enumerate(thresholds, 1):
+        ch_label = thr.source_channel or "n/a"
         console.print(
-            f"  \\[{i}] {run.channel}/{run.name} — method={run.method}, "
-            f"threshold={run.threshold_value}, created={run.created_at}"
+            f"  \\[{i}] {ch_label}/{thr.name} — method={thr.method}, "
+            f"threshold={thr.threshold_value}, created={thr.created_at}"
         )
 
     action = numbered_select_one(["Rename", "Delete", "Back"], "Action")
 
     if action == "Rename":
-        run_labels = [f"{r.channel}/{r.name}" for r in thr_runs]
-        selected_label = numbered_select_one(run_labels, "Run to rename")
-        idx = run_labels.index(selected_label)
-        run = thr_runs[idx]
-        new_name = menu_prompt(f"New name for '{run.name}'")
+        thr_labels = [f"{(t.source_channel or 'n/a')}/{t.name}" for t in thresholds]
+        selected_label = numbered_select_one(thr_labels, "Threshold to rename")
+        idx = thr_labels.index(selected_label)
+        thr = thresholds[idx]
+        new_name = menu_prompt(f"New name for '{thr.name}'")
         try:
-            store.rename_threshold_run(run.id, new_name)
-            console.print(f"[green]Run '{run.name}' → '{new_name}'[/green]")
+            store.rename_threshold(thr.id, new_name)
+            console.print(f"[green]'{thr.name}' → '{new_name}'[/green]")
         except Exception as e:
             console.print(f"[red]Rename failed:[/red] {e}")
 
     elif action == "Delete":
-        run_labels = [f"{r.channel}/{r.name}" for r in thr_runs]
-        selected_label = numbered_select_one(run_labels, "Run to delete")
-        idx = run_labels.index(selected_label)
-        run = thr_runs[idx]
+        thr_labels = [f"{(t.source_channel or 'n/a')}/{t.name}" for t in thresholds]
+        selected_label = numbered_select_one(thr_labels, "Threshold to delete")
+        idx = thr_labels.index(selected_label)
+        thr = thresholds[idx]
 
         # Show impact
-        impact = store.get_threshold_run_impact(run.id)
-        console.print(f"\n[yellow]Deleting '{run.channel}/{run.name}' will remove:[/yellow]")
+        impact = store.get_threshold_impact(thr.id)
+        ch_label = thr.source_channel or "n/a"
+        console.print(f"\n[yellow]Deleting '{ch_label}/{thr.name}' will remove:[/yellow]")
         console.print(f"  Measurements: {impact.measurements}")
         console.print(f"  Particles: {impact.particles}")
         console.print(f"  Config entries: {impact.config_entries}")
@@ -2888,69 +2870,87 @@ def _manage_thr_runs(state: MenuState) -> None:
             console.print("[dim]Deletion cancelled.[/dim]")
             return
 
-        store.delete_threshold_run(run.id)
-        console.print(f"[green]Threshold run '{run.channel}/{run.name}' deleted.[/green]")
+        store.delete_threshold(thr.id)
+        console.print(f"[green]Threshold '{ch_label}/{thr.name}' deleted.[/green]")
 
 
 def _combine_masks(state: MenuState) -> None:
-    """Combine threshold runs via union or intersect."""
+    """Combine thresholds via union or intersect."""
+    import numpy as np
+
     store = state.require_experiment()
 
-    # Select FOV
-    fovs = store.get_fovs()
-    if not fovs:
-        console.print("[dim]No FOVs found.[/dim]")
+    thresholds = store.get_thresholds()
+    if len(thresholds) < 2:
+        console.print("[red]Need at least 2 thresholds to combine.[/red]")
         return
 
-    fov_names = [f.display_name for f in fovs]
-    console.print("\n[bold]Select FOV:[/bold]")
-    selected_name = numbered_select_one(fov_names, "FOV")
-    fov = next(f for f in fovs if f.display_name == selected_name)
-
-    thr_runs = store.list_threshold_runs(fov_id=fov.id)
-    if len(thr_runs) < 2:
-        console.print("[red]Need at least 2 threshold runs to combine.[/red]")
+    # Group by source_channel and let user pick channel
+    channels = sorted({t.source_channel for t in thresholds if t.source_channel})
+    if not channels:
+        console.print("[red]No thresholds with a source channel found.[/red]")
         return
 
-    # Group by channel and let user pick channel
-    channels = sorted({r.channel for r in thr_runs})
     if len(channels) > 1:
         console.print("\n[bold]Select channel:[/bold]")
         channel = numbered_select_one(channels, "Channel")
-        thr_runs = [r for r in thr_runs if r.channel == channel]
+        filtered = [t for t in thresholds if t.source_channel == channel]
     else:
         channel = channels[0]
+        filtered = [t for t in thresholds if t.source_channel == channel]
 
-    if len(thr_runs) < 2:
-        console.print(f"[red]Need at least 2 threshold runs on channel '{channel}'.[/red]")
+    if len(filtered) < 2:
+        console.print(f"[red]Need at least 2 thresholds on channel '{channel}'.[/red]")
         return
 
-    # Select runs to combine
-    run_labels = [f"{r.name} (method={r.method})" for r in thr_runs]
-    console.print(f"\n[bold]Select threshold runs to combine ({channel}):[/bold]")
-    selected_labels = numbered_select_many(run_labels, "Runs (space-separated, or 'all')")
-    selected_runs = [thr_runs[run_labels.index(l)] for l in selected_labels]
+    # Select thresholds to combine
+    thr_labels = [f"{t.name} (method={t.method})" for t in filtered]
+    console.print(f"\n[bold]Select thresholds to combine ({channel}):[/bold]")
+    selected_labels = numbered_select_many(thr_labels, "Thresholds (space-separated, or 'all')")
+    selected_thrs = [filtered[thr_labels.index(l)] for l in selected_labels]
 
-    if len(selected_runs) < 2:
-        console.print("[red]Select at least 2 runs.[/red]")
+    if len(selected_thrs) < 2:
+        console.print("[red]Select at least 2 thresholds.[/red]")
         return
 
     # Operation
     operation = numbered_select_one(["union", "intersect"], "Combine operation")
 
     # Optional name
-    default_name = f"{operation}_{'_'.join(r.name for r in selected_runs[:3])}"
-    name = menu_prompt("Run name", default=default_name)
+    default_name = f"{operation}_{'_'.join(t.name for t in selected_thrs[:3])}"
+    name = menu_prompt("Threshold name", default=default_name)
 
-    run_ids = [r.id for r in selected_runs]
     try:
-        new_run_id = store.combine_threshold_runs(run_ids, operation, name=name)
-        console.print(f"\n[green]Combined mask created (run ID {new_run_id}).[/green]")
-        # Show the new run name
-        new_runs = store.list_threshold_runs(fov_id=fov.id, channel=channel)
-        new_run = next((r for r in new_runs if r.id == new_run_id), None)
-        if new_run:
-            console.print(f"  Name: [cyan]{new_run.name}[/cyan]")
+        # Read and combine masks
+        first_mask = store.read_mask(selected_thrs[0].id)
+        combined = first_mask > 0
+
+        for thr in selected_thrs[1:]:
+            mask = store.read_mask(thr.id)
+            if operation == "union":
+                combined = combined | (mask > 0)
+            else:
+                combined = combined & (mask > 0)
+
+        # Create new threshold entity
+        ref = selected_thrs[0]
+        new_thr_id = store.add_threshold(
+            name=name,
+            method=operation,
+            width=ref.width,
+            height=ref.height,
+            source_channel=channel,
+        )
+
+        # Write combined mask
+        store.write_mask(combined.astype(np.uint8), new_thr_id)
+
+        console.print(f"\n[green]Combined mask created (threshold ID {new_thr_id}).[/green]")
+        try:
+            new_thr = store.get_threshold(new_thr_id)
+            console.print(f"  Name: [cyan]{new_thr.name}[/cyan]")
+        except Exception:
+            pass
     except (ValueError, KeyError) as e:
         console.print(f"[red]Combine failed:[/red] {e}")
 
@@ -3370,10 +3370,13 @@ def _particle_workflow(state: MenuState) -> None:
     with make_progress() as progress:
         task = progress.add_task("Measuring...", total=len(selected_fovs))
         for i, fov_info in enumerate(selected_fovs):
-            count = measurer.measure_fov(
-                store, fov_id=fov_info.id, channels=ch_names,
-            )
-            total_measurements += count
+            fov_config = store.get_fov_config(fov_info.id)
+            if fov_config:
+                count = measurer.measure_fov(
+                    store, fov_id=fov_info.id, channels=ch_names,
+                    segmentation_id=fov_config[0].segmentation_id,
+                )
+                total_measurements += count
             progress.update(
                 task, completed=i + 1,
                 description=f"Measuring {fov_info.display_name}",
