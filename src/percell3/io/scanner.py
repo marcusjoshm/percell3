@@ -88,6 +88,10 @@ class FileScanner:
         fovs = sorted({f.tokens["fov"] for f in discovered if "fov" in f.tokens})
         timepoints = sorted({f.tokens["timepoint"] for f in discovered if "timepoint" in f.tokens})
         z_slices = sorted({f.tokens["z_slice"] for f in discovered if "z_slice" in f.tokens})
+        tiles = sorted(
+            {f.tokens["series"] for f in discovered if "series" in f.tokens},
+            key=lambda x: int(x),
+        )
 
         # Check pixel size consistency
         scan_pixel_size: float | None = None
@@ -110,6 +114,7 @@ class FileScanner:
             z_slices=z_slices,
             pixel_size_um=scan_pixel_size,
             warnings=warnings,
+            tiles=tiles,
         )
 
     def _find_tiffs(self, path: Path) -> list[Path]:
@@ -145,6 +150,12 @@ class FileScanner:
         if m:
             tokens["z_slice"] = m.group(1)
 
+        # Series (tile index)
+        if config.series is not None:
+            m = re.search(config.series, stem)
+            if m:
+                tokens["series"] = m.group(1)
+
         # FOV — use custom pattern or derive from remaining text
         if config.fov is not None:
             m = re.search(config.fov, stem)
@@ -153,7 +164,10 @@ class FileScanner:
         else:
             # Derive FOV by stripping all matched tokens
             fov = stem
-            for pattern in (config.channel, config.timepoint, config.z_slice):
+            strip_patterns = [config.channel, config.timepoint, config.z_slice]
+            if config.series is not None:
+                strip_patterns.append(config.series)
+            for pattern in strip_patterns:
                 fov = re.sub(pattern, "", fov)
             fov = fov.strip("_- ")
             if fov:

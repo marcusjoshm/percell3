@@ -21,10 +21,11 @@ class TokenConfig:
     timepoint: str = r"_t(\d+)"
     z_slice: str = r"_z(\d+)"
     fov: str | None = None
+    series: str | None = r"_s(\d+)"
 
     def __post_init__(self) -> None:
         """Validate regex patterns are compilable and not excessively long."""
-        for field_name in ("channel", "timepoint", "z_slice", "fov"):
+        for field_name in ("channel", "timepoint", "z_slice", "fov", "series"):
             pattern = getattr(self, field_name)
             if pattern is None:
                 continue
@@ -39,6 +40,54 @@ class TokenConfig:
                 raise ValueError(
                     f"Invalid regex for '{field_name}': {e}"
                 ) from e
+
+
+_VALID_GRID_TYPES = frozenset({
+    "row_by_row", "column_by_column", "snake_by_row", "snake_by_column",
+})
+
+_VALID_TILE_ORDERS = frozenset({
+    "right_and_down", "left_and_down", "right_and_up", "left_and_up",
+})
+
+
+@dataclass(frozen=True)
+class TileConfig:
+    """Configuration for tile scan stitching.
+
+    Defines how individual tile images are assembled into a single FOV.
+    """
+
+    grid_rows: int
+    grid_cols: int
+    grid_type: str
+    order: str
+
+    def __post_init__(self) -> None:
+        """Validate grid dimensions, type, and order."""
+        if self.grid_rows < 1:
+            raise ValueError(
+                f"grid_rows must be >= 1, got {self.grid_rows}"
+            )
+        if self.grid_cols < 1:
+            raise ValueError(
+                f"grid_cols must be >= 1, got {self.grid_cols}"
+            )
+        if self.grid_type not in _VALID_GRID_TYPES:
+            raise ValueError(
+                f"Invalid grid_type: {self.grid_type!r}. "
+                f"Must be one of {sorted(_VALID_GRID_TYPES)}"
+            )
+        if self.order not in _VALID_TILE_ORDERS:
+            raise ValueError(
+                f"Invalid tile order: {self.order!r}. "
+                f"Must be one of {sorted(_VALID_TILE_ORDERS)}"
+            )
+
+    @property
+    def total_tiles(self) -> int:
+        """Total number of tiles expected (grid_rows * grid_cols)."""
+        return self.grid_rows * self.grid_cols
 
 
 @dataclass(frozen=True)
@@ -64,6 +113,7 @@ class ScanResult:
     z_slices: list[str]
     pixel_size_um: float | None
     warnings: list[str]
+    tiles: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -112,6 +162,7 @@ class ImportPlan:
     condition_map: dict[str, str] = field(default_factory=dict)
     bio_rep_map: dict[str, str] = field(default_factory=dict)
     source_files: list[Path] | None = None  # Transient — not serialized to YAML
+    tile_config: TileConfig | None = None
 
     def to_yaml(self, path: Path) -> None:
         """Serialize this plan to a YAML file."""

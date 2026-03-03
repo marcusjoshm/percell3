@@ -11,6 +11,7 @@ from percell3.io.models import (
     ImportPlan,
     ImportResult,
     ScanResult,
+    TileConfig,
     TokenConfig,
     ZTransform,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "ImportPlan",
     "ImportResult",
     "ScanResult",
+    "TileConfig",
     "TokenConfig",
     "ZTransform",
     "scan",

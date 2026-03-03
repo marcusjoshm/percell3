@@ -8,6 +8,7 @@ from percell3.io.models import (
     ImportPlan,
     ImportResult,
     ScanResult,
+    TileConfig,
     TokenConfig,
     ZTransform,
 )
@@ -20,6 +21,21 @@ class TestTokenConfig:
         assert tc.timepoint == r"_t(\d+)"
         assert tc.z_slice == r"_z(\d+)"
         assert tc.fov is None
+        assert tc.series == r"_s(\d+)"
+
+    def test_series_disabled(self):
+        tc = TokenConfig(series=None)
+        assert tc.series is None
+
+    def test_custom_series_pattern(self):
+        tc = TokenConfig(series=r"_tile(\d+)")
+        assert tc.series == r"_tile(\d+)"
+
+    def test_invalid_series_regex_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="Invalid regex"):
+            TokenConfig(series=r"_s([\d+")
 
     def test_custom_patterns(self):
         tc = TokenConfig(channel=r"_C(\d+)", fov=r"_r(\d+)")
@@ -50,6 +66,58 @@ class TestTokenConfig:
         assert tc.fov is None
 
 
+class TestTileConfig:
+    def test_construction(self):
+        tc = TileConfig(
+            grid_rows=3, grid_cols=4,
+            grid_type="row_by_row", order="right_and_down",
+        )
+        assert tc.grid_rows == 3
+        assert tc.grid_cols == 4
+        assert tc.total_tiles == 12
+
+    def test_all_valid_grid_types(self):
+        for gt in ("row_by_row", "column_by_column", "snake_by_row", "snake_by_column"):
+            tc = TileConfig(grid_rows=2, grid_cols=2, grid_type=gt, order="right_and_down")
+            assert tc.grid_type == gt
+
+    def test_all_valid_orders(self):
+        for order in ("right_and_down", "left_and_down", "right_and_up", "left_and_up"):
+            tc = TileConfig(grid_rows=2, grid_cols=2, grid_type="row_by_row", order=order)
+            assert tc.order == order
+
+    def test_invalid_grid_type_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="Invalid grid_type"):
+            TileConfig(grid_rows=2, grid_cols=2, grid_type="zigzag", order="right_and_down")
+
+    def test_invalid_order_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="Invalid tile order"):
+            TileConfig(grid_rows=2, grid_cols=2, grid_type="row_by_row", order="diagonal")
+
+    def test_zero_rows_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="grid_rows must be >= 1"):
+            TileConfig(grid_rows=0, grid_cols=2, grid_type="row_by_row", order="right_and_down")
+
+    def test_zero_cols_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="grid_cols must be >= 1"):
+            TileConfig(grid_rows=2, grid_cols=0, grid_type="row_by_row", order="right_and_down")
+
+    def test_frozen(self):
+        import pytest
+
+        tc = TileConfig(grid_rows=2, grid_cols=2, grid_type="row_by_row", order="right_and_down")
+        with pytest.raises(AttributeError):
+            tc.grid_rows = 3  # type: ignore[misc]
+
+
 class TestDiscoveredFile:
     def test_construction(self):
         df = DiscoveredFile(
@@ -77,6 +145,21 @@ class TestScanResult:
         )
         assert sr.channels == ["00", "01"]
         assert sr.fovs == ["r1"]
+        assert sr.tiles == []
+
+    def test_with_tiles(self):
+        sr = ScanResult(
+            source_path=Path("/tmp"),
+            files=[],
+            channels=[],
+            fovs=[],
+            timepoints=[],
+            z_slices=[],
+            pixel_size_um=None,
+            warnings=[],
+            tiles=["00", "01", "02", "03"],
+        )
+        assert sr.tiles == ["00", "01", "02", "03"]
 
 
 class TestChannelMapping:
@@ -150,6 +233,33 @@ class TestImportPlan:
         )
         plan.condition = "treated"
         assert plan.condition == "treated"
+
+    def test_tile_config_default_none(self):
+        plan = ImportPlan(
+            source_path=Path("/tmp"),
+            condition="ctrl",
+            channel_mappings=[],
+            fov_names={},
+            z_transform=ZTransform(method="mip"),
+            pixel_size_um=None,
+            token_config=TokenConfig(),
+        )
+        assert plan.tile_config is None
+
+    def test_tile_config_set(self):
+        tc = TileConfig(grid_rows=2, grid_cols=3, grid_type="row_by_row", order="right_and_down")
+        plan = ImportPlan(
+            source_path=Path("/tmp"),
+            condition="ctrl",
+            channel_mappings=[],
+            fov_names={},
+            z_transform=ZTransform(method="mip"),
+            pixel_size_um=None,
+            token_config=TokenConfig(),
+            tile_config=tc,
+        )
+        assert plan.tile_config is not None
+        assert plan.tile_config.total_tiles == 6
 
 
 class TestImportResult:

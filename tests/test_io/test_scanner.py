@@ -195,3 +195,103 @@ class TestCustomTokenConfig:
         scanner = FileScanner()
         result = scanner.scan(d, token_config=config)
         assert result.fovs == ["01", "02"]
+
+
+class TestSeriesToken:
+    def test_series_token_parsed(self, tmp_path):
+        """Files with _sXX tokens should have series in their tokens dict."""
+        d = tmp_path / "tiles"
+        d.mkdir()
+        tifffile.imwrite(str(d / "FOV1_s00_ch00.tif"), np.zeros((32, 32), dtype=np.uint16))
+        tifffile.imwrite(str(d / "FOV1_s01_ch00.tif"), np.zeros((32, 32), dtype=np.uint16))
+
+        scanner = FileScanner()
+        result = scanner.scan(d)
+        for f in result.files:
+            assert "series" in f.tokens
+        series_vals = sorted(f.tokens["series"] for f in result.files)
+        assert series_vals == ["00", "01"]
+
+    def test_series_stripped_from_fov(self, tmp_path):
+        """Series token should be stripped from derived FOV name."""
+        d = tmp_path / "tiles"
+        d.mkdir()
+        tifffile.imwrite(str(d / "FOV1_s00_ch00.tif"), np.zeros((32, 32), dtype=np.uint16))
+        tifffile.imwrite(str(d / "FOV1_s01_ch00.tif"), np.zeros((32, 32), dtype=np.uint16))
+
+        scanner = FileScanner()
+        result = scanner.scan(d)
+        # Both files should share the same FOV "FOV1" (series stripped)
+        fov_tokens = {f.tokens.get("fov") for f in result.files}
+        assert fov_tokens == {"FOV1"}
+        assert result.fovs == ["FOV1"]
+
+    def test_tiles_collected_in_scan_result(self, tmp_path):
+        """ScanResult.tiles should contain unique tile indices sorted numerically."""
+        d = tmp_path / "tiles"
+        d.mkdir()
+        for i in range(4):
+            tifffile.imwrite(
+                str(d / f"FOV1_s{i:02d}_ch00.tif"),
+                np.zeros((32, 32), dtype=np.uint16),
+            )
+
+        scanner = FileScanner()
+        result = scanner.scan(d)
+        assert result.tiles == ["00", "01", "02", "03"]
+
+    def test_tiles_sorted_numerically(self, tmp_path):
+        """Tile indices should sort numerically, not lexicographically."""
+        d = tmp_path / "tiles"
+        d.mkdir()
+        for i in [0, 1, 2, 10, 11]:
+            tifffile.imwrite(
+                str(d / f"FOV1_s{i:02d}_ch00.tif"),
+                np.zeros((32, 32), dtype=np.uint16),
+            )
+
+        scanner = FileScanner()
+        result = scanner.scan(d)
+        assert result.tiles == ["00", "01", "02", "10", "11"]
+
+    def test_series_disabled(self, tmp_path):
+        """When series=None, _sXX remains in FOV name and no tiles collected."""
+        d = tmp_path / "tiles"
+        d.mkdir()
+        tifffile.imwrite(str(d / "FOV1_s00_ch00.tif"), np.zeros((32, 32), dtype=np.uint16))
+
+        config = TokenConfig(series=None)
+        scanner = FileScanner()
+        result = scanner.scan(d, token_config=config)
+        assert result.tiles == []
+        # _s00 should remain in the FOV name
+        assert "s00" in result.files[0].tokens.get("fov", "")
+
+    def test_no_series_in_filename(self, tmp_path):
+        """Files without _sXX should have no series token and empty tiles."""
+        d = tmp_path / "normal"
+        d.mkdir()
+        tifffile.imwrite(str(d / "FOV1_ch00.tif"), np.zeros((32, 32), dtype=np.uint16))
+
+        scanner = FileScanner()
+        result = scanner.scan(d)
+        assert result.tiles == []
+        assert "series" not in result.files[0].tokens
+
+    def test_multichannel_tiles(self, tmp_path):
+        """Tiles across multiple channels should share FOV and have series tokens."""
+        d = tmp_path / "tiles"
+        d.mkdir()
+        for s in range(4):
+            for ch in range(2):
+                tifffile.imwrite(
+                    str(d / f"FOV1_s{s:02d}_ch{ch:02d}.tif"),
+                    np.zeros((32, 32), dtype=np.uint16),
+                )
+
+        scanner = FileScanner()
+        result = scanner.scan(d)
+        assert result.fovs == ["FOV1"]
+        assert result.channels == ["00", "01"]
+        assert result.tiles == ["00", "01", "02", "03"]
+        assert len(result.files) == 8
