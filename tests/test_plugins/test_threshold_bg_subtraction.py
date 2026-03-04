@@ -217,8 +217,8 @@ class TestRun:
         apply_ch01 = store.read_image_numpy(apply_fov_id, "ch01")
         np.testing.assert_array_equal(ch01_image, apply_ch01)
 
-    def test_derived_fov_inherits_fov_config(self, bg_sub_experiment) -> None:
-        """Derived FOV should inherit fov_config entries from apply FOV."""
+    def test_derived_fov_has_no_inherited_config(self, bg_sub_experiment) -> None:
+        """Derived FOV should NOT inherit fov_config from apply FOV."""
         store, hist_fov_id, apply_fov_id, _ = bg_sub_experiment
         plugin = ThresholdBGSubtractionPlugin()
 
@@ -233,11 +233,10 @@ class TestRun:
         derived = [f for f in store.get_fovs() if "bgsub" in f.display_name][0]
         derived_config = store.get_fov_config(derived.id)
 
-        # Apply FOV has at least a whole_field segmentation config entry
-        apply_config = store.get_fov_config(apply_fov_id)
-
-        # Derived should have at least as many entries as apply
-        assert len(derived_config) >= len(apply_config)
+        # Derived should only have the auto-created default (no threshold),
+        # not the apply FOV's threshold assignments
+        threshold_entries = [e for e in derived_config if e.threshold_id is not None]
+        assert len(threshold_entries) == 0
 
     def test_derived_image_uses_apply_fov(self, bg_sub_experiment) -> None:
         """Background estimated from histogram FOV, subtracted from apply FOV."""

@@ -308,19 +308,6 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
                 except Exception:
                     pass  # Channel may not exist on this FOV
 
-        # Copy fov_config from apply FOV to derived FOV
-        apply_config = store.get_fov_config(apply_fov_id)
-        for entry in apply_config:
-            try:
-                store.set_fov_config_entry(
-                    derived_fov_id,
-                    entry.segmentation_id,
-                    threshold_id=entry.threshold_id,
-                    scopes=entry.scopes,
-                )
-            except Exception:
-                pass  # Config may already exist from previous run
-
         # Save histogram PNG
         hist_title = (
             f"{hist_fov_info.display_name} / {thr_info.name} / {channel}"
