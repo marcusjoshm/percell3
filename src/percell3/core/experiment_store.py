@@ -323,8 +323,6 @@ class ExperimentStore:
         Raises:
             ExperimentError: If the FOV does not exist.
         """
-        import shutil
-
         # Validate FOV exists
         self.get_fov_by_id(fov_id)  # raises ExperimentError if not found
 
@@ -333,9 +331,7 @@ class ExperimentStore:
 
         # 2. Remove image zarr group only (labels/masks are global, keyed by seg/thresh ID)
         fov_group = zarr_io.fov_group_path(fov_id)
-        group_dir = self.images_zarr_path / fov_group
-        if group_dir.exists():
-            shutil.rmtree(group_dir)
+        zarr_io.delete_zarr_group(self.images_zarr_path, fov_group)
 
     # --- Rename operations ---
 

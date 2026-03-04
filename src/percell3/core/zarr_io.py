@@ -396,14 +396,26 @@ def delete_zarr_group(zarr_path: Path, group_path: str) -> None:
     most robust method for zarr v2 DirectoryStore deletion.  Safe to call
     if the group does not exist (no-op).
 
+    On macOS, Finder/Spotlight may create ``.DS_Store`` files inside the
+    directory during deletion, causing ``[Errno 66] Directory not empty``.
+    This function retries once after cleaning up such stale files.
+
     Args:
         zarr_path: Path to the zarr store root.
         group_path: Relative group path within the store (e.g. "fov_1/seg_3").
     """
     group_dir = zarr_path / group_path
-    if group_dir.exists():
+    if not group_dir.exists():
+        return
+    try:
         shutil.rmtree(group_dir)
-        logger.debug("Deleted zarr group %s from %s", group_path, zarr_path)
+    except OSError:
+        # macOS Finder/Spotlight race: .DS_Store created during rmtree.
+        # Clean up stale files and retry.
+        for stale in group_dir.rglob(".DS_Store"):
+            stale.unlink(missing_ok=True)
+        shutil.rmtree(group_dir)
+    logger.debug("Deleted zarr group %s from %s", group_path, zarr_path)
 
 
 # ---------------------------------------------------------------------------

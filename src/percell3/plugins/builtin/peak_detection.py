@@ -70,15 +70,6 @@ def find_gaussian_peaks(
         return None
 
     data_max = float(np.max(data))
-    if data_max == 0:
-        return PeakDetectionResult(
-            background_value=0.0,
-            n_peaks=0,
-            hist=np.zeros(n_bins, dtype=np.float64),
-            bin_centers=np.zeros(n_bins, dtype=np.float64),
-            hist_smooth=np.zeros(n_bins, dtype=np.float64),
-            peak_indices=np.array([], dtype=np.intp),
-        )
 
     hist, bin_edges = np.histogram(data, bins=n_bins, range=(0, data_max))
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2

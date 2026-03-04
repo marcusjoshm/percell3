@@ -108,7 +108,6 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
 
         results_summary: list[dict[str, Any]] = []
         warnings: list[str] = []
-        fovs_created = 0
 
         for fov_idx, fov_id in enumerate(fov_ids):
             fov_info = store.get_fov_by_id(fov_id)
@@ -128,12 +127,7 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
                 if entry.threshold_id is not None
             ]
             # Deduplicate while preserving order
-            seen: set[int] = set()
-            unique_threshold_ids: list[int] = []
-            for tid in threshold_ids:
-                if tid not in seen:
-                    seen.add(tid)
-                    unique_threshold_ids.append(tid)
+            unique_threshold_ids = list(dict.fromkeys(threshold_ids))
 
             if not unique_threshold_ids:
                 warnings.append(
@@ -159,7 +153,6 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
                 )
                 if result is not None:
                     results_summary.append(result)
-                    fovs_created += 1
 
             if progress_callback:
                 progress_callback(fov_idx + 1, len(fov_ids), fov_info.display_name)
@@ -207,6 +200,14 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
             warnings.append(
                 f"FOV {fov_info.display_name}, threshold {thr_info.name}: "
                 f"failed to read mask: {exc}"
+            )
+            return None
+
+        if mask_raw.shape != channel_image.shape:
+            warnings.append(
+                f"FOV {fov_info.display_name}, threshold {thr_info.name}: "
+                f"mask shape {mask_raw.shape} != image shape "
+                f"{channel_image.shape}, skipping."
             )
             return None
 

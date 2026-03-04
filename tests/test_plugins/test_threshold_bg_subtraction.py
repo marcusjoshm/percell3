@@ -267,6 +267,19 @@ class TestRun:
 
         assert len(progress_calls) > 0
 
+    def test_derived_fov_can_be_deleted(self, bg_sub_experiment) -> None:
+        """Derived FOVs should be deletable without errors."""
+        store, fov_id, _ = bg_sub_experiment
+        plugin = ThresholdBGSubtractionPlugin()
+        plugin.run(store, parameters={"channel": "ch00", "fov_ids": [fov_id]})
+
+        derived = [f for f in store.get_fovs() if "bgsub" in f.display_name]
+        assert len(derived) == 1
+
+        store.delete_fov(derived[0].id)
+        remaining = [f for f in store.get_fovs() if "bgsub" in f.display_name]
+        assert len(remaining) == 0
+
     def test_requires_parameters(self, bg_sub_experiment) -> None:
         store, _, _ = bg_sub_experiment
         plugin = ThresholdBGSubtractionPlugin()
