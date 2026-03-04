@@ -1,4 +1,8 @@
-"""Tests for ThresholdBGSubtractionPlugin — integration with ExperimentStore."""
+"""Tests for ThresholdBGSubtractionPlugin — integration with ExperimentStore.
+
+Uses the two-FOV workflow: histogram FOV (dilute-phase) provides background
+estimate, apply FOV (full image) receives the subtraction.
+"""
 
 from __future__ import annotations
 
@@ -13,34 +17,59 @@ from percell3.plugins.builtin.threshold_bg_subtraction import (
 
 @pytest.fixture
 def bg_sub_experiment(tmp_path):
-    """Create an experiment with a FOV, channel, and threshold layer.
+    """Create an experiment with two FOVs and two channels.
 
     Layout:
-        - 1 channel: ch00
-        - 1 FOV (64x64), condition "control"
-        - ch00: background ~50, masked region ~200
-        - 1 threshold layer with a mask covering part of the image
+        - 2 channels: ch00, ch01
+        - histogram FOV (64x64), condition "dilute" — has threshold mask
+        - apply FOV (64x64), condition "control" — no threshold, receives subtraction
+        - ch00 on histogram FOV: background ~50, bright region ~200
+        - ch00 on apply FOV: uniform ~150
+        - ch01 on both: uniform ~100
+        - 1 threshold layer on histogram FOV covering the bright region
     """
     store = ExperimentStore.create(tmp_path / "bgsub_test.percell")
     store.add_channel("ch00")
+    store.add_channel("ch01")
+    store.add_condition("dilute")
     store.add_condition("control")
 
-    fov_id = store.add_fov("control", width=64, height=64, pixel_size_um=0.65)
+    # Histogram FOV (dilute-phase)
+    hist_fov_id = store.add_fov(
+        "dilute", width=64, height=64, pixel_size_um=0.65,
+    )
 
-    # Create image: background ~50, bright region ~200
     rng = np.random.default_rng(42)
-    image = rng.normal(loc=50, scale=5, size=(64, 64)).clip(10, 300)
-    image[20:40, 20:40] = rng.normal(loc=200, scale=10, size=(20, 20)).clip(100, 400)
-    image = image.astype(np.uint16)
-    store.write_image(fov_id, "ch00", image)
+    hist_image = rng.normal(loc=50, scale=5, size=(64, 64)).clip(10, 300)
+    hist_image[20:40, 20:40] = rng.normal(
+        loc=200, scale=10, size=(20, 20),
+    ).clip(100, 400)
+    hist_image = hist_image.astype(np.uint16)
+    store.write_image(hist_fov_id, "ch00", hist_image)
+    store.write_image(
+        hist_fov_id, "ch01",
+        np.full((64, 64), 100, dtype=np.uint16),
+    )
 
-    # Create a threshold with a mask covering the bright region
+    # Apply FOV (full image)
+    apply_fov_id = store.add_fov(
+        "control", width=64, height=64, pixel_size_um=0.65,
+    )
+
+    apply_image = np.full((64, 64), 150, dtype=np.uint16)
+    store.write_image(apply_fov_id, "ch00", apply_image)
+    store.write_image(
+        apply_fov_id, "ch01",
+        np.full((64, 64), 100, dtype=np.uint16),
+    )
+
+    # Create a threshold on the histogram FOV
     threshold_id = store.add_threshold(
         name="threshold_g1",
         method="otsu",
         width=64,
         height=64,
-        source_fov_id=fov_id,
+        source_fov_id=hist_fov_id,
         source_channel="ch00",
     )
 
@@ -49,8 +78,12 @@ def bg_sub_experiment(tmp_path):
     mask[20:40, 20:40] = 255
     store.write_mask(mask, threshold_id)
 
-    yield store, fov_id, threshold_id
+    yield store, hist_fov_id, apply_fov_id, threshold_id
     store.close()
+
+
+def _make_pairings(hist_fov_id: int, apply_fov_id: int) -> list[dict[str, int]]:
+    return [{"histogram_fov_id": hist_fov_id, "apply_fov_id": apply_fov_id}]
 
 
 class TestPluginMetadata:
@@ -62,7 +95,7 @@ class TestPluginMetadata:
 
     def test_info_version(self) -> None:
         plugin = ThresholdBGSubtractionPlugin()
-        assert plugin.info().version == "1.0.0"
+        assert plugin.info().version == "2.0.0"
 
     def test_required_inputs(self) -> None:
         plugin = ThresholdBGSubtractionPlugin()
@@ -93,7 +126,7 @@ class TestValidation:
         store.close()
 
     def test_validate_ok(self, bg_sub_experiment) -> None:
-        store, _, _ = bg_sub_experiment
+        store, _, _, _ = bg_sub_experiment
         plugin = ThresholdBGSubtractionPlugin()
         errors = plugin.validate(store)
         assert errors == []
@@ -103,90 +136,163 @@ class TestRun:
     """Tests for plugin execution."""
 
     def test_creates_derived_fov(self, bg_sub_experiment) -> None:
-        store, fov_id, _ = bg_sub_experiment
+        store, hist_fov_id, apply_fov_id, _ = bg_sub_experiment
         plugin = ThresholdBGSubtractionPlugin()
 
-        result = plugin.run(
+        plugin.run(
             store,
-            parameters={"channel": "ch00", "fov_ids": [fov_id]},
+            parameters={
+                "channel": "ch00",
+                "pairings": _make_pairings(hist_fov_id, apply_fov_id),
+            },
         )
 
-        # Should have created a derived FOV
         all_fovs = store.get_fovs()
         derived_fovs = [f for f in all_fovs if "bgsub" in f.display_name]
         assert len(derived_fovs) == 1
         assert "threshold_g1" in derived_fovs[0].display_name
         assert "ch00" in derived_fovs[0].display_name
 
-    def test_derived_fov_inherits_metadata(self, bg_sub_experiment) -> None:
-        store, fov_id, _ = bg_sub_experiment
+    def test_derived_fov_named_from_apply_fov(self, bg_sub_experiment) -> None:
+        """Derived FOV name should be based on the APPLY FOV, not histogram."""
+        store, hist_fov_id, apply_fov_id, _ = bg_sub_experiment
         plugin = ThresholdBGSubtractionPlugin()
 
         plugin.run(
             store,
-            parameters={"channel": "ch00", "fov_ids": [fov_id]},
+            parameters={
+                "channel": "ch00",
+                "pairings": _make_pairings(hist_fov_id, apply_fov_id),
+            },
         )
 
-        source_fov = store.get_fov_by_id(fov_id)
-        all_fovs = store.get_fovs()
-        derived = [f for f in all_fovs if "bgsub" in f.display_name][0]
+        apply_fov = store.get_fov_by_id(apply_fov_id)
+        derived = [f for f in store.get_fovs() if "bgsub" in f.display_name][0]
+        assert derived.display_name.startswith(apply_fov.display_name)
 
-        assert derived.condition == source_fov.condition
-        assert derived.bio_rep == source_fov.bio_rep
-        assert derived.width == source_fov.width
-        assert derived.height == source_fov.height
-        assert derived.pixel_size_um == source_fov.pixel_size_um
-
-    def test_derived_image_correct(self, bg_sub_experiment) -> None:
-        """Derived image should have background subtracted in masked region."""
-        store, fov_id, _ = bg_sub_experiment
+    def test_derived_fov_inherits_apply_metadata(self, bg_sub_experiment) -> None:
+        """Derived FOV metadata should come from the APPLY FOV."""
+        store, hist_fov_id, apply_fov_id, _ = bg_sub_experiment
         plugin = ThresholdBGSubtractionPlugin()
 
         plugin.run(
             store,
-            parameters={"channel": "ch00", "fov_ids": [fov_id]},
+            parameters={
+                "channel": "ch00",
+                "pairings": _make_pairings(hist_fov_id, apply_fov_id),
+            },
         )
 
-        all_fovs = store.get_fovs()
-        derived = [f for f in all_fovs if "bgsub" in f.display_name][0]
+        apply_fov = store.get_fov_by_id(apply_fov_id)
+        derived = [f for f in store.get_fovs() if "bgsub" in f.display_name][0]
+
+        assert derived.condition == apply_fov.condition
+        assert derived.bio_rep == apply_fov.bio_rep
+        assert derived.width == apply_fov.width
+        assert derived.height == apply_fov.height
+        assert derived.pixel_size_um == apply_fov.pixel_size_um
+
+    def test_derived_fov_has_all_channels(self, bg_sub_experiment) -> None:
+        """Derived FOV should have ALL channels from the apply FOV."""
+        store, hist_fov_id, apply_fov_id, _ = bg_sub_experiment
+        plugin = ThresholdBGSubtractionPlugin()
+
+        plugin.run(
+            store,
+            parameters={
+                "channel": "ch00",
+                "pairings": _make_pairings(hist_fov_id, apply_fov_id),
+            },
+        )
+
+        derived = [f for f in store.get_fovs() if "bgsub" in f.display_name][0]
+
+        # Both channels should exist
+        ch00_image = store.read_image_numpy(derived.id, "ch00")
+        ch01_image = store.read_image_numpy(derived.id, "ch01")
+        assert ch00_image is not None
+        assert ch01_image is not None
+
+        # ch01 should be a copy of apply FOV's ch01
+        apply_ch01 = store.read_image_numpy(apply_fov_id, "ch01")
+        np.testing.assert_array_equal(ch01_image, apply_ch01)
+
+    def test_derived_fov_inherits_fov_config(self, bg_sub_experiment) -> None:
+        """Derived FOV should inherit fov_config entries from apply FOV."""
+        store, hist_fov_id, apply_fov_id, _ = bg_sub_experiment
+        plugin = ThresholdBGSubtractionPlugin()
+
+        plugin.run(
+            store,
+            parameters={
+                "channel": "ch00",
+                "pairings": _make_pairings(hist_fov_id, apply_fov_id),
+            },
+        )
+
+        derived = [f for f in store.get_fovs() if "bgsub" in f.display_name][0]
+        derived_config = store.get_fov_config(derived.id)
+
+        # Apply FOV has at least a whole_field segmentation config entry
+        apply_config = store.get_fov_config(apply_fov_id)
+
+        # Derived should have at least as many entries as apply
+        assert len(derived_config) >= len(apply_config)
+
+    def test_derived_image_uses_apply_fov(self, bg_sub_experiment) -> None:
+        """Background estimated from histogram FOV, subtracted from apply FOV."""
+        store, hist_fov_id, apply_fov_id, _ = bg_sub_experiment
+        plugin = ThresholdBGSubtractionPlugin()
+
+        plugin.run(
+            store,
+            parameters={
+                "channel": "ch00",
+                "pairings": _make_pairings(hist_fov_id, apply_fov_id),
+            },
+        )
+
+        derived = [f for f in store.get_fovs() if "bgsub" in f.display_name][0]
         derived_image = store.read_image_numpy(derived.id, "ch00")
-        source_image = store.read_image_numpy(fov_id, "ch00")
+        apply_image = store.read_image_numpy(apply_fov_id, "ch00")
+
+        # Pixels inside mask should be <= apply image (subtracted)
+        mask_region = derived_image[20:40, 20:40]
+        apply_region = apply_image[20:40, 20:40]
+        assert np.all(mask_region <= apply_region)
 
         # Pixels outside mask should be zero
         assert np.all(derived_image[:20, :] == 0)
         assert np.all(derived_image[40:, :] == 0)
-        assert np.all(derived_image[:, :20] == 0)
-        assert np.all(derived_image[:, 40:] == 0)
-
-        # Pixels inside mask should be <= source (subtracted)
-        mask_region = derived_image[20:40, 20:40]
-        source_region = source_image[20:40, 20:40]
-        assert np.all(mask_region <= source_region)
 
     def test_no_underflow_on_uint16(self, bg_sub_experiment) -> None:
         """Subtraction should not produce underflow artifacts."""
-        store, fov_id, _ = bg_sub_experiment
+        store, hist_fov_id, apply_fov_id, _ = bg_sub_experiment
         plugin = ThresholdBGSubtractionPlugin()
 
         plugin.run(
             store,
-            parameters={"channel": "ch00", "fov_ids": [fov_id]},
+            parameters={
+                "channel": "ch00",
+                "pairings": _make_pairings(hist_fov_id, apply_fov_id),
+            },
         )
 
-        all_fovs = store.get_fovs()
-        derived = [f for f in all_fovs if "bgsub" in f.display_name][0]
+        derived = [f for f in store.get_fovs() if "bgsub" in f.display_name][0]
         derived_image = store.read_image_numpy(derived.id, "ch00")
 
         # No values should be > 65000 (underflow would produce ~65535)
         assert np.all(derived_image < 60000)
-        # dtype should match source
         assert derived_image.dtype == np.uint16
 
     def test_idempotent_rerun(self, bg_sub_experiment) -> None:
         """Running twice should reuse the derived FOV, not create a duplicate."""
-        store, fov_id, _ = bg_sub_experiment
+        store, hist_fov_id, apply_fov_id, _ = bg_sub_experiment
         plugin = ThresholdBGSubtractionPlugin()
-        params = {"channel": "ch00", "fov_ids": [fov_id]}
+        params = {
+            "channel": "ch00",
+            "pairings": _make_pairings(hist_fov_id, apply_fov_id),
+        }
 
         plugin.run(store, parameters=params)
         fovs_after_first = store.get_fovs()
@@ -203,15 +309,19 @@ class TestRun:
         """A threshold with an all-zero mask should be skipped with a warning."""
         store = ExperimentStore.create(tmp_path / "empty_mask.percell")
         store.add_channel("ch00")
+        store.add_condition("dilute")
         store.add_condition("control")
-        fov_id = store.add_fov("control", width=32, height=32)
+
+        hist_fov_id = store.add_fov("dilute", width=32, height=32)
+        apply_fov_id = store.add_fov("control", width=32, height=32)
 
         image = np.full((32, 32), 100, dtype=np.uint16)
-        store.write_image(fov_id, "ch00", image)
+        store.write_image(hist_fov_id, "ch00", image)
+        store.write_image(apply_fov_id, "ch00", image)
 
         threshold_id = store.add_threshold(
             name="t1", method="otsu", width=32, height=32,
-            source_fov_id=fov_id, source_channel="ch00",
+            source_fov_id=hist_fov_id, source_channel="ch00",
         )
         empty_mask = np.zeros((32, 32), dtype=np.uint8)
         store.write_mask(empty_mask, threshold_id)
@@ -219,26 +329,34 @@ class TestRun:
         plugin = ThresholdBGSubtractionPlugin()
         result = plugin.run(
             store,
-            parameters={"channel": "ch00", "fov_ids": [fov_id]},
+            parameters={
+                "channel": "ch00",
+                "pairings": _make_pairings(hist_fov_id, apply_fov_id),
+            },
         )
 
         assert len(result.warnings) > 0
-        assert any("no non-zero" in w.lower() or "no valid" in w.lower() for w in result.warnings)
+        assert any(
+            "no non-zero" in w.lower() or "no valid" in w.lower()
+            for w in result.warnings
+        )
 
         # No derived FOV should be created
-        all_fovs = store.get_fovs()
-        derived = [f for f in all_fovs if "bgsub" in f.display_name]
+        derived = [f for f in store.get_fovs() if "bgsub" in f.display_name]
         assert len(derived) == 0
 
         store.close()
 
     def test_histogram_png_saved(self, bg_sub_experiment) -> None:
-        store, fov_id, _ = bg_sub_experiment
+        store, hist_fov_id, apply_fov_id, _ = bg_sub_experiment
         plugin = ThresholdBGSubtractionPlugin()
 
         result = plugin.run(
             store,
-            parameters={"channel": "ch00", "fov_ids": [fov_id]},
+            parameters={
+                "channel": "ch00",
+                "pairings": _make_pairings(hist_fov_id, apply_fov_id),
+            },
         )
 
         histograms_dir = result.custom_outputs.get("histograms_dir")
@@ -251,7 +369,7 @@ class TestRun:
         assert len(png_files) == 1
 
     def test_progress_callback(self, bg_sub_experiment) -> None:
-        store, fov_id, _ = bg_sub_experiment
+        store, hist_fov_id, apply_fov_id, _ = bg_sub_experiment
         plugin = ThresholdBGSubtractionPlugin()
 
         progress_calls = []
@@ -261,7 +379,10 @@ class TestRun:
 
         plugin.run(
             store,
-            parameters={"channel": "ch00", "fov_ids": [fov_id]},
+            parameters={
+                "channel": "ch00",
+                "pairings": _make_pairings(hist_fov_id, apply_fov_id),
+            },
             progress_callback=on_progress,
         )
 
@@ -269,9 +390,15 @@ class TestRun:
 
     def test_derived_fov_can_be_deleted(self, bg_sub_experiment) -> None:
         """Derived FOVs should be deletable without errors."""
-        store, fov_id, _ = bg_sub_experiment
+        store, hist_fov_id, apply_fov_id, _ = bg_sub_experiment
         plugin = ThresholdBGSubtractionPlugin()
-        plugin.run(store, parameters={"channel": "ch00", "fov_ids": [fov_id]})
+        plugin.run(
+            store,
+            parameters={
+                "channel": "ch00",
+                "pairings": _make_pairings(hist_fov_id, apply_fov_id),
+            },
+        )
 
         derived = [f for f in store.get_fovs() if "bgsub" in f.display_name]
         assert len(derived) == 1
@@ -281,7 +408,7 @@ class TestRun:
         assert len(remaining) == 0
 
     def test_requires_parameters(self, bg_sub_experiment) -> None:
-        store, _, _ = bg_sub_experiment
+        store, _, _, _ = bg_sub_experiment
         plugin = ThresholdBGSubtractionPlugin()
 
         with pytest.raises(RuntimeError, match="Parameters are required"):

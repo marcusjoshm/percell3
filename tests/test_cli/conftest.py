@@ -214,6 +214,11 @@ def experiment_with_particle_images(tmp_path: Path) -> ExperimentStore:
     ]
     cell_ids = store.add_cells(cells)
 
+    # Particle label image (needed for per-channel intensity export)
+    particle_labels = np.zeros((64, 64), dtype=np.int32)
+    particle_labels[18:26, 8:16] = 1
+    store.write_particle_labels(particle_labels, thr_id)
+
     # Particle in cell 1
     particles = [
         ParticleRecord(

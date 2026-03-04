@@ -1,8 +1,9 @@
 """Threshold-Layer Background Subtraction Plugin.
 
-For each FOV and configured threshold layer, estimates the background intensity
-from a histogram of masked pixels and subtracts it, producing a derived FOV
-with the background-subtracted image.
+Separates "histogram source" FOVs (dilute-phase controls) from "apply" FOVs
+(full images). Background is estimated from the histogram FOV's masked pixels,
+then subtracted from the apply FOV's channel image. Derived FOVs are full
+copies of the apply FOV with only the selected channel replaced.
 """
 
 from __future__ import annotations
@@ -32,18 +33,19 @@ logger = logging.getLogger(__name__)
 class ThresholdBGSubtractionPlugin(AnalysisPlugin):
     """Per-threshold-layer background subtraction using histogram peak detection.
 
-    For each selected FOV and each of its configured threshold layers:
-    1. Extracts masked pixel intensities from the selected channel.
+    For each (histogram FOV, apply FOV) pairing:
+    1. Extracts masked pixel intensities from the histogram FOV's channel.
     2. Estimates background via Gaussian-smoothed histogram peak detection.
-    3. Subtracts background (clipped at zero) from masked pixels.
-    4. Creates a derived FOV with the subtracted image.
-    5. Saves a diagnostic histogram PNG.
+    3. Subtracts background from the apply FOV's channel image (clipped at zero).
+    4. Creates a derived FOV with ALL channels from the apply FOV.
+    5. Copies fov_config entries from the apply FOV.
+    6. Saves a diagnostic histogram PNG.
     """
 
     def info(self) -> PluginInfo:
         return PluginInfo(
             name="threshold_bg_subtraction",
-            version="1.0.0",
+            version="2.0.0",
             description="Per-threshold-layer histogram-based background subtraction",
             author="PerCell Team",
         )
@@ -70,13 +72,20 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
                     "type": "string",
                     "description": "Channel to subtract background from",
                 },
-                "fov_ids": {
+                "pairings": {
                     "type": "array",
-                    "items": {"type": "integer"},
-                    "description": "FOV IDs to process",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "histogram_fov_id": {"type": "integer"},
+                            "apply_fov_id": {"type": "integer"},
+                        },
+                        "required": ["histogram_fov_id", "apply_fov_id"],
+                    },
+                    "description": "Histogram FOV → apply FOV pairings",
                 },
             },
-            "required": ["channel", "fov_ids"],
+            "required": ["channel", "pairings"],
         }
 
     def run(
@@ -90,7 +99,7 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
             raise RuntimeError("Parameters are required for threshold_bg_subtraction.")
 
         channel: str = parameters["channel"]
-        fov_ids: list[int] = parameters["fov_ids"]
+        pairings: list[dict[str, int]] = parameters["pairings"]
 
         # Build lookup for idempotent re-runs
         fov_name_to_id: dict[str, int] = {
@@ -101,6 +110,9 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
         all_thresholds = store.get_thresholds()
         threshold_map: dict[int, ThresholdInfo] = {t.id: t for t in all_thresholds}
 
+        # Channel list for full-copy derived FOVs
+        channels = store.get_channels()
+
         # Prepare histogram export directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         histograms_dir = Path(store.path) / "exports" / "bgsub_histograms"
@@ -109,29 +121,35 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
         results_summary: list[dict[str, Any]] = []
         warnings: list[str] = []
 
-        for fov_idx, fov_id in enumerate(fov_ids):
-            fov_info = store.get_fov_by_id(fov_id)
+        for pair_idx, pairing in enumerate(pairings):
+            hist_fov_id = pairing["histogram_fov_id"]
+            apply_fov_id = pairing["apply_fov_id"]
 
-            # Load channel image once per FOV
+            hist_fov_info = store.get_fov_by_id(hist_fov_id)
+            apply_fov_info = store.get_fov_by_id(apply_fov_id)
+
+            # Load histogram FOV's channel image for background estimation
             try:
-                channel_image = store.read_image_numpy(fov_id, channel)
+                hist_channel_image = store.read_image_numpy(hist_fov_id, channel)
             except Exception as exc:
-                warnings.append(f"Skipped FOV {fov_info.display_name}: {exc}")
+                warnings.append(
+                    f"Skipped histogram FOV {hist_fov_info.display_name}: {exc}"
+                )
                 continue
 
-            # Get configured thresholds for this FOV
-            fov_config = store.get_fov_config(fov_id)
+            # Get configured thresholds from the histogram FOV
+            hist_config = store.get_fov_config(hist_fov_id)
             threshold_ids = [
                 entry.threshold_id
-                for entry in fov_config
+                for entry in hist_config
                 if entry.threshold_id is not None
             ]
-            # Deduplicate while preserving order
             unique_threshold_ids = list(dict.fromkeys(threshold_ids))
 
             if not unique_threshold_ids:
                 warnings.append(
-                    f"FOV {fov_info.display_name}: no threshold layers configured, skipping."
+                    f"Histogram FOV {hist_fov_info.display_name}: "
+                    f"no threshold layers configured, skipping."
                 )
                 continue
 
@@ -142,10 +160,13 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
 
                 result = self._process_threshold(
                     store=store,
-                    fov_info=fov_info,
+                    hist_fov_info=hist_fov_info,
+                    apply_fov_info=apply_fov_info,
+                    apply_fov_id=apply_fov_id,
                     channel=channel,
-                    channel_image=channel_image,
+                    hist_channel_image=hist_channel_image,
                     thr_info=thr_info,
+                    channels=channels,
                     fov_name_to_id=fov_name_to_id,
                     histograms_dir=histograms_dir,
                     timestamp=timestamp,
@@ -155,7 +176,9 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
                     results_summary.append(result)
 
             if progress_callback:
-                progress_callback(fov_idx + 1, len(fov_ids), fov_info.display_name)
+                progress_callback(
+                    pair_idx + 1, len(pairings), hist_fov_info.display_name,
+                )
 
         # Build custom_outputs with background values
         custom_outputs: dict[str, str] = {}
@@ -169,22 +192,24 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
             cells_processed=0,
             custom_outputs=custom_outputs,
             warnings=warnings,
-            # Store summary for CLI to display
         )
 
     def _process_threshold(
         self,
         store: ExperimentStore,
-        fov_info: FovInfo,
+        hist_fov_info: FovInfo,
+        apply_fov_info: FovInfo,
+        apply_fov_id: int,
         channel: str,
-        channel_image: np.ndarray,
+        hist_channel_image: np.ndarray,
         thr_info: ThresholdInfo,
+        channels: list,
         fov_name_to_id: dict[str, int],
         histograms_dir: Path,
         timestamp: str,
         warnings: list[str],
     ) -> dict[str, Any] | None:
-        """Process a single FOV x threshold combination.
+        """Process a single histogram FOV x apply FOV x threshold combination.
 
         Returns a summary dict or None if skipped.
         """
@@ -193,82 +218,121 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
             render_peak_histogram,
         )
 
-        # Load mask
+        # Load mask from the threshold (lives on the histogram FOV)
         try:
             mask_raw = store.read_mask(thr_info.id)
         except Exception as exc:
             warnings.append(
-                f"FOV {fov_info.display_name}, threshold {thr_info.name}: "
-                f"failed to read mask: {exc}"
+                f"Histogram FOV {hist_fov_info.display_name}, "
+                f"threshold {thr_info.name}: failed to read mask: {exc}"
             )
             return None
 
-        if mask_raw.shape != channel_image.shape:
+        if mask_raw.shape != hist_channel_image.shape:
             warnings.append(
-                f"FOV {fov_info.display_name}, threshold {thr_info.name}: "
-                f"mask shape {mask_raw.shape} != image shape "
-                f"{channel_image.shape}, skipping."
+                f"Histogram FOV {hist_fov_info.display_name}, "
+                f"threshold {thr_info.name}: mask shape {mask_raw.shape} != "
+                f"image shape {hist_channel_image.shape}, skipping."
             )
             return None
 
         mask_bool = mask_raw > 0
 
-        # Extract masked pixel intensities
-        masked_pixels = channel_image[mask_bool]
+        # Extract masked pixel intensities from histogram FOV
+        masked_pixels = hist_channel_image[mask_bool]
         if len(masked_pixels) == 0:
             warnings.append(
-                f"FOV {fov_info.display_name}, threshold {thr_info.name}: "
+                f"Histogram FOV {hist_fov_info.display_name}, "
+                f"threshold {thr_info.name}: "
                 f"mask has no non-zero pixels, skipping."
             )
             return None
 
-        # Estimate background
+        # Estimate background from histogram FOV
         peak_result = find_gaussian_peaks(masked_pixels)
         if peak_result is None:
             warnings.append(
-                f"FOV {fov_info.display_name}, threshold {thr_info.name}: "
+                f"Histogram FOV {hist_fov_info.display_name}, "
+                f"threshold {thr_info.name}: "
                 f"no valid intensity data for peak detection, skipping."
             )
             return None
 
         bg_value = peak_result.background_value
 
+        # Load apply FOV's channel image for subtraction
+        try:
+            apply_channel_image = store.read_image_numpy(apply_fov_id, channel)
+        except Exception as exc:
+            warnings.append(
+                f"Skipped apply FOV {apply_fov_info.display_name}: {exc}"
+            )
+            return None
+
         # Build derived image with safe unsigned subtraction
         subtracted = np.clip(
-            channel_image.astype(np.int32) - int(bg_value),
+            apply_channel_image.astype(np.int32) - int(bg_value),
             0,
-            int(np.iinfo(channel_image.dtype).max) if np.issubdtype(channel_image.dtype, np.integer) else None,
+            int(np.iinfo(apply_channel_image.dtype).max)
+            if np.issubdtype(apply_channel_image.dtype, np.integer)
+            else None,
         )
         derived_image = np.where(
             mask_bool,
             subtracted,
-            channel_image.dtype.type(0),
-        ).astype(channel_image.dtype)
+            apply_channel_image.dtype.type(0),
+        ).astype(apply_channel_image.dtype)
 
-        # Derive FOV name
-        derived_name = f"{fov_info.display_name}_bgsub_{thr_info.name}_{channel}"
+        # Derive FOV name from the APPLY FOV
+        derived_name = (
+            f"{apply_fov_info.display_name}_bgsub_{thr_info.name}_{channel}"
+        )
 
-        # Create or reuse derived FOV
+        # Create or reuse derived FOV (metadata from apply FOV)
         if derived_name in fov_name_to_id:
             derived_fov_id = fov_name_to_id[derived_name]
         else:
             derived_fov_id = store.add_fov(
-                condition=fov_info.condition,
-                bio_rep=fov_info.bio_rep,
+                condition=apply_fov_info.condition,
+                bio_rep=apply_fov_info.bio_rep,
                 display_name=derived_name,
-                width=fov_info.width,
-                height=fov_info.height,
-                pixel_size_um=fov_info.pixel_size_um,
+                width=apply_fov_info.width,
+                height=apply_fov_info.height,
+                pixel_size_um=apply_fov_info.pixel_size_um,
             )
             fov_name_to_id[derived_name] = derived_fov_id
 
-        # Write derived image
-        store.write_image(derived_fov_id, channel, derived_image)
+        # Write ALL channels — subtracted channel replaced, others copied
+        for ch in channels:
+            if ch.name == channel:
+                store.write_image(derived_fov_id, ch.name, derived_image)
+            else:
+                try:
+                    ch_image = store.read_image_numpy(apply_fov_id, ch.name)
+                    store.write_image(derived_fov_id, ch.name, ch_image)
+                except Exception:
+                    pass  # Channel may not exist on this FOV
+
+        # Copy fov_config from apply FOV to derived FOV
+        apply_config = store.get_fov_config(apply_fov_id)
+        for entry in apply_config:
+            try:
+                store.set_fov_config_entry(
+                    derived_fov_id,
+                    entry.segmentation_id,
+                    threshold_id=entry.threshold_id,
+                    scopes=entry.scopes,
+                )
+            except Exception:
+                pass  # Config may already exist from previous run
 
         # Save histogram PNG
-        hist_title = f"{fov_info.display_name} / {thr_info.name} / {channel}"
+        hist_title = (
+            f"{hist_fov_info.display_name} / {thr_info.name} / {channel}"
+        )
         safe_name = (
-            f"{fov_info.display_name}_{thr_info.name}_{channel}_{timestamp}.png"
+            f"{hist_fov_info.display_name}_{thr_info.name}"
+            f"_{channel}_{timestamp}.png"
         )
         hist_path = histograms_dir / safe_name
         try:
@@ -277,7 +341,8 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
             logger.warning("Failed to save histogram PNG: %s", exc)
 
         return {
-            "source_fov": fov_info.display_name,
+            "histogram_fov": hist_fov_info.display_name,
+            "apply_fov": apply_fov_info.display_name,
             "threshold": thr_info.name,
             "channel": channel,
             "bg_value": bg_value,

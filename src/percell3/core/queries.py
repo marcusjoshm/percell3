@@ -874,7 +874,13 @@ def select_particles_with_context(
     threshold_id: int | None = None,
     fov_id: int | None = None,
 ) -> list[dict]:
-    """Query particles enriched with FOV context (condition, bio rep)."""
+    """Query particles enriched with FOV context and parent cell.
+
+    Each particle gets the ``cell_id`` and ``cell_label`` of the nearest
+    cell whose bounding box contains the particle centroid.  When
+    multiple cells overlap at the centroid, the closest cell (by centroid
+    distance) is chosen.
+    """
     query = (
         "SELECT p.*, "
         "f.display_name AS fov_name, cond.name AS condition_name, br.name AS bio_rep_name "
@@ -894,8 +900,43 @@ def select_particles_with_context(
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY p.fov_id, p.id"
-    rows = conn.execute(query, params).fetchall()
-    return [dict(r) for r in rows]
+    rows = [dict(r) for r in conn.execute(query, params).fetchall()]
+
+    if not rows:
+        return rows
+
+    # Spatial lookup: assign each particle to the nearest cell whose
+    # bounding box contains the particle centroid.
+    fov_ids_seen = {r["fov_id"] for r in rows}
+    cells_by_fov: dict[int, list[dict]] = {}
+    for fid in fov_ids_seen:
+        cell_rows = conn.execute(
+            "SELECT id, label_value, centroid_x, centroid_y, "
+            "bbox_x, bbox_y, bbox_w, bbox_h FROM cells WHERE fov_id = ?",
+            (fid,),
+        ).fetchall()
+        cells_by_fov[fid] = [dict(cr) for cr in cell_rows]
+
+    for row in rows:
+        best_id = None
+        best_label = None
+        best_dist = float("inf")
+        px, py = row["centroid_x"], row["centroid_y"]
+        for cell in cells_by_fov.get(row["fov_id"], []):
+            bx, by = cell["bbox_x"], cell["bbox_y"]
+            if (bx <= px < bx + cell["bbox_w"]
+                    and by <= py < by + cell["bbox_h"]):
+                dx = px - cell["centroid_x"]
+                dy = py - cell["centroid_y"]
+                dist = dx * dx + dy * dy
+                if dist < best_dist:
+                    best_dist = dist
+                    best_id = cell["id"]
+                    best_label = cell["label_value"]
+        row["cell_id"] = best_id
+        row["cell_label"] = best_label
+
+    return rows
 
 
 def delete_particles_for_fov(conn: sqlite3.Connection, fov_id: int) -> int:

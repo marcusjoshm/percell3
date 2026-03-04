@@ -37,8 +37,10 @@ logger = logging.getLogger(__name__)
 GRANULE_CSV_COLUMNS = [
     "particle_id",
     "cell_id",
+    "cell_label",
     "fov_id",
     "fov_name",
+    "threshold_name",
     "condition",
     "bio_rep",
     "area_pixels",
@@ -53,8 +55,10 @@ GRANULE_CSV_COLUMNS = [
 
 DILUTE_CSV_COLUMNS = [
     "cell_id",
+    "cell_label",
     "fov_id",
     "fov_name",
+    "threshold_name",
     "condition",
     "bio_rep",
     "dilute_area_pixels",
@@ -219,33 +223,114 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
 
         exclusion_selem = disk(exclusion_dilation_pixels)
 
+        # Build threshold lookup by ID
+        threshold_map = {tr.id: tr for tr in all_thresholds}
+
         for fov_idx, fov_id in enumerate(fov_ids):
             fov_info = store.get_fov_by_id(fov_id)
 
-            # Resolve per-FOV run IDs
-            seg_runs = [
-                s for s in store.get_segmentations(seg_type="cellular")
-                if s.source_fov_id == fov_id
-            ]
-            seg_run_id = seg_runs[0].id if seg_runs else None
-            fov_thr_runs = [tr for tr in particle_runs if tr.source_fov_id == fov_id]
-            thr_run_id = fov_thr_runs[-1].id if fov_thr_runs else None
+            # Resolve thresholds from config matrix
+            fov_config = store.get_fov_config(fov_id)
+            fov_threshold_pairs: list[tuple[int, int, str]] = []
+            for entry in fov_config:
+                if entry.threshold_id is None:
+                    continue
+                thr_info = threshold_map.get(entry.threshold_id)
+                if thr_info is None:
+                    continue
+                if thr_info.source_channel != particle_channel:
+                    continue
+                fov_threshold_pairs.append(
+                    (entry.segmentation_id, entry.threshold_id, thr_info.name)
+                )
 
-            if seg_run_id is None or thr_run_id is None:
-                warnings.append(f"Skipped FOV {fov_id}: missing seg or threshold run")
+            if not fov_threshold_pairs:
+                # Fallback: use source_fov_id matching (for experiments without config entries)
+                seg_runs = [
+                    s for s in store.get_segmentations(seg_type="cellular")
+                    if s.source_fov_id == fov_id
+                ]
+                fov_thr_runs = [tr for tr in particle_runs if tr.source_fov_id == fov_id]
+                if seg_runs and fov_thr_runs:
+                    fov_threshold_pairs = [
+                        (seg_runs[0].id, fov_thr_runs[-1].id, fov_thr_runs[-1].name)
+                    ]
+
+            if not fov_threshold_pairs:
+                warnings.append(f"Skipped FOV {fov_id}: no matching threshold configured")
+                if progress_callback:
+                    progress_callback(fov_idx + 1, len(fov_ids), fov_info.display_name)
                 continue
 
-            # Read images for this FOV
+            # Use the segmentation from the first config entry (all entries
+            # for a given FOV share the same cellular segmentation).
+            seg_run_id = fov_threshold_pairs[0][0]
+
+            # Read cell labels once
             try:
                 cell_labels = store.read_labels(seg_run_id)
-                particle_labels = store.read_particle_labels(thr_run_id)
-                measurement_image = store.read_image_numpy(fov_id, meas_channel)
             except Exception as exc:
                 logger.warning(
-                    "Skipping FOV %s: failed to read data: %s",
+                    "Skipping FOV %s: failed to read cell labels: %s",
                     fov_info.display_name, exc,
                 )
                 warnings.append(f"Skipped FOV {fov_info.display_name}: {exc}")
+                if progress_callback:
+                    progress_callback(fov_idx + 1, len(fov_ids), fov_info.display_name)
+                continue
+
+            # Merge particle labels from all matching thresholds.
+            # Grouped thresholding produces non-overlapping groups (g1, g2, …)
+            # so we combine them into a single particle label array with
+            # renumbered IDs to avoid collisions.
+            h, w = cell_labels.shape
+            merged_particle_labels = np.zeros((h, w), dtype=np.int32)
+            label_offset = 0
+            loaded_thr_names: list[str] = []
+            any_labels_read = False
+
+            for _, thr_run_id, thr_name in fov_threshold_pairs:
+                try:
+                    plabels = store.read_particle_labels(thr_run_id)
+                except Exception:
+                    logger.debug(
+                        "FOV %s: threshold '%s' has no particle labels, skipping",
+                        fov_info.display_name, thr_name,
+                    )
+                    continue
+
+                any_labels_read = True
+                loaded_thr_names.append(thr_name)
+
+                # Renumber to avoid collisions: shift non-zero labels
+                mask = plabels > 0
+                if np.any(mask):
+                    merged_particle_labels[mask] = plabels[mask] + label_offset
+                    label_offset += int(plabels.max())
+
+            if not any_labels_read:
+                # Could not read particle labels from any threshold
+                warnings.append(
+                    f"Skipped FOV {fov_info.display_name}: "
+                    "no particle labels found in any configured threshold"
+                )
+                if progress_callback:
+                    progress_callback(fov_idx + 1, len(fov_ids), fov_info.display_name)
+                continue
+
+            combined_thr_name = "+".join(loaded_thr_names)
+
+            # Read measurement image
+            try:
+                measurement_image = store.read_image_numpy(fov_id, meas_channel)
+            except Exception as exc:
+                logger.warning(
+                    "Skipping FOV %s: failed to read measurement image: %s",
+                    fov_info.display_name, exc,
+                )
+                warnings.append(f"Skipped FOV {fov_info.display_name}: {exc}")
+                if progress_callback:
+                    progress_callback(fov_idx + 1, len(fov_ids), fov_info.display_name)
                 continue
 
             # Read exclusion mask if specified
@@ -290,14 +375,13 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
                     progress_callback(fov_idx + 1, len(fov_ids), fov_info.display_name)
                 continue
 
+            condition = fov_info.condition or "uncategorized"
+
             # Initialize full-FOV masks for derived image creation
-            h, w = cell_labels.shape
             condensed_mask = np.zeros((h, w), dtype=bool)
             dilute_mask_full = np.zeros((h, w), dtype=bool)
 
-            condition = fov_info.condition or "uncategorized"
-
-            # Process each cell
+            # Process each cell using the merged particle labels
             for _, cell_row in cells_df.iterrows():
                 cell_id = int(cell_row["id"])
                 label_val = int(cell_row["label_value"])
@@ -308,7 +392,7 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
 
                 # Crop to cell bounding box
                 label_crop = cell_labels[by:by + bh, bx:bx + bw]
-                particle_crop = particle_labels[by:by + bh, bx:bx + bw]
+                particle_crop = merged_particle_labels[by:by + bh, bx:bx + bw]
                 meas_crop = measurement_image[by:by + bh, bx:bx + bw]
 
                 cell_mask = label_crop == label_val
@@ -350,8 +434,10 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
                         granule_rows_by_condition[condition].append({
                             "particle_id": r.particle_label,
                             "cell_id": r.cell_id,
+                            "cell_label": label_val,
                             "fov_id": fov_id,
                             "fov_name": fov_info.display_name,
+                            "threshold_name": combined_thr_name,
                             "condition": condition,
                             "bio_rep": fov_info.bio_rep,
                             "area_pixels": r.area_pixels,
@@ -397,8 +483,10 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
 
                     dilute_rows_by_condition[condition].append({
                         "cell_id": cell_id,
+                        "cell_label": label_val,
                         "fov_id": fov_id,
                         "fov_name": fov_info.display_name,
+                        "threshold_name": combined_thr_name,
                         "condition": condition,
                         "bio_rep": fov_info.bio_rep,
                         "dilute_area_pixels": dilute_pixels,
@@ -415,10 +503,11 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
                 condensed_mask[by:by + bh, bx:bx + bw] |= all_particles_mask
                 dilute_mask_full[by:by + bh, bx:bx + bw] |= dilute_mask
 
-            # --- Derived FOV creation (per FOV) ---
+            # --- Derived FOV creation (once per FOV, using combined mask) ---
             if do_save_images:
                 self._create_derived_fovs(
-                    store, fov_id, fov_info, condensed_mask, dilute_mask_full,
+                    store, fov_id, fov_info,
+                    condensed_mask, dilute_mask_full,
                     existing_fov_map, warnings,
                 )
 
