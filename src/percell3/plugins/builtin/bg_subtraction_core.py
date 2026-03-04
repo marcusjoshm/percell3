@@ -53,11 +53,9 @@ def estimate_background_gaussian(
 ) -> tuple[float, dict] | None:
     """Estimate background from ring pixel histogram using Gaussian peak detection.
 
-    Port of PerCell 1 ``_find_gaussian_peaks`` algorithm:
-    1. Build histogram of ring pixel intensities
-    2. Smooth with Gaussian kernel
-    3. Find prominent peaks
-    4. Select the lowest-position peak as background estimate
+    Delegates to :func:`~percell3.plugins.builtin.peak_detection.find_gaussian_peaks`
+    and wraps the result in the legacy ``(float, dict)`` format for backward
+    compatibility with existing callers.
 
     Args:
         ring_intensities: 1D array of pixel intensities from the background ring.
@@ -68,14 +66,13 @@ def estimate_background_gaussian(
     Returns:
         Tuple of (background_value, peak_info_dict), or None if input is empty.
     """
-    from scipy.ndimage import gaussian_filter1d
-    from scipy.signal import find_peaks
+    from percell3.plugins.builtin.peak_detection import find_gaussian_peaks
 
     if len(ring_intensities) == 0:
         return None
 
-    data_max = float(np.max(ring_intensities))
-    if data_max == 0:
+    # Preserve legacy behavior: all-zeros returns (0.0, {...})
+    if float(np.max(ring_intensities)) == 0:
         return 0.0, {
             "n_peaks": 0,
             "background_value": 0.0,
@@ -84,64 +81,25 @@ def estimate_background_gaussian(
             "hist_smooth": np.zeros(n_bins),
         }
 
-    hist, bin_edges = np.histogram(ring_intensities, bins=n_bins, range=(0, data_max))
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-    hist_smooth = gaussian_filter1d(hist.astype(float), sigma=sigma)
+    result = find_gaussian_peaks(
+        ring_intensities,
+        n_bins=n_bins,
+        sigma=sigma,
+        max_background=max_background,
+    )
 
-    min_prominence = float(np.max(hist_smooth)) * 0.15
-    peaks, properties = find_peaks(hist_smooth, prominence=min_prominence)
+    if result is None:
+        return None
 
-    if len(peaks) == 0:
-        # No prominent peaks — use the argmax of smoothed histogram
-        peak_idx = int(np.argmax(hist_smooth))
-        background_value = float(bin_centers[peak_idx])
-        return background_value, {
-            "n_peaks": 1,
-            "background_value": background_value,
-            "hist": hist,
-            "bin_centers": bin_centers,
-            "hist_smooth": hist_smooth,
-        }
-
-    peak_positions = bin_centers[peaks]
-    peak_prominences = properties["prominences"]
-
-    if max_background is not None:
-        peaks_below = peak_positions < max_background
-        if np.any(peaks_below):
-            prominences_below = peak_prominences[peaks_below]
-            positions_below = peak_positions[peaks_below]
-            most_prominent_idx = int(np.argmax(prominences_below))
-            background_value = float(positions_below[most_prominent_idx])
-        else:
-            bins_below = bin_centers < max_background
-            if np.any(bins_below):
-                hist_below = hist[bins_below]
-                centers_below = bin_centers[bins_below]
-                background_value = float(centers_below[int(np.argmax(hist_below))])
-            else:
-                sorted_by_pos = np.argsort(peak_positions)
-                background_value = float(peak_positions[sorted_by_pos[0]])
-    else:
-        # Use the lowest-position peak (leftmost = dimmest = background)
-        sorted_by_pos = np.argsort(peak_positions)
-        background_value = float(peak_positions[sorted_by_pos[0]])
-
-    # Build report with top-2 peaks sorted by prominence
-    sorted_by_prominence = np.argsort(peak_prominences)[::-1]
-    peaks_sorted = peaks[sorted_by_prominence]
-    peak_positions_report = bin_centers[peaks_sorted]
-
-    return background_value, {
-        "n_peaks": len(peaks),
-        "background_value": background_value,
-        "peaks": peak_positions_report[:2].tolist()
-        if len(peaks) >= 2
-        else peak_positions_report.tolist(),
-        "hist": hist,
-        "bin_centers": bin_centers,
-        "hist_smooth": hist_smooth,
+    peak_info = {
+        "n_peaks": result.n_peaks,
+        "background_value": result.background_value,
+        "hist": result.hist,
+        "bin_centers": result.bin_centers,
+        "hist_smooth": result.hist_smooth,
     }
+
+    return result.background_value, peak_info
 
 
 def compute_background_ring(

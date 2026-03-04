@@ -380,6 +380,8 @@ def _make_plugin_runner(registry, plugin_name: str):
             _run_condensate_analysis(state, registry)
         elif plugin_name == "image_calculator":
             _run_image_calculator(state, registry)
+        elif plugin_name == "threshold_bg_subtraction":
+            _run_threshold_bg_subtraction(state, registry)
         else:
             # Generic plugin runner for future plugins
             _run_generic_plugin(state, registry, plugin_name)
@@ -503,6 +505,114 @@ def _run_image_calculator(state: MenuState, registry) -> None:
         console.print(f"  Derived FOV ID: {derived_fov_id}")
     for w in result.warnings:
         console.print(f"  [yellow]Warning: {w}[/yellow]")
+
+
+def _run_threshold_bg_subtraction(state: MenuState, registry) -> None:
+    """Interactive handler for threshold-layer background subtraction plugin."""
+    from rich.table import Table
+
+    store = state.require_experiment()
+
+    # Validate prerequisites
+    plugin = registry.get_plugin("threshold_bg_subtraction")
+    errors = plugin.validate(store)
+    if errors:
+        console.print("\n[red]Cannot run threshold background subtraction:[/red]")
+        for e in errors:
+            console.print(f"  - {e}")
+        return
+
+    # Step 1: Channel selection
+    channels = store.get_channels()
+    ch_names = [ch.name for ch in channels]
+
+    console.print("\n[bold]Step 1: Channel[/bold]")
+    console.print("  [dim]Select the channel to subtract background from.[/dim]\n")
+    channel = numbered_select_one(ch_names, "Channel")
+
+    # Step 2: FOV selection — filter to those with configured thresholds
+    console.print("\n[bold]Step 2: Select FOVs[/bold]")
+    all_fovs = store.get_fovs()
+    fovs_with_thresholds = []
+    for fov in all_fovs:
+        fov_config = store.get_fov_config(fov.id)
+        if any(entry.threshold_id is not None for entry in fov_config):
+            fovs_with_thresholds.append(fov)
+
+    if not fovs_with_thresholds:
+        console.print(
+            "\n[red]No FOVs have configured threshold layers.[/red]"
+        )
+        console.print(
+            "[dim]Run 'Grouped intensity thresholding' first.[/dim]"
+        )
+        return
+
+    seg_summary = store.get_fov_segmentation_summary()
+    _show_fov_status_table(fovs_with_thresholds, seg_summary)
+
+    if len(fovs_with_thresholds) == 1:
+        console.print(
+            f"  [dim](auto-selected: {fovs_with_thresholds[0].display_name})[/dim]"
+        )
+        selected_fovs = fovs_with_thresholds
+    else:
+        selected_fovs = _select_fovs_from_table(fovs_with_thresholds)
+
+    # Step 3: Confirmation
+    console.print(f"\n[bold]Threshold background subtraction settings:[/bold]")
+    console.print(f"  Channel:     {channel}")
+    console.print(f"  FOVs:        {len(selected_fovs)} selected")
+    console.print(f"  Thresholds:  all configured (per FOV)")
+
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
+        console.print("[yellow]Background subtraction cancelled.[/yellow]")
+        return
+
+    # Step 4: Run with progress
+    fov_ids = [f.id for f in selected_fovs]
+    parameters = {"channel": channel, "fov_ids": fov_ids}
+
+    with make_progress() as progress:
+        task = progress.add_task(
+            "Background subtraction...", total=len(selected_fovs),
+        )
+
+        def on_progress(current, total, fov_name):
+            progress.update(
+                task, total=total, completed=current,
+                description=f"Processing {fov_name}",
+            )
+
+        result = registry.run_plugin(
+            "threshold_bg_subtraction", store,
+            parameters=parameters, progress_callback=on_progress,
+        )
+
+    # Step 5: Summary table
+    console.print(f"\n[green]Threshold background subtraction complete[/green]")
+
+    # Parse bg values from custom_outputs
+    bg_entries = {
+        k.removeprefix("bg_"): v
+        for k, v in result.custom_outputs.items()
+        if k.startswith("bg_")
+    }
+    if bg_entries:
+        summary_table = Table(title="Background Subtraction Results")
+        summary_table.add_column("Derived FOV", style="cyan")
+        summary_table.add_column("BG Value", justify="right")
+        for name, bg_val in bg_entries.items():
+            summary_table.add_row(name, bg_val)
+        console.print(summary_table)
+
+    histograms_dir = result.custom_outputs.get("histograms_dir")
+    if histograms_dir:
+        console.print(f"  Histograms: {histograms_dir}")
+
+    for w in result.warnings:
+        console.print(f"  [yellow]Warning: {w}[/yellow]")
+    console.print()
 
 
 def _run_bg_subtraction(state: MenuState, registry) -> None:
@@ -2354,8 +2464,6 @@ def _threshold_fov(
     # Particle analysis for accepted groups — accumulate into one label image
     if accepted_groups:
         console.print(f"\n  [bold]Particle analysis...[/bold]")
-        combined_particle_labels = np.zeros(labels.shape, dtype=np.int32)
-        next_label_offset = 0
 
         for tag_name, group_cell_ids, thr_id in accepted_groups:
             pa_result = analyzer.analyze_fov(
@@ -2371,27 +2479,16 @@ def _threshold_fov(
             if pa_result.summary_measurements:
                 store.add_measurements(pa_result.summary_measurements)
 
-            # Merge this group's particle labels into the combined image,
-            # renumbering to avoid collisions with earlier groups.
-            group_labels = pa_result.particle_label_image
-            if pa_result.total_particles > 0:
-                group_mask = group_labels > 0
-                combined_particle_labels[group_mask] = (
-                    group_labels[group_mask] + next_label_offset
-                )
-                next_label_offset += pa_result.total_particles
+            # Write per-threshold particle labels (label_values match DB)
+            store.write_particle_labels(
+                pa_result.particle_label_image, thr_id,
+            )
 
             console.print(
                 f"    {tag_name}: {pa_result.total_particles} particles "
                 f"in {pa_result.cells_analyzed} cells"
             )
             total_particles += pa_result.total_particles
-
-        # Write the combined particle label image once
-        store.write_particle_labels(
-            combined_particle_labels,
-            last_thr_id,
-        )
     else:
         console.print(f"  [dim]No groups accepted — skipping particle analysis.[/dim]")
 
