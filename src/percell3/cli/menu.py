@@ -299,6 +299,7 @@ def _setup_menu(state: MenuState) -> None:
 def _import_menu(state: MenuState) -> None:
     Menu("IMPORT", [
         MenuItem("1", "Import images", "Load LIF, TIFF, or CZI files", _import_images),
+        MenuItem("2", "Import from PerCell project", "Copy FOVs from another .percell experiment", _import_from_percell),
     ], state, return_home=True).run()
     raise _MenuCancel()
 
@@ -1317,6 +1318,107 @@ def _import_images(state: MenuState) -> None:
         source_files=source_files, scan_result=scan_result,
         tile_config=tile_config,
     )
+
+
+def _import_from_percell(state: MenuState) -> None:
+    """Import FOVs from another PerCell project."""
+    from percell3.core import ExperimentStore
+    from percell3.io.percell_import import PerCellImporter
+
+    dst_store = state.require_experiment()
+
+    # 1. Get source project path
+    source_str = _prompt_path(
+        "Source .percell project",
+        mode="dir",
+        title="Select source .percell project",
+    )
+    source_path = Path(source_str)
+
+    # Validate source
+    if not (source_path / "experiment.db").exists():
+        console.print("[red]Error:[/red] Not a valid .percell project (no experiment.db).")
+        return
+
+    if source_path.resolve() == dst_store.path.resolve():
+        console.print("[red]Error:[/red] Cannot import from the same project.")
+        return
+
+    # 2. Open source project
+    try:
+        src_store = ExperimentStore.open(source_path)
+    except Exception as exc:
+        console.print(f"[red]Error opening source project:[/red] {exc}")
+        return
+
+    try:
+        src_fovs = src_store.get_fovs()
+        if not src_fovs:
+            console.print("[dim]Source project has no FOVs.[/dim]")
+            return
+
+        # 3. Display FOVs grouped by condition for selection
+        fov_labels = [f"{f.display_name} ({f.condition})" for f in src_fovs]
+        console.print(f"\n[bold]Source FOVs ({len(src_fovs)}):[/bold]")
+        selected_labels = numbered_select_many(fov_labels, "FOVs to import")
+        selected_indices = {fov_labels.index(lbl) for lbl in selected_labels}
+        selected_fovs = [src_fovs[i] for i in sorted(selected_indices)]
+
+        # 4. Show import summary
+        src_channels = src_store.get_channels()
+        dst_channels = {ch.name for ch in dst_store.get_channels()}
+        new_channels = [ch.name for ch in src_channels if ch.name not in dst_channels]
+
+        console.print(f"\n[bold]Import summary:[/bold]")
+        console.print(f"  FOVs to import: {len(selected_fovs)}")
+        console.print(f"  Source channels: {len(src_channels)}")
+        if new_channels:
+            console.print(f"  [yellow]New channels to create:[/yellow] {', '.join(new_channels)}")
+        else:
+            console.print(f"  All channels exist in destination")
+
+        # 5. Confirm
+        if numbered_select_one(["Yes", "No"], "\nProceed with import?") != "Yes":
+            console.print("[yellow]Import cancelled.[/yellow]")
+            return
+
+        # 6. Execute import with progress
+        fov_ids = [f.id for f in selected_fovs]
+        importer = PerCellImporter(src_store, dst_store)
+
+        progress = make_progress()
+        with progress:
+            task = progress.add_task("Importing FOVs...", total=len(fov_ids))
+
+            def on_progress(current: int, total: int, name: str) -> None:
+                progress.update(task, completed=current, description=f"Imported {name}")
+
+            result = importer.import_fovs(fov_ids, progress_callback=on_progress)
+
+        # 7. Show results
+        console.print(f"\n[green]Import complete![/green]")
+        console.print(f"  FOVs imported: {result.fovs_imported}")
+        if result.channels_created:
+            console.print(f"  Channels created: {result.channels_created}")
+        if result.conditions_created:
+            console.print(f"  Conditions created: {result.conditions_created}")
+        if result.segmentations_created:
+            console.print(f"  Segmentations imported: {result.segmentations_created}")
+        if result.thresholds_created:
+            console.print(f"  Thresholds imported: {result.thresholds_created}")
+        if result.cells_imported:
+            console.print(f"  Cells imported: {result.cells_imported}")
+        if result.measurements_imported:
+            console.print(f"  Measurements imported: {result.measurements_imported}")
+        if result.particles_imported:
+            console.print(f"  Particles imported: {result.particles_imported}")
+        if result.warnings:
+            console.print(f"\n[yellow]Warnings:[/yellow]")
+            for w in result.warnings:
+                console.print(f"  - {w}")
+
+    finally:
+        src_store.close()
 
 
 def _prompt_tile_config(
@@ -2404,7 +2506,6 @@ def _threshold_fov(
     image = store.read_image_numpy(fov_id, threshold_channel)
 
     accepted_groups: list[tuple[str, list[int], int]] = []  # (tag, cell_ids, run_id)
-    combined_mask = np.zeros(labels.shape, dtype=bool)
     skip_remaining_groups = False
 
     for i, tag_name in enumerate(grouping_result.tag_names):
@@ -2496,18 +2597,6 @@ def _threshold_fov(
         except Exception:
             console.print(f"  Threshold: #{result.threshold_id}")
         accepted_groups.append((tag_name, group_cell_ids, result.threshold_id))
-
-        # Accumulate this group's mask into the combined mask
-        group_written = store.read_mask(result.threshold_id)
-        combined_mask |= (group_written > 0)
-
-    # Write combined mask from all accepted groups
-    if accepted_groups:
-        _, _, last_thr_id = accepted_groups[-1]
-        store.write_mask(
-            combined_mask.astype(np.uint8),
-            last_thr_id,
-        )
 
     # Particle analysis for accepted groups — accumulate into one label image
     if accepted_groups:
