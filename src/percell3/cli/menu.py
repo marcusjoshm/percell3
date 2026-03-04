@@ -2343,7 +2343,7 @@ def _threshold_fov(
     grouping_channel: str,
     grouping_metric: str,
     gaussian_sigma: float | None = None,
-    min_particle_area: int = 5,
+    min_particle_area: int = 1,
     segmentation_id: int | None = None,
 ) -> tuple[int, int]:
     """Run grouping + threshold QC + particle analysis for one FOV.
@@ -2640,9 +2640,9 @@ def _apply_threshold(state: MenuState) -> None:
             return
 
     # 5b. Minimum particle area
-    min_particle_area = 5
+    min_particle_area = 1
     area_str = menu_prompt(
-        "Minimum particle area in pixels (blank = 5)", default="5",
+        "Minimum particle area in pixels (blank = 1)", default="1",
     )
     try:
         min_particle_area = int(area_str)
@@ -3665,9 +3665,9 @@ def _particle_workflow(state: MenuState) -> None:
             return
 
     # --- Step 4b: Minimum particle area ---
-    wf_min_particle_area = 5
+    wf_min_particle_area = 1
     area_str = menu_prompt(
-        "Minimum particle area in pixels (blank = 5)", default="5",
+        "Minimum particle area in pixels (blank = 1)", default="1",
     )
     try:
         wf_min_particle_area = int(area_str)

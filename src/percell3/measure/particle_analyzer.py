@@ -56,10 +56,10 @@ class ParticleAnalyzer:
     finds connected components, and computes full morphometric properties.
 
     Args:
-        min_particle_area: Minimum area in pixels to keep a particle (default: 5).
+        min_particle_area: Minimum area in pixels to keep a particle (default: 1).
     """
 
-    def __init__(self, min_particle_area: int = 5) -> None:
+    def __init__(self, min_particle_area: int = 1) -> None:
         self._min_area = min_particle_area
 
     def analyze_fov(
