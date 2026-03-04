@@ -331,6 +331,7 @@ def _data_menu(state: MenuState) -> None:
         MenuItem("1", "Query experiment", "Inspect experiment data", _query_menu),
         MenuItem("2", "Edit experiment", "Rename conditions, FOVs, channels, bio-reps", _edit_menu),
         MenuItem("3", "Export to CSV", "Export measurements and particle data", _export_csv),
+        MenuItem("4", "Export FOVs as TIFF", "Export images, labels, masks as TIFF files", _export_tiff),
     ], state).run()
     raise _MenuCancel()
 
@@ -3310,6 +3311,62 @@ def _export_prism(state: MenuState) -> None:
             )
     except OSError as exc:
         console.print(f"[red]Export failed:[/red] {exc}")
+
+
+def _export_tiff(state: MenuState) -> None:
+    """Export FOV images, labels, and masks as TIFF files."""
+    from percell3.core.tiff_export import export_fov_as_tiff
+
+    store = state.require_experiment()
+    fovs = store.get_fovs()
+    if not fovs:
+        console.print("[yellow]No FOVs found.[/yellow]")
+        return
+
+    seg_summary = store.get_fov_segmentation_summary()
+    _show_fov_status_table(fovs, seg_summary)
+
+    if len(fovs) == 1:
+        console.print(f"  [dim](auto-selected: {fovs[0].display_name})[/dim]")
+        selected = fovs
+    else:
+        selected = _select_fovs_from_table(fovs)
+
+    output_dir = store.path / "exports" / "tiff"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Overwrite check
+    overwrite = False
+    existing = list(output_dir.glob("*.tiff"))
+    if existing:
+        ans = menu_prompt("Files already exist in exports/tiff/. Overwrite?", default="n")
+        overwrite = ans.lower().startswith("y")
+        if not overwrite:
+            console.print("[dim]Export cancelled.[/dim]")
+            return
+
+    total_written = 0
+    all_skipped: list[str] = []
+
+    with make_progress() as progress:
+        task = progress.add_task("Exporting TIFFs...", total=len(selected))
+        for fov in selected:
+            progress.update(task, description=f"Exporting {fov.display_name}")
+            try:
+                result = export_fov_as_tiff(store, fov.id, output_dir, overwrite=overwrite)
+                total_written += len(result.written)
+                all_skipped.extend(result.skipped)
+            except FileExistsError:
+                console.print(f"  [yellow]Skipped {fov.display_name} (files exist)[/yellow]")
+            except OSError as exc:
+                console.print(f"  [red]Error exporting {fov.display_name}:[/red] {exc}")
+            progress.advance(task)
+
+    console.print(f"\n[green]Exported {total_written} files to exports/tiff/[/green]")
+    if all_skipped:
+        console.print(f"[yellow]Skipped {len(all_skipped)} items:[/yellow]")
+        for skip in all_skipped:
+            console.print(f"  [dim]{skip}[/dim]")
 
 
 def _particle_workflow(state: MenuState) -> None:
