@@ -3241,7 +3241,8 @@ def _export_csv(state: MenuState) -> None:
     if include_particles:
         # Optional particle metric filter
         particle_metric_options = [
-            "area_um2", "perimeter", "circularity",
+            "area_pixels", "area_um2", "perimeter", "circularity",
+            "eccentricity", "solidity", "major_axis_length", "minor_axis_length",
             "mean_intensity", "max_intensity", "integrated_intensity",
         ]
         console.print("\n[bold]Particle metric filter:[/bold]")
