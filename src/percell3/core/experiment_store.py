@@ -722,10 +722,40 @@ class ExperimentStore:
             )
         else:
             df["col"] = df["channel"] + "_" + df["metric"]
-        pivot = df.pivot_table(
-            index="cell_id", columns="col", values="value", aggfunc="first",
-        )
-        pivot = pivot.reset_index()
+
+        # When multiple thresholds exist, pivot by (cell_id, threshold_name)
+        # so each threshold gets its own row instead of being collapsed.
+        has_threshold_data = df["threshold_id"].notna().any()
+        if has_threshold_data:
+            thr_map = {t.id: t.name for t in self.get_thresholds()}
+            df["threshold_name"] = df["threshold_id"].map(thr_map).fillna("")
+
+            # Split: base (no threshold) vs threshold-specific
+            df_base = df[df["threshold_name"] == ""]
+            df_thr = df[df["threshold_name"] != ""]
+
+            # Pivot threshold-specific by (cell_id, threshold_name)
+            pivot_thr = df_thr.pivot_table(
+                index=["cell_id", "threshold_name"],
+                columns="col", values="value", aggfunc="first",
+            ).reset_index()
+
+            if not df_base.empty:
+                # Pivot base by cell_id only
+                pivot_base = df_base.pivot_table(
+                    index="cell_id", columns="col",
+                    values="value", aggfunc="first",
+                ).reset_index()
+                # Merge base columns into each threshold row
+                pivot = pivot_thr.merge(pivot_base, on="cell_id", how="left")
+            else:
+                pivot = pivot_thr
+        else:
+            pivot = df.pivot_table(
+                index="cell_id", columns="col",
+                values="value", aggfunc="first",
+            ).reset_index()
+            pivot["threshold_name"] = ""
 
         if include_cell_info:
             cells_df = self.get_cells(is_valid=False)
