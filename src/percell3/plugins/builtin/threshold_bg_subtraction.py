@@ -269,18 +269,13 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
             )
             return None
 
-        # Build derived image with safe unsigned subtraction
-        subtracted = np.clip(
+        # Build derived image with safe unsigned subtraction (applied globally)
+        derived_image = np.clip(
             apply_channel_image.astype(np.int32) - int(bg_value),
             0,
             int(np.iinfo(apply_channel_image.dtype).max)
             if np.issubdtype(apply_channel_image.dtype, np.integer)
             else None,
-        )
-        derived_image = np.where(
-            mask_bool,
-            subtracted,
-            apply_channel_image.dtype.type(0),
         ).astype(apply_channel_image.dtype)
 
         # Derive FOV name from the APPLY FOV

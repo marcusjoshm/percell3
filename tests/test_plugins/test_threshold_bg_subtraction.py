@@ -23,10 +23,12 @@ def bg_sub_experiment(tmp_path):
         - 2 channels: ch00, ch01
         - histogram FOV (64x64), condition "dilute" — has threshold mask
         - apply FOV (64x64), condition "control" — no threshold, receives subtraction
-        - ch00 on histogram FOV: background ~50, bright region ~200
-        - ch00 on apply FOV: uniform ~150
+        - ch00 on histogram FOV: background ~50 everywhere (dilute-phase)
+        - ch00 on apply FOV: background ~150, bright spots ~300 in mask region
         - ch01 on both: uniform ~100
-        - 1 threshold layer on histogram FOV covering the bright region
+        - 1 threshold layer on histogram FOV covering the ROI
+        - bg estimate from masked pixels on histogram FOV → ~50
+        - after global subtraction: apply ~100 outside mask, ~250 inside mask
     """
     store = ExperimentStore.create(tmp_path / "bgsub_test.percell")
     store.add_channel("ch00")
@@ -34,16 +36,13 @@ def bg_sub_experiment(tmp_path):
     store.add_condition("dilute")
     store.add_condition("control")
 
-    # Histogram FOV (dilute-phase)
+    # Histogram FOV (dilute-phase) — background-level signal everywhere
     hist_fov_id = store.add_fov(
         "dilute", width=64, height=64, pixel_size_um=0.65,
     )
 
     rng = np.random.default_rng(42)
     hist_image = rng.normal(loc=50, scale=5, size=(64, 64)).clip(10, 300)
-    hist_image[20:40, 20:40] = rng.normal(
-        loc=200, scale=10, size=(20, 20),
-    ).clip(100, 400)
     hist_image = hist_image.astype(np.uint16)
     store.write_image(hist_fov_id, "ch00", hist_image)
     store.write_image(
@@ -51,12 +50,13 @@ def bg_sub_experiment(tmp_path):
         np.full((64, 64), 100, dtype=np.uint16),
     )
 
-    # Apply FOV (full image)
+    # Apply FOV (full image) — bright spots in the ROI region
     apply_fov_id = store.add_fov(
         "control", width=64, height=64, pixel_size_um=0.65,
     )
 
     apply_image = np.full((64, 64), 150, dtype=np.uint16)
+    apply_image[20:40, 20:40] = 300  # bright signal in ROI
     store.write_image(apply_fov_id, "ch00", apply_image)
     store.write_image(
         apply_fov_id, "ch01",
@@ -73,7 +73,7 @@ def bg_sub_experiment(tmp_path):
         source_channel="ch00",
     )
 
-    # Write mask: 255 where bright, 0 elsewhere
+    # Write mask: 255 in ROI, 0 elsewhere
     mask = np.zeros((64, 64), dtype=np.uint8)
     mask[20:40, 20:40] = 255
     store.write_mask(mask, threshold_id)
@@ -256,14 +256,12 @@ class TestRun:
         derived_image = store.read_image_numpy(derived.id, "ch00")
         apply_image = store.read_image_numpy(apply_fov_id, "ch00")
 
-        # Pixels inside mask should be <= apply image (subtracted)
-        mask_region = derived_image[20:40, 20:40]
-        apply_region = apply_image[20:40, 20:40]
-        assert np.all(mask_region <= apply_region)
+        # Background subtracted globally — all pixels should be <= apply
+        assert np.all(derived_image <= apply_image)
 
-        # Pixels outside mask should be zero
-        assert np.all(derived_image[:20, :] == 0)
-        assert np.all(derived_image[40:, :] == 0)
+        # Pixels outside mask should also be subtracted (not zeroed)
+        assert np.any(derived_image[:20, :] > 0)
+        assert np.any(derived_image[40:, :] > 0)
 
     def test_no_underflow_on_uint16(self, bg_sub_experiment) -> None:
         """Subtraction should not produce underflow artifacts."""
