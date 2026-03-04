@@ -245,15 +245,19 @@ class ParticleAnalyzer:
         segmentation_id: int,
     ) -> list[MeasurementRecord]:
         """Create summary measurements for a cell with no particles."""
+        mk = lambda metric: MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric=metric, value=0.0, threshold_id=threshold_id, segmentation_id=segmentation_id)
         return [
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_count", value=0.0, threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_area", value=0.0, threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_area", value=0.0, threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="max_particle_area", value=0.0, threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_coverage_fraction", value=0.0, threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_mean_intensity", value=0.0, threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_integrated_intensity", value=0.0, threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_integrated_intensity", value=0.0, threshold_id=threshold_id, segmentation_id=segmentation_id),
+            mk("particle_count"),
+            mk("total_particle_area"),
+            mk("mean_particle_area"),
+            mk("max_particle_area"),
+            mk("total_particle_area_pixels"),
+            mk("mean_particle_area_pixels"),
+            mk("max_particle_area_pixels"),
+            mk("particle_coverage_fraction"),
+            mk("mean_particle_mean_intensity"),
+            mk("mean_particle_integrated_intensity"),
+            mk("total_particle_integrated_intensity"),
         ]
 
     def _cell_summaries(
@@ -277,13 +281,17 @@ class ParticleAnalyzer:
         intensities_mean = [p.mean_intensity for p in particles if p.mean_intensity is not None]
         intensities_integ = [p.integrated_intensity for p in particles if p.integrated_intensity is not None]
 
+        mk = lambda metric, value: MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric=metric, value=value, threshold_id=threshold_id, segmentation_id=segmentation_id)
         return [
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_count", value=float(len(particles)), threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_area", value=float(total_area), threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_area", value=float(np.mean(areas)), threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="max_particle_area", value=float(max(areas)), threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="particle_coverage_fraction", value=float(coverage), threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_mean_intensity", value=float(np.mean(intensities_mean)) if intensities_mean else 0.0, threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="mean_particle_integrated_intensity", value=float(np.mean(intensities_integ)) if intensities_integ else 0.0, threshold_id=threshold_id, segmentation_id=segmentation_id),
-            MeasurementRecord(cell_id=cell_id, channel_id=channel_id, metric="total_particle_integrated_intensity", value=float(sum(intensities_integ)) if intensities_integ else 0.0, threshold_id=threshold_id, segmentation_id=segmentation_id),
+            mk("particle_count", float(len(particles))),
+            mk("total_particle_area", float(total_area)),
+            mk("mean_particle_area", float(np.mean(areas))),
+            mk("max_particle_area", float(max(areas))),
+            mk("total_particle_area_pixels", float(total_area)),
+            mk("mean_particle_area_pixels", float(np.mean(areas))),
+            mk("max_particle_area_pixels", float(max(areas))),
+            mk("particle_coverage_fraction", float(coverage)),
+            mk("mean_particle_mean_intensity", float(np.mean(intensities_mean)) if intensities_mean else 0.0),
+            mk("mean_particle_integrated_intensity", float(np.mean(intensities_integ)) if intensities_integ else 0.0),
+            mk("total_particle_integrated_intensity", float(sum(intensities_integ)) if intensities_integ else 0.0),
         ]

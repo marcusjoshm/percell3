@@ -174,8 +174,8 @@ class TestParticleAnalyzer:
             segmentation_id=store._test_seg_id,
         )
 
-        # 3 cells * 8 metrics = 24 summary measurements
-        assert len(result.summary_measurements) == 24
+        # 3 cells * 11 metrics = 33 summary measurements
+        assert len(result.summary_measurements) == 33
 
         # Check metric names
         metrics = {m.metric for m in result.summary_measurements}
