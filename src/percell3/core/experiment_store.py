@@ -678,10 +678,24 @@ class ExperimentStore:
         metrics: list[str] | None = None,
         scope: str | None = None,
         include_cell_info: bool = True,
+        fov_ids: list[int] | None = None,
     ) -> pd.DataFrame:
         from percell3.core.constants import PARTICLE_AREA_METRICS
 
-        df = self.get_measurements(channels=channels, metrics=metrics, scope=scope)
+        # Resolve fov_ids to cell_ids for query filtering
+        cell_ids = None
+        if fov_ids is not None:
+            cells_df = self.get_cells(is_valid=False)
+            if not cells_df.empty and "fov_id" in cells_df.columns:
+                cell_ids = cells_df[
+                    cells_df["fov_id"].isin(fov_ids)
+                ]["id"].tolist()
+            else:
+                cell_ids = []
+
+        df = self.get_measurements(
+            cell_ids=cell_ids, channels=channels, metrics=metrics, scope=scope,
+        )
         if df.empty:
             return df
 
@@ -1379,6 +1393,7 @@ class ExperimentStore:
         metrics: list[str] | None = None,
         scope: str | None = None,
         include_provenance: bool = True,
+        fov_ids: list[int] | None = None,
     ) -> None:
         """Export measurements to a single flat CSV.
 
@@ -1388,10 +1403,11 @@ class ExperimentStore:
             metrics: Optional metric filter.
             scope: Optional scope filter.
             include_provenance: If True, prepend config provenance as comments.
+            fov_ids: Optional FOV filter. None = all FOVs.
         """
         pivot = self.get_measurement_pivot(
             channels=channels, metrics=metrics, scope=scope,
-            include_cell_info=True,
+            include_cell_info=True, fov_ids=fov_ids,
         )
         if include_provenance:
             provenance = self._get_config_provenance()
@@ -1408,6 +1424,7 @@ class ExperimentStore:
         channels: list[str] | None = None,
         metrics: list[str] | None = None,
         scope: str = "whole_cell",
+        fov_ids: list[int] | None = None,
     ) -> dict[str, int]:
         """Export measurements in Prism-friendly format.
 
@@ -1420,6 +1437,7 @@ class ExperimentStore:
             channels: Optional list of channels to include.
             metrics: Optional list of metrics to include.
             scope: Measurement scope ('whole_cell', 'mask_inside', 'mask_outside').
+            fov_ids: Optional FOV filter. None = all FOVs.
 
         Returns:
             Dict with 'files_written' and 'channels_exported' counts.
@@ -1444,8 +1462,21 @@ class ExperimentStore:
             else None
         )
 
+        # Resolve fov_ids to cell_ids for query filtering
+        cell_ids = None
+        if fov_ids is not None:
+            all_cells = self.get_cells(is_valid=False)
+            if not all_cells.empty and "fov_id" in all_cells.columns:
+                cell_ids = all_cells[
+                    all_cells["fov_id"].isin(fov_ids)
+                ]["id"].tolist()
+            else:
+                cell_ids = []
+
         # Get measurements filtered by channels and scope
-        df = self.get_measurements(channels=channels, scope=scope)
+        df = self.get_measurements(
+            cell_ids=cell_ids, channels=channels, scope=scope,
+        )
         if df.empty and not want_aggregates:
             return {"files_written": 0, "channels_exported": 0}
 
@@ -1455,6 +1486,8 @@ class ExperimentStore:
 
         # Get valid cells with condition/bio_rep context
         cells_df = self.get_cells(is_valid=True)
+        if fov_ids is not None and not cells_df.empty and "fov_id" in cells_df.columns:
+            cells_df = cells_df[cells_df["fov_id"].isin(fov_ids)]
         if cells_df.empty:
             return {"files_written": 0, "channels_exported": 0}
 
@@ -1574,23 +1607,36 @@ class ExperimentStore:
         channels: list[str] | None = None,
         metrics: list[str] | None = None,
         include_provenance: bool = True,
+        fov_ids: list[int] | None = None,
     ) -> None:
         """Export particle data to CSV.
 
         Particles are FOV-level entities linked to thresholds. Each row
         represents one particle with its morphology metrics and FOV context.
 
+        When *channels* is provided, intensity metrics (mean_intensity,
+        max_intensity, integrated_intensity) are computed per channel and
+        appear as ``{metric}_{channel}`` columns (e.g. ``mean_intensity_Halo``).
+
         Args:
             path: Output CSV file path.
-            channels: Optional channel filter (not used for particle geometry,
-                      reserved for future per-channel intensity columns).
-            metrics: Optional metric filter (not used currently).
+            channels: Channel names for per-channel intensity columns.
+                If None, uses the single intensity values stored in the
+                particles table (from the threshold's source channel).
+            metrics: Optional metric filter — names like ``"mean_intensity"``,
+                ``"area_um2"``, etc.  Geometry metrics are kept as-is;
+                intensity metrics are matched by base name before the
+                channel suffix.
             include_provenance: If True, prepend config provenance as comments.
+            fov_ids: Optional FOV filter. None = all FOVs.
         """
+        from skimage.measure import regionprops
+
         rows = queries.select_particles_with_context(self._conn)
         df = pd.DataFrame(rows)
+        if fov_ids is not None and not df.empty and "fov_id" in df.columns:
+            df = df[df["fov_id"].isin(fov_ids)]
         if df.empty:
-            # Write empty CSV with provenance header
             if include_provenance:
                 provenance = self._get_config_provenance()
                 with open(path, "w") as f:
@@ -1601,7 +1647,7 @@ class ExperimentStore:
             return
 
         # Add threshold name for provenance
-        thr_names = {}
+        thr_names: dict[int, str] = {}
         for thr_id in df["threshold_id"].unique():
             try:
                 thr = self.get_threshold(int(thr_id))
@@ -1610,19 +1656,93 @@ class ExperimentStore:
                 thr_names[thr_id] = f"thr_{thr_id}"
         df["threshold_name"] = df["threshold_id"].map(thr_names)
 
-        # Reorder columns: context first, then geometry
-        context_cols = [
-            "fov_name", "condition_name", "bio_rep_name",
-            "threshold_name",
-        ]
-        geom_cols = [
-            "label_value", "centroid_x", "centroid_y",
+        # --- Per-channel intensity computation ---
+        intensity_base_metrics = ["mean_intensity", "max_intensity", "integrated_intensity"]
+        intensity_cols: list[str] = []
+
+        if channels:
+            # Compute per-channel intensities from zarr images
+            # Cache particle labels and channel images per (fov_id, threshold_id)
+            plabel_cache: dict[int, np.ndarray] = {}
+            img_cache: dict[tuple[int, str], np.ndarray] = {}
+
+            # Initialise new columns with NaN
+            for base in intensity_base_metrics:
+                for ch_name in channels:
+                    col = f"{base}_{ch_name}"
+                    intensity_cols.append(col)
+                    df[col] = np.nan
+
+            for (fov_id, thr_id), grp in df.groupby(["fov_id", "threshold_id"]):
+                fov_id = int(fov_id)
+                thr_id = int(thr_id)
+
+                # Read particle labels (cached)
+                if thr_id not in plabel_cache:
+                    try:
+                        plabel_cache[thr_id] = self.read_particle_labels(thr_id)
+                    except Exception:
+                        logger.debug("Cannot read particle labels for thr %d", thr_id)
+                        continue
+                plabels = plabel_cache[thr_id]
+
+                for ch_name in channels:
+                    cache_key = (fov_id, ch_name)
+                    if cache_key not in img_cache:
+                        try:
+                            img_cache[cache_key] = self.read_image_numpy(fov_id, ch_name)
+                        except Exception:
+                            logger.debug("Cannot read channel %s for fov %d", ch_name, fov_id)
+                            continue
+                    ch_img = img_cache[cache_key]
+
+                    # Compute intensity for each particle in this group
+                    props = regionprops(plabels, intensity_image=ch_img)
+                    props_by_label: dict[int, object] = {p.label: p for p in props}
+
+                    for idx in grp.index:
+                        lv = int(df.at[idx, "label_value"])
+                        prop = props_by_label.get(lv)
+                        if prop is None:
+                            continue
+                        df.at[idx, f"mean_intensity_{ch_name}"] = float(prop.intensity_mean)
+                        df.at[idx, f"max_intensity_{ch_name}"] = float(
+                            np.max(ch_img[plabels == lv])
+                        )
+                        df.at[idx, f"integrated_intensity_{ch_name}"] = float(
+                            np.sum(ch_img[plabels == lv])
+                        )
+
+            # De-duplicate intensity_cols (preserve order)
+            seen: set[str] = set()
+            intensity_cols = [c for c in intensity_cols if not (c in seen or seen.add(c))]  # type: ignore[func-returns-value]
+        else:
+            # No channels specified — keep original single-column intensities
+            intensity_cols = [c for c in intensity_base_metrics if c in df.columns]
+
+        # --- Apply metrics filter ---
+        geom_metric_cols = [
             "area_pixels", "area_um2", "perimeter",
             "circularity", "eccentricity", "solidity",
             "major_axis_length", "minor_axis_length",
-            "mean_intensity", "max_intensity", "integrated_intensity",
         ]
-        available_cols = [c for c in context_cols + geom_cols if c in df.columns]
+        if metrics is not None:
+            # Keep geometry metrics that are in the filter
+            geom_metric_cols = [c for c in geom_metric_cols if c in metrics]
+            # Keep intensity columns whose base metric name is in the filter
+            intensity_cols = [
+                c for c in intensity_cols
+                if any(c == base or c.startswith(f"{base}_") for base in metrics)
+            ]
+
+        # --- Assemble column order ---
+        context_cols = [
+            "fov_name", "condition_name", "bio_rep_name",
+            "threshold_name", "cell_id", "cell_label",
+        ]
+        position_cols = ["label_value", "centroid_x", "centroid_y"]
+        ordered_cols = context_cols + position_cols + geom_metric_cols + intensity_cols
+        available_cols = [c for c in ordered_cols if c in df.columns]
         df = df[available_cols]
 
         if include_provenance:

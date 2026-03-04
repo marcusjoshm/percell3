@@ -508,7 +508,15 @@ def _run_image_calculator(state: MenuState, registry) -> None:
 
 
 def _run_threshold_bg_subtraction(state: MenuState, registry) -> None:
-    """Interactive handler for threshold-layer background subtraction plugin."""
+    """Interactive handler for threshold-layer background subtraction plugin.
+
+    Two-FOV workflow:
+      Step 1: Select channel
+      Step 2: Select histogram FOVs (dilute-phase, with thresholds)
+      Step 3: For each histogram FOV, pick the apply FOV
+      Step 4: Confirmation summary
+      Step 5: Execute + summary
+    """
     from rich.table import Table
 
     store = state.require_experiment()
@@ -527,11 +535,17 @@ def _run_threshold_bg_subtraction(state: MenuState, registry) -> None:
     ch_names = [ch.name for ch in channels]
 
     console.print("\n[bold]Step 1: Channel[/bold]")
-    console.print("  [dim]Select the channel to subtract background from.[/dim]\n")
+    console.print(
+        "  [dim]Select the channel for histogram estimation "
+        "and background subtraction.[/dim]\n"
+    )
     channel = numbered_select_one(ch_names, "Channel")
 
-    # Step 2: FOV selection — filter to those with configured thresholds
-    console.print("\n[bold]Step 2: Select FOVs[/bold]")
+    # Step 2: Select histogram FOVs — filter to those with configured thresholds
+    console.print("\n[bold]Step 2: Select histogram FOVs[/bold]")
+    console.print(
+        "  [dim]These are the dilute-phase FOVs used to estimate background.[/dim]"
+    )
     all_fovs = store.get_fovs()
     fovs_with_thresholds = []
     for fov in all_fovs:
@@ -555,27 +569,62 @@ def _run_threshold_bg_subtraction(state: MenuState, registry) -> None:
         console.print(
             f"  [dim](auto-selected: {fovs_with_thresholds[0].display_name})[/dim]"
         )
-        selected_fovs = fovs_with_thresholds
+        histogram_fovs = fovs_with_thresholds
     else:
-        selected_fovs = _select_fovs_from_table(fovs_with_thresholds)
+        histogram_fovs = _select_fovs_from_table(fovs_with_thresholds)
 
-    # Step 3: Confirmation
+    # Step 3: For each histogram FOV, pick the apply FOV
+    console.print("\n[bold]Step 3: Pair each histogram FOV to an apply FOV[/bold]")
+    console.print(
+        "  [dim]Select which FOV receives the background subtraction.[/dim]"
+    )
+
+    # Build list of candidate apply FOVs (all FOVs except the histogram FOVs)
+    histogram_fov_ids = {f.id for f in histogram_fovs}
+    candidate_apply_fovs = [f for f in all_fovs if f.id not in histogram_fov_ids]
+
+    if not candidate_apply_fovs:
+        console.print(
+            "\n[red]No other FOVs available as apply targets.[/red]"
+        )
+        return
+
+    candidate_names = [f.display_name for f in candidate_apply_fovs]
+    candidate_id_map = {f.display_name: f.id for f in candidate_apply_fovs}
+
+    pairings: list[dict[str, int]] = []
+    for idx, hist_fov in enumerate(histogram_fovs, 1):
+        console.print(
+            f"\n  Histogram FOV {idx} of {len(histogram_fovs)}: "
+            f"[cyan]{hist_fov.display_name}[/cyan]"
+        )
+        apply_name = numbered_select_one(
+            candidate_names, "  Apply FOV"
+        )
+        pairings.append({
+            "histogram_fov_id": hist_fov.id,
+            "apply_fov_id": candidate_id_map[apply_name],
+        })
+
+    # Step 4: Confirmation summary
     console.print(f"\n[bold]Threshold background subtraction settings:[/bold]")
-    console.print(f"  Channel:     {channel}")
-    console.print(f"  FOVs:        {len(selected_fovs)} selected")
-    console.print(f"  Thresholds:  all configured (per FOV)")
+    console.print(f"  Channel:  {channel}")
+    console.print(f"  Pairings: {len(pairings)}")
+    for p in pairings:
+        hist_name = store.get_fov_by_id(p["histogram_fov_id"]).display_name
+        apply_name = store.get_fov_by_id(p["apply_fov_id"]).display_name
+        console.print(f"    {hist_name}  ->  {apply_name}")
 
     if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
         console.print("[yellow]Background subtraction cancelled.[/yellow]")
         return
 
-    # Step 4: Run with progress
-    fov_ids = [f.id for f in selected_fovs]
-    parameters = {"channel": channel, "fov_ids": fov_ids}
+    # Step 5: Run with progress
+    parameters = {"channel": channel, "pairings": pairings}
 
     with make_progress() as progress:
         task = progress.add_task(
-            "Background subtraction...", total=len(selected_fovs),
+            "Background subtraction...", total=len(pairings),
         )
 
         def on_progress(current, total, fov_name):
@@ -589,10 +638,9 @@ def _run_threshold_bg_subtraction(state: MenuState, registry) -> None:
             parameters=parameters, progress_callback=on_progress,
         )
 
-    # Step 5: Summary table
+    # Step 6: Summary table
     console.print(f"\n[green]Threshold background subtraction complete[/green]")
 
-    # Parse bg values from custom_outputs
     bg_entries = {
         k.removeprefix("bg_"): v
         for k, v in result.custom_outputs.items()
@@ -3249,6 +3297,24 @@ def _export_csv(state: MenuState) -> None:
         _export_prism(state)
         return
 
+    # FOV selection
+    console.print("\n[bold]FOV filter:[/bold]")
+    all_fovs = store.get_fovs()
+    seg_summary = store.get_fov_segmentation_summary()
+    _show_fov_status_table(all_fovs, seg_summary)
+    if len(all_fovs) == 1:
+        console.print(
+            f"  [dim](auto-selected: {all_fovs[0].display_name})[/dim]"
+        )
+        selected_fovs = all_fovs
+    else:
+        selected_fovs = _select_fovs_from_table(all_fovs)
+
+    fov_ids: list[int] | None = None
+    if len(selected_fovs) < len(all_fovs):
+        fov_ids = [f.id for f in selected_fovs]
+        console.print(f"  [dim]{len(selected_fovs)} of {len(all_fovs)} FOVs selected[/dim]")
+
     output_str = _prompt_path("Output CSV path", mode="save", title="Save measurements CSV")
 
     out_path = Path(output_str).expanduser()
@@ -3352,7 +3418,10 @@ def _export_csv(state: MenuState) -> None:
     try:
         if include_cells:
             with console.status("[bold blue]Exporting measurements..."):
-                store.export_csv(out_path, channels=ch_list, metrics=met_list, scope=scope_val)
+                store.export_csv(
+                    out_path, channels=ch_list, metrics=met_list,
+                    scope=scope_val, fov_ids=fov_ids,
+                )
             console.print(f"[green]Exported measurements to {out_path}[/green]")
 
         if include_particles:
@@ -3364,7 +3433,8 @@ def _export_csv(state: MenuState) -> None:
                 particle_path = out_path
             with console.status("[bold blue]Exporting particle data..."):
                 store.export_particles_csv(
-                    particle_path, channels=ch_list, metrics=particle_metrics,
+                    particle_path, channels=ch_list,
+                    metrics=particle_metrics, fov_ids=fov_ids,
                 )
             console.print(f"[green]Exported particle data to {particle_path}[/green]")
     except OSError as exc:
@@ -3374,6 +3444,24 @@ def _export_csv(state: MenuState) -> None:
 def _export_prism(state: MenuState) -> None:
     """Interactively export measurements in Prism-friendly format."""
     store = state.require_experiment()
+
+    # FOV selection
+    console.print("\n[bold]FOV filter:[/bold]")
+    all_fovs = store.get_fovs()
+    seg_summary = store.get_fov_segmentation_summary()
+    _show_fov_status_table(all_fovs, seg_summary)
+    if len(all_fovs) == 1:
+        console.print(
+            f"  [dim](auto-selected: {all_fovs[0].display_name})[/dim]"
+        )
+        selected_fovs = all_fovs
+    else:
+        selected_fovs = _select_fovs_from_table(all_fovs)
+
+    fov_ids: list[int] | None = None
+    if len(selected_fovs) < len(all_fovs):
+        fov_ids = [f.id for f in selected_fovs]
+        console.print(f"  [dim]{len(selected_fovs)} of {len(all_fovs)} FOVs selected[/dim]")
 
     output_str = _prompt_path("Output directory for Prism export", mode="dir", title="Select Prism export directory")
     out_dir = Path(output_str).expanduser()
@@ -3396,7 +3484,7 @@ def _export_prism(state: MenuState) -> None:
 
     try:
         with console.status("[bold blue]Exporting Prism-format CSVs..."):
-            result = store.export_prism_csv(out_dir)
+            result = store.export_prism_csv(out_dir, fov_ids=fov_ids)
 
         if result["files_written"] == 0:
             console.print("[yellow]No measurements found to export.[/yellow]")

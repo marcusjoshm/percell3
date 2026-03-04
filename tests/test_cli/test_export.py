@@ -303,7 +303,7 @@ class TestMultiChannelParticleExport:
         experiment_with_particle_images: ExperimentStore,
         tmp_path: Path,
     ):
-        """Particle CSV contains bare intensity columns (not per-channel expanded)."""
+        """Particle CSV has per-channel intensity columns when channels specified."""
         exp_path = str(experiment_with_particle_images.path)
         out_path = tmp_path / "meas.csv"
         result = runner.invoke(
@@ -325,19 +325,28 @@ class TestMultiChannelParticleExport:
         assert len(rows) == 1  # 1 particle in fixture
         headers = set(rows[0].keys())
 
-        # Particle export uses bare intensity columns from particle records
-        assert "mean_intensity" in headers
-        assert "max_intensity" in headers
-        assert "integrated_intensity" in headers
+        # Per-channel intensity columns
+        assert "mean_intensity_DAPI" in headers
+        assert "mean_intensity_GFP" in headers
+        assert "max_intensity_DAPI" in headers
+        assert "max_intensity_GFP" in headers
+        assert "integrated_intensity_DAPI" in headers
+        assert "integrated_intensity_GFP" in headers
+
+        # Bare intensity columns should NOT be present when channels specified
+        assert "mean_intensity" not in headers
 
         # Context columns
         assert "fov_name" in headers
         assert "condition_name" in headers
         assert "threshold_name" in headers
 
-        # Verify intensity values are non-zero (real pixel data)
+        # Verify per-channel values match the fixture image data
         row = rows[0]
-        assert float(row["mean_intensity"]) == pytest.approx(150.0, rel=0.01)
+        # Particle is at rows 18:26, cols 8:16
+        # DAPI bright spot = 200, GFP bright spot = 150
+        assert float(row["mean_intensity_DAPI"]) == pytest.approx(200.0, rel=0.01)
+        assert float(row["mean_intensity_GFP"]) == pytest.approx(150.0, rel=0.01)
 
     def test_export_particles_metric_filter(
         self,
@@ -345,7 +354,7 @@ class TestMultiChannelParticleExport:
         experiment_with_particle_images: ExperimentStore,
         tmp_path: Path,
     ):
-        """Particle CSV includes all geometry and intensity columns."""
+        """Metric filter keeps matching geometry and intensity columns."""
         exp_path = str(experiment_with_particle_images.path)
         out_path = tmp_path / "meas.csv"
         result = runner.invoke(
@@ -364,10 +373,12 @@ class TestMultiChannelParticleExport:
         rows = list(reader)
 
         headers = set(rows[0].keys())
-        # Particle export includes all available columns
+        # No channels specified → bare intensity columns
         assert "mean_intensity" in headers
         assert "area_pixels" in headers
         assert "fov_name" in headers
+        # max_intensity not in filter → excluded
+        assert "max_intensity" not in headers
 
     def test_export_particles_channels_and_metrics(
         self,
@@ -375,7 +386,7 @@ class TestMultiChannelParticleExport:
         experiment_with_particle_images: ExperimentStore,
         tmp_path: Path,
     ):
-        """Particle CSV includes standard columns regardless of channel/metric filters."""
+        """Channels + metrics filter: per-channel intensity, filtered by metric name."""
         exp_path = str(experiment_with_particle_images.path)
         out_path = tmp_path / "meas.csv"
         result = runner.invoke(
@@ -396,11 +407,166 @@ class TestMultiChannelParticleExport:
         rows = list(reader)
 
         headers = set(rows[0].keys())
-        # Particle export has bare columns
+        # Geometry metric in filter
         assert "area_pixels" in headers
-        assert "mean_intensity" in headers
-        assert "max_intensity" in headers
-        assert "integrated_intensity" in headers
+        # Per-channel mean_intensity (in filter)
+        assert "mean_intensity_DAPI" in headers
+        assert "mean_intensity_GFP" in headers
+        # max_intensity / integrated_intensity NOT in filter → excluded
+        assert "max_intensity_DAPI" not in headers
+        assert "integrated_intensity_GFP" not in headers
+
+
+class TestFovFilteredExport:
+    """Tests for export_csv/export_particles_csv/export_prism_csv with fov_ids filter."""
+
+    @pytest.fixture
+    def two_fov_experiment(self, tmp_path: Path) -> ExperimentStore:
+        """Experiment with 2 FOVs, each having cells and measurements."""
+        import numpy as np
+        from percell3.core.models import CellRecord, MeasurementRecord, ParticleRecord
+
+        store = ExperimentStore.create(tmp_path / "twofov.percell", name="TwoFOV")
+        store.add_channel("GFP")
+        store.add_condition("ctrl")
+        store.add_condition("treated")
+
+        fov1_id = store.add_fov("ctrl", width=32, height=32, pixel_size_um=0.65)
+        fov2_id = store.add_fov("treated", width=32, height=32, pixel_size_um=0.65)
+
+        img = np.full((32, 32), 100, dtype=np.uint16)
+        store.write_image(fov1_id, "GFP", img)
+        store.write_image(fov2_id, "GFP", img)
+
+        seg_id = store.add_segmentation(
+            "seg", "cellular", 32, 32,
+            source_fov_id=fov1_id, source_channel="GFP",
+        )
+
+        # 2 cells in fov1, 1 cell in fov2
+        cells = [
+            CellRecord(
+                fov_id=fov1_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=8, centroid_y=8, bbox_x=0, bbox_y=0,
+                bbox_w=16, bbox_h=16, area_pixels=100,
+            ),
+            CellRecord(
+                fov_id=fov1_id, segmentation_id=seg_id, label_value=2,
+                centroid_x=24, centroid_y=24, bbox_x=16, bbox_y=16,
+                bbox_w=16, bbox_h=16, area_pixels=100,
+            ),
+            CellRecord(
+                fov_id=fov2_id, segmentation_id=seg_id, label_value=1,
+                centroid_x=16, centroid_y=16, bbox_x=0, bbox_y=0,
+                bbox_w=32, bbox_h=32, area_pixels=200,
+            ),
+        ]
+        cell_ids = store.add_cells(cells)
+
+        ch = store.get_channel("GFP")
+        measurements = [
+            MeasurementRecord(
+                cell_id=cid, channel_id=ch.id,
+                metric="mean_intensity", value=50.0 + i * 10,
+                segmentation_id=seg_id,
+            )
+            for i, cid in enumerate(cell_ids)
+        ]
+        store.add_measurements(measurements)
+
+        # Particles in fov1 only
+        thr_id = store.add_threshold(
+            "thr", "otsu", 32, 32,
+            source_fov_id=fov1_id, source_channel="GFP",
+        )
+        particles = [
+            ParticleRecord(
+                fov_id=fov1_id, threshold_id=thr_id, label_value=1,
+                centroid_x=8, centroid_y=8, bbox_x=4, bbox_y=4,
+                bbox_w=8, bbox_h=8, area_pixels=40,
+                mean_intensity=120, max_intensity=200,
+                integrated_intensity=4800,
+            ),
+        ]
+        store.add_particles(particles)
+
+        yield store
+        store.close()
+
+    def test_export_csv_fov_filter(self, two_fov_experiment, tmp_path):
+        """export_csv with fov_ids only exports cells from selected FOVs."""
+        store = two_fov_experiment
+        fovs = store.get_fovs()
+        fov1 = fovs[0]
+
+        # Export only fov1
+        out = tmp_path / "filtered.csv"
+        store.export_csv(out, fov_ids=[fov1.id], include_provenance=False)
+
+        with open(out) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        # fov1 has 2 cells
+        assert len(rows) == 2
+        fov_names = {r["fov_name"] for r in rows}
+        assert fov_names == {fov1.display_name}
+
+    def test_export_csv_no_filter_includes_all(self, two_fov_experiment, tmp_path):
+        """export_csv with fov_ids=None includes all FOVs (backward compat)."""
+        store = two_fov_experiment
+
+        out = tmp_path / "all.csv"
+        store.export_csv(out, include_provenance=False)
+
+        with open(out) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        # 3 cells total across 2 FOVs
+        assert len(rows) == 3
+
+    def test_export_particles_fov_filter(self, two_fov_experiment, tmp_path):
+        """export_particles_csv with fov_ids only exports particles from selected FOVs."""
+        store = two_fov_experiment
+        fovs = store.get_fovs()
+        fov2 = fovs[1]  # No particles
+
+        out = tmp_path / "particles.csv"
+        store.export_particles_csv(out, fov_ids=[fov2.id], include_provenance=False)
+
+        content = out.read_text().strip()
+        # No particles in fov2 → empty file
+        assert content == ""
+
+    def test_export_prism_fov_filter(self, two_fov_experiment, tmp_path):
+        """export_prism_csv with fov_ids only exports cells from selected FOVs."""
+        store = two_fov_experiment
+        fovs = store.get_fovs()
+        fov1 = fovs[0]
+
+        out_dir = tmp_path / "prism"
+        result = store.export_prism_csv(out_dir, fov_ids=[fov1.id])
+
+        assert result["files_written"] > 0
+
+        # Read the first CSV file and check it only has fov1 cells
+        csv_files = list(out_dir.rglob("*.csv"))
+        assert len(csv_files) > 0
+
+        with open(csv_files[0]) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        # fov1 is "ctrl" condition — prism columns are condition_biorep
+        headers = list(rows[0].keys()) if rows else []
+        # Should have ctrl column but not treated
+        assert any("ctrl" in h for h in headers)
+        # With only fov1 selected, treated FOV should not contribute data
+        treated_cols = [h for h in headers if "treated" in h]
+        for tc in treated_cols:
+            vals = [r[tc] for r in rows if r[tc]]
+            assert len(vals) == 0
 
 
 class TestSummaryCommand:
