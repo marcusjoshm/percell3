@@ -1002,6 +1002,92 @@ def delete_particles_for_fov_threshold(
     return count
 
 
+def delete_measurements_for_fov_threshold(
+    conn: sqlite3.Connection,
+    fov_id: int,
+    threshold_id: int,
+) -> int:
+    """Delete measurements with a specific threshold_id for cells in a FOV.
+
+    Returns:
+        Number of measurements deleted.
+    """
+    count = conn.execute(
+        "SELECT COUNT(*) FROM measurements WHERE threshold_id = ? "
+        "AND cell_id IN (SELECT id FROM cells WHERE fov_id = ?)",
+        (threshold_id, fov_id),
+    ).fetchone()[0]
+    if count == 0:
+        return 0
+    conn.execute(
+        "DELETE FROM measurements WHERE threshold_id = ? "
+        "AND cell_id IN (SELECT id FROM cells WHERE fov_id = ?)",
+        (threshold_id, fov_id),
+    )
+    conn.commit()
+    return count
+
+
+def delete_measurements_for_fov_segmentation(
+    conn: sqlite3.Connection,
+    fov_id: int,
+    segmentation_id: int,
+) -> int:
+    """Delete all measurements for cells belonging to a specific FOV + segmentation.
+
+    Returns:
+        Number of measurements deleted.
+    """
+    count = conn.execute(
+        "SELECT COUNT(*) FROM measurements WHERE cell_id IN "
+        "(SELECT id FROM cells WHERE fov_id = ? AND segmentation_id = ?)",
+        (fov_id, segmentation_id),
+    ).fetchone()[0]
+    if count == 0:
+        return 0
+    conn.execute(
+        "DELETE FROM measurements WHERE cell_id IN "
+        "(SELECT id FROM cells WHERE fov_id = ? AND segmentation_id = ?)",
+        (fov_id, segmentation_id),
+    )
+    conn.commit()
+    return count
+
+
+def delete_cells_for_fov_segmentation(
+    conn: sqlite3.Connection,
+    fov_id: int,
+    segmentation_id: int,
+) -> int:
+    """Delete cells (and their measurements/tags) for a specific FOV + segmentation.
+
+    Returns:
+        Number of cells deleted.
+    """
+    count = conn.execute(
+        "SELECT COUNT(*) FROM cells WHERE fov_id = ? AND segmentation_id = ?",
+        (fov_id, segmentation_id),
+    ).fetchone()[0]
+    if count == 0:
+        return 0
+    conn.execute(
+        "DELETE FROM measurements WHERE cell_id IN "
+        "(SELECT id FROM cells WHERE fov_id = ? AND segmentation_id = ?)",
+        (fov_id, segmentation_id),
+    )
+    conn.execute(
+        "DELETE FROM cell_tags WHERE cell_id IN "
+        "(SELECT id FROM cells WHERE fov_id = ? AND segmentation_id = ?)",
+        (fov_id, segmentation_id),
+    )
+    conn.execute(
+        "DELETE FROM cells WHERE fov_id = ? AND segmentation_id = ?",
+        (fov_id, segmentation_id),
+    )
+    conn.commit()
+    return count
+
+
 # ---------------------------------------------------------------------------
 # Analysis Config
 # ---------------------------------------------------------------------------

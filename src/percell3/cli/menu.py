@@ -3089,8 +3089,8 @@ def _edit_menu(state: MenuState) -> None:
         MenuItem("4", "Rename channel", "Rename a channel", _rename_channel),
         MenuItem("5", "Rename bio-rep", "Rename a biological replicate", _rename_bio_rep),
         MenuItem("6", "Delete FOV", "Remove FOV(s) and all associated data", _delete_fov),
-        MenuItem("7", "Manage segmentations", "List, rename, or delete segmentations", _manage_seg_runs),
-        MenuItem("8", "Manage thresholds", "List, rename, or delete thresholds", _manage_thr_runs),
+        MenuItem("7", "Manage segmentations", "List, rename, delete, or unassign segmentations", _manage_seg_runs),
+        MenuItem("8", "Manage thresholds", "List, rename, delete, or unassign thresholds", _manage_thr_runs),
         MenuItem("9", "Combine masks", "Create new mask from union/intersect of existing masks", _combine_masks),
     ], state).run()
     raise _MenuCancel()
@@ -3186,7 +3186,7 @@ def _delete_fov(state: MenuState) -> None:
 
 
 def _manage_seg_runs(state: MenuState) -> None:
-    """Manage segmentations: list, rename, delete."""
+    """Manage segmentations: list, rename, delete, or unassign."""
     store = state.require_experiment()
 
     segs = store.get_segmentations()
@@ -3201,7 +3201,9 @@ def _manage_seg_runs(state: MenuState) -> None:
             f"model={seg.model_name}, created={seg.created_at}"
         )
 
-    action = numbered_select_one(["Rename", "Delete", "Back"], "Action")
+    action = numbered_select_one(
+        ["Rename", "Delete", "Unassign from FOVs", "Back"], "Action",
+    )
 
     if action == "Rename":
         seg_labels = [f"{s.name} ({s.cell_count} cells)" for s in segs]
@@ -3236,9 +3238,60 @@ def _manage_seg_runs(state: MenuState) -> None:
         store.delete_segmentation(seg.id)
         console.print(f"[green]Segmentation '{seg.name}' deleted.[/green]")
 
+    elif action == "Unassign from FOVs":
+        # Filter to cellular segmentations only
+        cellular_segs = [s for s in segs if s.seg_type == "cellular"]
+        if not cellular_segs:
+            console.print("[dim]No cellular segmentations to unassign.[/dim]")
+            return
+
+        seg_labels = [f"{s.name} ({s.cell_count} cells)" for s in cellular_segs]
+        selected_label = numbered_select_one(seg_labels, "Segmentation to unassign")
+        idx = seg_labels.index(selected_label)
+        seg = cellular_segs[idx]
+
+        # Find FOVs that have this segmentation assigned
+        config_matrix = store.get_config_matrix()
+        assigned_fov_ids = sorted({
+            e.fov_id for e in config_matrix
+            if e.segmentation_id == seg.id
+        })
+        if not assigned_fov_ids:
+            console.print("[dim]This segmentation is not assigned to any FOVs.[/dim]")
+            return
+
+        fovs = store.get_fovs()
+        fov_map = {f.id: f for f in fovs}
+        fov_labels = [fov_map[fid].display_name for fid in assigned_fov_ids]
+        console.print(f"\n[bold]FOVs with '{seg.name}' assigned:[/bold]")
+        selected_labels = numbered_select_many(fov_labels, "FOVs to unassign from")
+        selected_fov_ids = [
+            assigned_fov_ids[fov_labels.index(lbl)] for lbl in selected_labels
+        ]
+
+        console.print(
+            f"\n[yellow]Unassigning '{seg.name}' from {len(selected_fov_ids)} FOV(s) "
+            f"will remove associated cells, measurements, and particles.[/yellow]"
+        )
+        if numbered_select_one(["No", "Yes"], "Confirm?") != "Yes":
+            console.print("[dim]Cancelled.[/dim]")
+            return
+
+        total = {"cells_deleted": 0, "measurements_deleted": 0,
+                 "particles_deleted": 0, "config_entries_deleted": 0}
+        for fov_id in selected_fov_ids:
+            result = store.unassign_segmentation_from_fov(seg.id, fov_id)
+            for k in total:
+                total[k] += result[k]
+
+        console.print(f"[green]Unassigned '{seg.name}' from {len(selected_fov_ids)} FOV(s).[/green]")
+        console.print(f"  Cells removed: {total['cells_deleted']}")
+        console.print(f"  Measurements removed: {total['measurements_deleted']}")
+        console.print(f"  Particles removed: {total['particles_deleted']}")
+
 
 def _manage_thr_runs(state: MenuState) -> None:
-    """Manage thresholds: list, rename, delete."""
+    """Manage thresholds: list, rename, delete, or unassign."""
     store = state.require_experiment()
 
     thresholds = store.get_thresholds()
@@ -3254,7 +3307,9 @@ def _manage_thr_runs(state: MenuState) -> None:
             f"threshold={thr.threshold_value}, created={thr.created_at}"
         )
 
-    action = numbered_select_one(["Rename", "Delete", "Back"], "Action")
+    action = numbered_select_one(
+        ["Rename", "Delete", "Unassign from FOVs", "Back"], "Action",
+    )
 
     if action == "Rename":
         thr_labels = [f"{(t.source_channel or 'n/a')}/{t.name}" for t in thresholds]
@@ -3288,6 +3343,55 @@ def _manage_thr_runs(state: MenuState) -> None:
 
         store.delete_threshold(thr.id)
         console.print(f"[green]Threshold '{ch_label}/{thr.name}' deleted.[/green]")
+
+    elif action == "Unassign from FOVs":
+        thr_labels = [f"{(t.source_channel or 'n/a')}/{t.name}" for t in thresholds]
+        selected_label = numbered_select_one(thr_labels, "Threshold to unassign")
+        idx = thr_labels.index(selected_label)
+        thr = thresholds[idx]
+
+        # Find FOVs that have this threshold assigned
+        config_matrix = store.get_config_matrix()
+        assigned_fov_ids = sorted({
+            e.fov_id for e in config_matrix
+            if e.threshold_id == thr.id
+        })
+        if not assigned_fov_ids:
+            console.print("[dim]This threshold is not assigned to any FOVs.[/dim]")
+            return
+
+        fovs = store.get_fovs()
+        fov_map = {f.id: f for f in fovs}
+        fov_labels = [fov_map[fid].display_name for fid in assigned_fov_ids]
+        ch_label = thr.source_channel or "n/a"
+        console.print(f"\n[bold]FOVs with '{ch_label}/{thr.name}' assigned:[/bold]")
+        selected_labels = numbered_select_many(fov_labels, "FOVs to unassign from")
+        selected_fov_ids = [
+            assigned_fov_ids[fov_labels.index(lbl)] for lbl in selected_labels
+        ]
+
+        console.print(
+            f"\n[yellow]Unassigning '{ch_label}/{thr.name}' from "
+            f"{len(selected_fov_ids)} FOV(s) will remove associated "
+            f"measurements and particles.[/yellow]"
+        )
+        if numbered_select_one(["No", "Yes"], "Confirm?") != "Yes":
+            console.print("[dim]Cancelled.[/dim]")
+            return
+
+        total = {"measurements_deleted": 0, "particles_deleted": 0,
+                 "config_entries_deleted": 0}
+        for fov_id in selected_fov_ids:
+            result = store.unassign_threshold_from_fov(thr.id, fov_id)
+            for k in total:
+                total[k] += result[k]
+
+        console.print(
+            f"[green]Unassigned '{ch_label}/{thr.name}' from "
+            f"{len(selected_fov_ids)} FOV(s).[/green]"
+        )
+        console.print(f"  Measurements removed: {total['measurements_deleted']}")
+        console.print(f"  Particles removed: {total['particles_deleted']}")
 
 
 def _combine_masks(state: MenuState) -> None:

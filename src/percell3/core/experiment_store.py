@@ -1128,6 +1128,110 @@ class ExperimentStore:
         queries.delete_fov_config_for_fov(self._conn, config.id, fov_id)
         self.update_fov_status_cache(fov_id)
 
+    def unassign_threshold_from_fov(
+        self,
+        threshold_id: int,
+        fov_id: int,
+    ) -> dict[str, int]:
+        """Unassign a threshold from a FOV, cleaning up associated data.
+
+        Removes fov_config entries linking this threshold to the FOV,
+        and deletes associated particle measurements and particles.
+
+        Args:
+            threshold_id: Threshold to unassign.
+            fov_id: FOV to unassign from.
+
+        Returns:
+            Dict with counts: measurements_deleted, particles_deleted,
+            config_entries_deleted.
+        """
+        config = self.get_or_create_analysis_config()
+        entries = queries.select_fov_config(self._conn, config.id, fov_id=fov_id)
+        matching = [e for e in entries if e.threshold_id == threshold_id]
+        if not matching:
+            return {"measurements_deleted": 0, "particles_deleted": 0,
+                    "config_entries_deleted": 0}
+
+        meas_count = queries.delete_measurements_for_fov_threshold(
+            self._conn, fov_id, threshold_id,
+        )
+        part_count = queries.delete_particles_for_fov_threshold(
+            self._conn, fov_id, threshold_id,
+        )
+        for entry in matching:
+            queries.delete_fov_config_entry(self._conn, entry.id)
+
+        self.update_fov_status_cache(fov_id)
+        return {
+            "measurements_deleted": meas_count,
+            "particles_deleted": part_count,
+            "config_entries_deleted": len(matching),
+        }
+
+    def unassign_segmentation_from_fov(
+        self,
+        segmentation_id: int,
+        fov_id: int,
+    ) -> dict[str, int]:
+        """Unassign a segmentation from a FOV, cleaning up associated data.
+
+        Removes fov_config entries, cells, measurements, and particles
+        linked to this segmentation on the given FOV.
+
+        Args:
+            segmentation_id: Segmentation to unassign.
+            fov_id: FOV to unassign from.
+
+        Raises:
+            ValueError: If the segmentation is a whole_field type.
+
+        Returns:
+            Dict with counts: cells_deleted, measurements_deleted,
+            particles_deleted, config_entries_deleted.
+        """
+        seg = self.get_segmentation(segmentation_id)
+        if seg.seg_type == "whole_field":
+            raise ValueError(
+                "Cannot unassign a whole_field segmentation. "
+                "Whole_field segmentations are auto-managed per FOV."
+            )
+
+        config = self.get_or_create_analysis_config()
+        entries = queries.select_fov_config(self._conn, config.id, fov_id=fov_id)
+        matching = [e for e in entries if e.segmentation_id == segmentation_id]
+        if not matching:
+            return {"cells_deleted": 0, "measurements_deleted": 0,
+                    "particles_deleted": 0, "config_entries_deleted": 0}
+
+        # Delete particles for any thresholds in the matching config entries
+        part_count = 0
+        for entry in matching:
+            if entry.threshold_id is not None:
+                part_count += queries.delete_particles_for_fov_threshold(
+                    self._conn, fov_id, entry.threshold_id,
+                )
+
+        # Delete measurements and cells for this FOV+segmentation
+        meas_count = queries.delete_measurements_for_fov_segmentation(
+            self._conn, fov_id, segmentation_id,
+        )
+        cell_count = queries.delete_cells_for_fov_segmentation(
+            self._conn, fov_id, segmentation_id,
+        )
+
+        # Delete the config entries
+        for entry in matching:
+            queries.delete_fov_config_entry(self._conn, entry.id)
+
+        self.update_fov_status_cache(fov_id)
+        return {
+            "cells_deleted": cell_count,
+            "measurements_deleted": meas_count,
+            "particles_deleted": part_count,
+            "config_entries_deleted": len(matching),
+        }
+
     # --- Analysis Runs ---
 
     def start_analysis_run(
