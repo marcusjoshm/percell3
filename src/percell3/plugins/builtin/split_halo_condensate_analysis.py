@@ -186,6 +186,7 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
         normalization_channel = params.get("normalization_channel")
         do_export_csv = params.get("export_csv", True)
         do_save_images = params.get("save_images", True)
+        self._name_prefix: str = params.get("name_prefix", "")
 
         # Find threshold run for particle channel
         all_thresholds = store.get_thresholds()
@@ -554,11 +555,15 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
         """Create or overwrite condensed_phase and dilute_phase derived FOVs."""
         channels = store.get_channels()
 
-        for prefix, mask in [
+        for phase_suffix, mask in [
             ("condensed_phase", condensed_mask),
             ("dilute_phase", dilute_mask),
         ]:
-            derived_name = f"{prefix}_{fov_info.display_name}"
+            name_prefix = getattr(self, "_name_prefix", "")
+            if name_prefix:
+                derived_name = f"{name_prefix}_{fov_info.display_name}_{phase_suffix}"
+            else:
+                derived_name = f"{phase_suffix}_{fov_info.display_name}"
 
             if derived_name in existing_fov_map:
                 # Overwrite existing derived FOV images

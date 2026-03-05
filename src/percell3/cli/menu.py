@@ -179,6 +179,56 @@ def _print_numbered_list(items: list[str], *, page_size: int = 100) -> None:
         console.print(f"  [dim]... and {remaining} more (enter number to select)[/dim]")
 
 
+_PREFIX_RE = __import__("re").compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,49}$")
+
+
+def _prompt_prefix(
+    fov_names: list[str],
+    suffix_example: str = "",
+) -> str:
+    """Prompt for a naming prefix, validate, and show a preview.
+
+    Args:
+        fov_names: Display names of the FOVs that will be named.
+        suffix_example: Example suffix appended after the FOV name (e.g. ``"g1"``).
+
+    Returns:
+        The validated prefix string.
+
+    Raises:
+        _MenuHome / _MenuCancel via menu_prompt.
+    """
+    max_fov_len = max(len(n) for n in fov_names) if fov_names else 0
+
+    while True:
+        raw = menu_prompt("Naming prefix (e.g. 'Round1')")
+
+        if not _PREFIX_RE.match(raw):
+            console.print(
+                "[red]Invalid prefix.[/red] "
+                "Use letters, digits, underscores, or hyphens (1-50 chars, "
+                "start with letter or digit)."
+            )
+            continue
+
+        # Check composed name length
+        sep = "_"
+        suffix_part = f"{sep}{suffix_example}" if suffix_example else ""
+        max_len = len(raw) + len(sep) + max_fov_len + len(suffix_part)
+        if max_len > 255:
+            console.print(
+                f"[red]Prefix too long.[/red] Composed name would be {max_len} "
+                f"chars (max 255). Use a shorter prefix."
+            )
+            continue
+
+        # Preview
+        preview_fov = fov_names[0] if fov_names else "FOV"
+        preview = f"{raw}{sep}{preview_fov}{suffix_part}"
+        console.print(f"  [dim]Preview: {preview}[/dim]")
+        return raw
+
+
 def _prompt_path(
     prompt: str,
     *,
@@ -487,6 +537,14 @@ def _run_image_calculator(state: MenuState, registry) -> None:
         console.print("  [dim]Second channel for the operation.[/dim]\n")
         params["channel_b"] = numbered_select_one(ch_names, "Channel B")
 
+    # Naming prefix
+    console.print("\n[bold]Naming Prefix[/bold]")
+    console.print("  [dim]Enter a prefix for the derived FOV name.[/dim]")
+    operand = str(params.get("constant", params.get("channel_b", "")))
+    suffix_ex = f"{params['operation']}_{operand}"
+    name_prefix = _prompt_prefix([chosen_name], suffix_example=suffix_ex)
+    params["name_prefix"] = name_prefix
+
     # Run
     with make_progress() as progress:
         task = progress.add_task(f"Running image calculator...", total=None)
@@ -607,9 +665,18 @@ def _run_threshold_bg_subtraction(state: MenuState, registry) -> None:
             "apply_fov_id": candidate_id_map[apply_name],
         })
 
-    # Step 4: Confirmation summary
+    # Step 4: Naming prefix
+    console.print("\n[bold]Step 4: Naming Prefix[/bold]")
+    console.print("  [dim]Enter a prefix for derived FOV names.[/dim]")
+    apply_fov_names = [
+        store.get_fov_by_id(p["apply_fov_id"]).display_name for p in pairings
+    ]
+    name_prefix = _prompt_prefix(apply_fov_names, suffix_example=channel)
+
+    # Step 5: Confirmation summary
     console.print(f"\n[bold]Threshold background subtraction settings:[/bold]")
     console.print(f"  Channel:  {channel}")
+    console.print(f"  Naming:   {name_prefix}_<FOV>_{channel}")
     console.print(f"  Pairings: {len(pairings)}")
     for p in pairings:
         hist_name = store.get_fov_by_id(p["histogram_fov_id"]).display_name
@@ -620,8 +687,12 @@ def _run_threshold_bg_subtraction(state: MenuState, registry) -> None:
         console.print("[yellow]Background subtraction cancelled.[/yellow]")
         return
 
-    # Step 5: Run with progress
-    parameters = {"channel": channel, "pairings": pairings}
+    # Step 6: Run with progress
+    parameters = {
+        "channel": channel,
+        "pairings": pairings,
+        "name_prefix": name_prefix,
+    }
 
     with make_progress() as progress:
         task = progress.add_task(
@@ -910,6 +981,16 @@ def _run_condensate_analysis(state: MenuState, registry) -> None:
         cells_df = store.get_cells(fov_id=fov.id)
         cell_ids.extend(cells_df["id"].tolist())
 
+    # Step 8b: Naming prefix (only when saving derived images)
+    name_prefix = ""
+    if save_images:
+        console.print("\n[bold]Naming Prefix[/bold]")
+        console.print("  [dim]Enter a prefix for derived FOV names.[/dim]")
+        fov_display_names = [f.display_name for f in selected_fovs]
+        name_prefix = _prompt_prefix(
+            fov_display_names, suffix_example="condensed_phase",
+        )
+
     # Step 9: Confirmation
     console.print(f"\n[bold]Condensate analysis settings:[/bold]")
     console.print(f"  Measurement:          {meas_channel}")
@@ -919,6 +1000,8 @@ def _run_condensate_analysis(state: MenuState, registry) -> None:
     console.print(f"  Exclusion dilation:   {exclusion_dilation_pixels} px")
     console.print(f"  Normalization:        {normalization_channel or '(none)'}")
     console.print(f"  Save derived images:  {'Yes' if save_images else 'No'}")
+    if name_prefix:
+        console.print(f"  Naming:               {name_prefix}_<FOV>_<phase>")
     console.print(f"  FOVs:                 {len(selected_fovs)} selected")
 
     if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
@@ -934,6 +1017,7 @@ def _run_condensate_analysis(state: MenuState, registry) -> None:
         "exclusion_dilation_pixels": exclusion_dilation_pixels,
         "normalization_channel": normalization_channel,
         "save_images": save_images,
+        "name_prefix": name_prefix,
     }
 
     with make_progress() as progress:
@@ -2447,6 +2531,7 @@ def _threshold_fov(
     gaussian_sigma: float | None = None,
     min_particle_area: int = 1,
     segmentation_id: int | None = None,
+    name_prefix: str = "",
 ) -> tuple[int, int]:
     """Run grouping + threshold QC + particle analysis for one FOV.
 
@@ -2576,6 +2661,9 @@ def _threshold_fov(
             continue
 
         # Store threshold result
+        thr_name = ""
+        if name_prefix:
+            thr_name = f"{name_prefix}_{fov_info.display_name}_g{i + 1}"
         result = engine.threshold_group(
             store, fov_id=fov_id, channel=threshold_channel,
             cell_ids=group_cell_ids,
@@ -2584,6 +2672,7 @@ def _threshold_fov(
             roi=decision.roi,
             group_tag=tag_name,
             gaussian_sigma=gaussian_sigma,
+            name=thr_name,
         )
         console.print(
             f"  [green]Accepted {tag_name}[/green]: "
@@ -2742,6 +2831,12 @@ def _apply_threshold(state: MenuState) -> None:
         console.print(f"[red]Invalid number: {area_str}[/red]")
         return
 
+    # 5c. Naming prefix
+    console.print("\n[bold]Step 4: Naming Prefix[/bold]")
+    console.print("  [dim]Enter a prefix for threshold names (e.g. 'Round1').[/dim]")
+    fov_display_names = [f.display_name for f in selected_fovs]
+    name_prefix = _prompt_prefix(fov_display_names, suffix_example="g1")
+
     # 6. Confirmation
     console.print(f"\n[bold]Thresholding settings:[/bold]")
     console.print(f"  Grouping:    {grouping_channel} / {grouping_metric}")
@@ -2749,6 +2844,7 @@ def _apply_threshold(state: MenuState) -> None:
     if gaussian_sigma:
         console.print(f"  Smoothing:   Gaussian sigma={gaussian_sigma}")
     console.print(f"  Min particle: {min_particle_area} px")
+    console.print(f"  Naming:      {name_prefix}_<FOV>_g<N>")
     console.print(f"  FOVs:        {len(selected_fovs)} selected")
 
     if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
@@ -2776,6 +2872,7 @@ def _apply_threshold(state: MenuState) -> None:
             gaussian_sigma=gaussian_sigma,
             min_particle_area=min_particle_area,
             segmentation_id=fov_seg_map.get(fov_info.id),
+            name_prefix=name_prefix,
         )
         fovs_processed += processed
         total_particles += particles

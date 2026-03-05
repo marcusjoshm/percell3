@@ -152,17 +152,28 @@ class ImageCalculatorPlugin(AnalysisPlugin):
             progress_callback(0, 1, f"Computing {operation} on {fov_info.display_name}")
 
         # -- compute result -----------------------------------------------
+        name_prefix: str = parameters.get("name_prefix", "")
         if mode == "single_channel":
             result = apply_single_channel(image_a, operation, constant)
-            derived_name = (
-                f"{fov_info.display_name}_{channel_a}_{operation}_{constant}"
-            )
+            if name_prefix:
+                derived_name = (
+                    f"{name_prefix}_{fov_info.display_name}_{operation}_{constant}"
+                )
+            else:
+                derived_name = (
+                    f"{fov_info.display_name}_{channel_a}_{operation}_{constant}"
+                )
         else:
             image_b = store.read_image_numpy(fov_id, channel_b)
             result = apply_two_channel(image_a, image_b, operation)
-            derived_name = (
-                f"{fov_info.display_name}_{channel_a}_{operation}_{channel_b}"
-            )
+            if name_prefix:
+                derived_name = (
+                    f"{name_prefix}_{fov_info.display_name}_{operation}_{channel_b}"
+                )
+            else:
+                derived_name = (
+                    f"{fov_info.display_name}_{channel_a}_{operation}_{channel_b}"
+                )
 
         # -- create or reuse derived FOV ----------------------------------
         existing_fov_map = {f.display_name: f.id for f in store.get_fovs()}

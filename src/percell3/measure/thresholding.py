@@ -65,6 +65,7 @@ class ThresholdEngine:
         method: str = "otsu",
         manual_value: float | None = None,
         gaussian_sigma: float | None = None,
+        name: str = "",
     ) -> ThresholdResult:
         """Apply thresholding to a channel image in a FOV.
 
@@ -117,9 +118,12 @@ class ThresholdEngine:
         if gaussian_sigma is not None and gaussian_sigma > 0:
             parameters["gaussian_sigma"] = float(gaussian_sigma)
 
-        name = store._generate_threshold_name(channel, channel)
+        if name:
+            final_name = store._generate_threshold_name(base_name=name)
+        else:
+            final_name = store._generate_threshold_name(channel, channel)
         thr_id = store.add_threshold(
-            name=name, method=method,
+            name=final_name, method=method,
             width=w, height=h,
             source_fov_id=fov_id, source_channel=channel,
             parameters=parameters,
@@ -154,6 +158,7 @@ class ThresholdEngine:
         roi: list[tuple[int, int, int, int]] | None = None,
         group_tag: str | None = None,
         gaussian_sigma: float | None = None,
+        name: str = "",
     ) -> ThresholdResult:
         """Store a threshold result for a group of cells.
 
@@ -208,9 +213,12 @@ class ThresholdEngine:
             parameters["gaussian_sigma"] = float(gaussian_sigma)
 
         grouping_ch = group_tag or ""
-        name = store._generate_threshold_name(grouping_ch, channel)
+        if name:
+            final_name = store._generate_threshold_name(base_name=name)
+        else:
+            final_name = store._generate_threshold_name(grouping_ch, channel)
         thr_id = store.add_threshold(
-            name=name, method="otsu",
+            name=final_name, method="otsu",
             width=w, height=h,
             source_fov_id=fov_id, source_channel=channel,
             grouping_channel=grouping_ch or None,

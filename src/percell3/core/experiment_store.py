@@ -426,10 +426,26 @@ class ExperimentStore:
         self,
         grouping_channel: str = "",
         threshold_channel: str = "",
+        *,
+        base_name: str = "",
     ) -> str:
-        """Generate a unique threshold name like 'thresh_GFP_DAPI_1'."""
+        """Generate a unique threshold name.
+
+        If *base_name* is provided, use it directly (with a uniqueness
+        counter appended on collision).  Otherwise fall back to the
+        auto-generated pattern ``thresh_{grouping}_{channel}_{N}``.
+        """
         existing = {t.name for t in self.get_thresholds()}
-        # Sanitize inputs: replace colons with underscores for name validity
+        if base_name:
+            if base_name not in existing:
+                return base_name
+            n = 2
+            while True:
+                candidate = f"{base_name}_{n}"
+                if candidate not in existing:
+                    return candidate
+                n += 1
+        # Auto-generated name (original behaviour)
         gc = grouping_channel.replace(":", "_") if grouping_channel else ""
         tc = threshold_channel.replace(":", "_") if threshold_channel else ""
         parts = list(filter(None, ["thresh", gc, tc]))

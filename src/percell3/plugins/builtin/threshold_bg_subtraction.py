@@ -100,6 +100,7 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
 
         channel: str = parameters["channel"]
         pairings: list[dict[str, int]] = parameters["pairings"]
+        self._name_prefix: str = parameters.get("name_prefix", "")
 
         # Build lookup for idempotent re-runs
         fov_name_to_id: dict[str, int] = {
@@ -279,9 +280,15 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
         ).astype(apply_channel_image.dtype)
 
         # Derive FOV name from the APPLY FOV
-        derived_name = (
-            f"{apply_fov_info.display_name}_bgsub_{thr_info.name}_{channel}"
-        )
+        name_prefix = self._name_prefix
+        if name_prefix:
+            derived_name = (
+                f"{name_prefix}_{apply_fov_info.display_name}_{channel}"
+            )
+        else:
+            derived_name = (
+                f"{apply_fov_info.display_name}_bgsub_{thr_info.name}_{channel}"
+            )
 
         # Create or reuse derived FOV (metadata from apply FOV)
         if derived_name in fov_name_to_id:
