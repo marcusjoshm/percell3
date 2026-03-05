@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 from pathlib import Path
 
 import dask.array as da
@@ -407,13 +408,22 @@ def delete_zarr_group(zarr_path: Path, group_path: str) -> None:
     group_dir = zarr_path / group_path
     if not group_dir.exists():
         return
-    try:
-        shutil.rmtree(group_dir)
-    except OSError:
-        # macOS Finder/Spotlight race: .DS_Store created during rmtree.
-        # Clean up stale files and retry.
-        for stale in group_dir.rglob(".DS_Store"):
-            stale.unlink(missing_ok=True)
+    for attempt in range(3):
+        try:
+            shutil.rmtree(group_dir)
+            break
+        except OSError:
+            # macOS Finder/Spotlight race: metadata files (.DS_Store,
+            # .fseventsd, ._* resource forks) created during rmtree.
+            # Clean up any hidden files and retry after a brief delay.
+            time.sleep(0.1)
+            for stale in group_dir.rglob(".*"):
+                try:
+                    stale.unlink(missing_ok=True)
+                except OSError:
+                    pass
+    else:
+        # All retries failed — final attempt, let it raise.
         shutil.rmtree(group_dir)
     logger.debug("Deleted zarr group %s from %s", group_path, zarr_path)
 

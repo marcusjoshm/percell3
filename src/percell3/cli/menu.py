@@ -169,7 +169,7 @@ def numbered_select_many(
         return [items[i - 1] for i in indices]
 
 
-def _print_numbered_list(items: list[str], *, page_size: int = 20) -> None:
+def _print_numbered_list(items: list[str], *, page_size: int = 100) -> None:
     """Print items as a numbered list, paginating if needed."""
     show = items if len(items) <= page_size else items[:page_size]
     for i, item in enumerate(show, 1):
@@ -3080,6 +3080,152 @@ def _query_summary(state: MenuState) -> None:
         console.print(f"[green]Saved to {out_path}[/green]")
 
 
+def _import_imagej_rois(state: MenuState) -> None:
+    """Import ImageJ ROI .zip files as cellular segmentation layers."""
+    store = state.require_experiment()
+    fovs = store.get_fovs()
+    if not fovs:
+        console.print("[dim]No FOVs found. Import images first.[/dim]")
+        return
+
+    mode = numbered_select_one(
+        ["Single .zip file", "Folder of .zip files"],
+        "Import mode",
+    )
+
+    if mode == "Single .zip file":
+        zip_str = _prompt_path(
+            "ImageJ ROI .zip file",
+            mode="file",
+            title="Select ImageJ ROI .zip file",
+        )
+        zip_path = Path(zip_str).expanduser()
+        if not zip_path.exists():
+            console.print(f"[red]File not found: {zip_path}[/red]")
+            return
+        _import_single_roi_zip(store, zip_path, fovs)
+    else:
+        dir_str = _prompt_path(
+            "Folder containing .zip files",
+            mode="dir",
+            title="Select folder with ImageJ ROI .zip files",
+        )
+        dir_path = Path(dir_str).expanduser()
+        if not dir_path.is_dir():
+            console.print(f"[red]Not a directory: {dir_path}[/red]")
+            return
+        zip_files = sorted(dir_path.glob("*.zip"))
+        if not zip_files:
+            console.print(f"[dim]No .zip files found in {dir_path}[/dim]")
+            return
+        console.print(f"\n[bold]Found {len(zip_files)} .zip file(s).[/bold]")
+        imported = 0
+        failed = 0
+        for zf in zip_files:
+            console.print(f"\n[bold]--- {zf.name} ---[/bold]")
+            try:
+                _import_single_roi_zip(store, zf, fovs)
+                imported += 1
+            except (_MenuCancel, _MenuHome):
+                raise
+            except Exception as exc:
+                console.print(f"[red]Failed: {exc}[/red]")
+                failed += 1
+        console.print(f"\n[green]Batch complete: {imported} imported, {failed} failed.[/green]")
+
+
+def _import_single_roi_zip(
+    store: "ExperimentStore",
+    zip_path: Path,
+    fovs: list,
+) -> None:
+    """Import one ImageJ ROI .zip as a segmentation on a user-selected FOV."""
+    from percell3.segment.imagej_roi_reader import rois_to_labels
+    from percell3.segment.roi_import import store_labels_and_cells
+
+    # 1. Read and preview ROIs
+    fov_names = [f.display_name for f in fovs]
+    console.print(f"\n[bold]Select target FOV for '{zip_path.name}':[/bold]")
+    fov_name = numbered_select_one(fov_names, "FOV")
+    fov_info = next(f for f in fovs if f.display_name == fov_name)
+
+    if fov_info.width is None or fov_info.height is None:
+        console.print(
+            f"[red]FOV '{fov_name}' has no dimensions. "
+            "Import images before importing ROIs.[/red]"
+        )
+        return
+
+    # 2. Render ROIs to label image
+    try:
+        labels, info = rois_to_labels(
+            zip_path, (fov_info.height, fov_info.width),
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return
+
+    roi_count = info["roi_count"]
+    skipped = info["skipped_count"]
+    skip_msg = f" (skipped {skipped} non-polygon)" if skipped else ""
+    console.print(f"  Found [bold]{roi_count}[/bold] polygon ROI(s){skip_msg}")
+
+    # 3. Naming
+    naming_mode = numbered_select_one(
+        [f"Auto: {zip_path.stem}", "Manual: type a name"],
+        "Segmentation name",
+    )
+    if naming_mode.startswith("Auto"):
+        seg_name = zip_path.stem
+    else:
+        seg_name = menu_prompt("Segmentation name")
+
+    # 4. Re-segmentation warning
+    config = store.get_fov_config(fov_info.id)
+    existing_cellular = [
+        e for e in config
+        if store.get_segmentation(e.segmentation_id).seg_type == "cellular"
+    ]
+    if existing_cellular:
+        existing_seg = store.get_segmentation(existing_cellular[0].segmentation_id)
+        console.print(
+            f"[yellow]FOV already has cellular segmentation "
+            f"'{existing_seg.name}'. The new import will replace it "
+            f"in the active config.[/yellow]"
+        )
+
+    # 5. Confirm
+    console.print(
+        f"\n  Import {roi_count} ROIs → FOV '{fov_name}' as '{seg_name}'?"
+    )
+    if numbered_select_one(["No", "Yes"], "Confirm") != "Yes":
+        console.print("[dim]Import cancelled.[/dim]")
+        return
+
+    # 6. Create segmentation and store
+    seg_id = store.add_segmentation(
+        name=seg_name, seg_type="cellular",
+        width=fov_info.width, height=fov_info.height,
+        source_fov_id=fov_info.id, source_channel="imagej",
+        model_name="imagej",
+        parameters={"source": "imagej", "imported": True,
+                    "roi_file": zip_path.name},
+    )
+
+    cell_count = store_labels_and_cells(
+        store, labels, fov_info.id, seg_id, fov_info.pixel_size_um,
+    )
+
+    # Trigger auto-measurement
+    from percell3.measure.auto_measure import on_segmentation_created
+    on_segmentation_created(store, seg_id, [fov_info.id])
+
+    console.print(
+        f"[green]Imported {cell_count} cells from "
+        f"{zip_path.name} → '{fov_name}'[/green]"
+    )
+
+
 def _edit_menu(state: MenuState) -> None:
     """Edit experiment entities via a sub-menu."""
     Menu("EDIT", [
@@ -3092,6 +3238,7 @@ def _edit_menu(state: MenuState) -> None:
         MenuItem("7", "Manage segmentations", "List, rename, delete, or unassign segmentations", _manage_seg_runs),
         MenuItem("8", "Manage thresholds", "List, rename, delete, or unassign thresholds", _manage_thr_runs),
         MenuItem("9", "Combine masks", "Create new mask from union/intersect of existing masks", _combine_masks),
+        MenuItem("10", "Import ImageJ ROIs", "Import ImageJ ROI .zip as segmentation", _import_imagej_rois),
     ], state).run()
     raise _MenuCancel()
 

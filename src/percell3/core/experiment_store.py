@@ -1764,8 +1764,6 @@ class ExperimentStore:
             include_provenance: If True, prepend config provenance as comments.
             fov_ids: Optional FOV filter. None = all FOVs.
         """
-        from skimage.measure import regionprops
-
         rows = queries.select_particles_with_context(self._conn)
         df = pd.DataFrame(rows)
         if fov_ids is not None and not df.empty and "fov_id" in df.columns:
@@ -1795,10 +1793,15 @@ class ExperimentStore:
         intensity_cols: list[str] = []
 
         if channels:
-            # Compute per-channel intensities from zarr images
-            # Cache particle labels and channel images per (fov_id, threshold_id)
-            plabel_cache: dict[int, np.ndarray] = {}
-            img_cache: dict[tuple[int, str], np.ndarray] = {}
+            # Build map of threshold_id -> source_channel so we can reuse
+            # the intensity values already stored in the particles table
+            # instead of re-computing them with regionprops.
+            thr_source_ch: dict[int, str | None] = {}
+            for thr_id in df["threshold_id"].unique():
+                try:
+                    thr_source_ch[int(thr_id)] = self.get_threshold(int(thr_id)).source_channel
+                except Exception:
+                    thr_source_ch[int(thr_id)] = None
 
             # Initialise new columns with NaN
             for base in intensity_base_metrics:
@@ -1807,45 +1810,69 @@ class ExperimentStore:
                     intensity_cols.append(col)
                     df[col] = np.nan
 
-            for (fov_id, thr_id), grp in df.groupby(["fov_id", "threshold_id"]):
-                fov_id = int(fov_id)
-                thr_id = int(thr_id)
+            # Fill source-channel columns from stored particle values
+            for thr_id_val, src_ch in thr_source_ch.items():
+                if src_ch is None or src_ch not in channels:
+                    continue
+                mask = df["threshold_id"] == thr_id_val
+                for base in intensity_base_metrics:
+                    if base in df.columns:
+                        df.loc[mask, f"{base}_{src_ch}"] = df.loc[mask, base]
 
-                # Read particle labels (cached)
-                if thr_id not in plabel_cache:
-                    try:
-                        plabel_cache[thr_id] = self.read_particle_labels(thr_id)
-                    except Exception:
-                        logger.debug("Cannot read particle labels for thr %d", thr_id)
+            # Determine which channels still need regionprops computation
+            non_source_channels: dict[int, list[str]] = {}
+            for thr_id_val, src_ch in thr_source_ch.items():
+                remaining = [ch for ch in channels if ch != src_ch]
+                if remaining:
+                    non_source_channels[thr_id_val] = remaining
+
+            if non_source_channels:
+                from skimage.measure import regionprops
+
+                plabel_cache: dict[int, np.ndarray] = {}
+                img_cache: dict[tuple[int, str], np.ndarray] = {}
+
+                for (fov_id, thr_id), grp in df.groupby(["fov_id", "threshold_id"]):
+                    fov_id = int(fov_id)
+                    thr_id = int(thr_id)
+                    chs_to_compute = non_source_channels.get(thr_id, [])
+                    if not chs_to_compute:
                         continue
-                plabels = plabel_cache[thr_id]
 
-                for ch_name in channels:
-                    cache_key = (fov_id, ch_name)
-                    if cache_key not in img_cache:
+                    # Read particle labels (cached)
+                    if thr_id not in plabel_cache:
                         try:
-                            img_cache[cache_key] = self.read_image_numpy(fov_id, ch_name)
+                            plabel_cache[thr_id] = self.read_particle_labels(thr_id)
                         except Exception:
-                            logger.debug("Cannot read channel %s for fov %d", ch_name, fov_id)
+                            logger.debug("Cannot read particle labels for thr %d", thr_id)
                             continue
-                    ch_img = img_cache[cache_key]
+                    plabels = plabel_cache[thr_id]
 
-                    # Compute intensity for each particle in this group
-                    props = regionprops(plabels, intensity_image=ch_img)
-                    props_by_label: dict[int, object] = {p.label: p for p in props}
+                    for ch_name in chs_to_compute:
+                        cache_key = (fov_id, ch_name)
+                        if cache_key not in img_cache:
+                            try:
+                                img_cache[cache_key] = self.read_image_numpy(fov_id, ch_name)
+                            except Exception:
+                                logger.debug("Cannot read channel %s for fov %d", ch_name, fov_id)
+                                continue
+                        ch_img = img_cache[cache_key]
 
-                    for idx in grp.index:
-                        lv = int(df.at[idx, "label_value"])
-                        prop = props_by_label.get(lv)
-                        if prop is None:
-                            continue
-                        df.at[idx, f"mean_intensity_{ch_name}"] = float(prop.intensity_mean)
-                        df.at[idx, f"max_intensity_{ch_name}"] = float(
-                            np.max(ch_img[plabels == lv])
-                        )
-                        df.at[idx, f"integrated_intensity_{ch_name}"] = float(
-                            np.sum(ch_img[plabels == lv])
-                        )
+                        props = regionprops(plabels, intensity_image=ch_img)
+                        props_by_label: dict[int, object] = {p.label: p for p in props}
+
+                        for idx in grp.index:
+                            lv = int(df.at[idx, "label_value"])
+                            prop = props_by_label.get(lv)
+                            if prop is None:
+                                continue
+                            df.at[idx, f"mean_intensity_{ch_name}"] = float(prop.intensity_mean)
+                            df.at[idx, f"max_intensity_{ch_name}"] = float(
+                                np.max(ch_img[plabels == lv])
+                            )
+                            df.at[idx, f"integrated_intensity_{ch_name}"] = float(
+                                np.sum(ch_img[plabels == lv])
+                            )
 
             # De-duplicate intensity_cols (preserve order)
             seen: set[str] = set()
