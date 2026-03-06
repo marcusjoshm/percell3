@@ -62,6 +62,18 @@ class _MenuHome(Exception):
 # ---------------------------------------------------------------------------
 
 
+def _flush_stdin() -> None:
+    """Discard any buffered stdin data (e.g. trailing newlines from paste)."""
+    import select
+    import sys
+
+    try:
+        while select.select([sys.stdin], [], [], 0)[0]:
+            sys.stdin.read(1)
+    except Exception:
+        pass  # Not all platforms support select on stdin
+
+
 def menu_prompt(
     prompt: str,
     *,
@@ -79,6 +91,7 @@ def menu_prompt(
     """
     hint = " (h=home, b=back)"
     full_prompt = prompt + hint
+    _flush_stdin()
 
     while True:
         try:
@@ -3287,6 +3300,7 @@ def _import_single_roi_zip(
         return
 
     # 2. Render ROIs to label image
+    console.print("  Reading ROIs...")
     try:
         labels, info = rois_to_labels(
             zip_path, (fov_info.height, fov_info.width),
@@ -3333,6 +3347,7 @@ def _import_single_roi_zip(
         return
 
     # 6. Create segmentation and store
+    console.print("  Creating segmentation...")
     seg_id = store.add_segmentation(
         name=seg_name, seg_type="cellular",
         width=fov_info.width, height=fov_info.height,
@@ -3342,11 +3357,13 @@ def _import_single_roi_zip(
                     "roi_file": zip_path.name},
     )
 
+    console.print("  Storing labels and extracting cells...")
     cell_count = store_labels_and_cells(
         store, labels, fov_info.id, seg_id, fov_info.pixel_size_um,
     )
 
     # Trigger auto-measurement
+    console.print("  Auto-measuring channels (this may take a moment)...")
     from percell3.measure.auto_measure import on_segmentation_created
     on_segmentation_created(store, seg_id, [fov_info.id])
 
@@ -4501,21 +4518,15 @@ def _decapping_sensor_workflow(state: MenuState) -> None:
     console.print("[bold]Measurement channel:[/bold]")
     meas_channel = numbered_select_one(ch_names, "Measurement channel")
 
-    thresholds = store.get_thresholds()
-    particle_channels = sorted({tr.source_channel for tr in thresholds if tr.source_channel})
-    if not particle_channels:
-        console.print("\n[red]No particle masks found.[/red]")
-        console.print("[dim]Run 'Grouped intensity thresholding' first.[/dim]")
-        return
-
     console.print("\n[bold]Particle mask channel:[/bold]")
-    particle_channel = numbered_select_one(particle_channels, "Particle mask")
+    console.print("  [dim]Thresholds on this channel will be created in step 1.[/dim]")
+    particle_channel = numbered_select_one(ch_names, "Particle mask channel")
 
-    other_particle_channels = [c for c in particle_channels if c != particle_channel]
+    other_channels = [c for c in ch_names if c != particle_channel]
     exclusion_channel = None
-    if other_particle_channels:
-        console.print("\n[bold]Exclusion mask (optional):[/bold]")
-        excl_choices = ["(none)"] + other_particle_channels
+    if other_channels:
+        console.print("\n[bold]Exclusion mask channel (optional):[/bold]")
+        excl_choices = ["(none)"] + other_channels
         excl_choice = numbered_select_one(excl_choices, "Exclusion mask")
         if excl_choice != "(none)":
             exclusion_channel = excl_choice
