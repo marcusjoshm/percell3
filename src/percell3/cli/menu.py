@@ -169,7 +169,7 @@ def numbered_select_many(
         return [items[i - 1] for i in indices]
 
 
-def _print_numbered_list(items: list[str], *, page_size: int = 100) -> None:
+def _print_numbered_list(items: list[str], *, page_size: int = 999) -> None:
     """Print items as a numbered list, paginating if needed."""
     show = items if len(items) <= page_size else items[:page_size]
     for i, item in enumerate(show, 1):
@@ -390,6 +390,7 @@ def _data_menu(state: MenuState) -> None:
 def _workflows_menu(state: MenuState) -> None:
     Menu("WORKFLOWS", [
         MenuItem("1", "Particle analysis", "Segment → measure → threshold → export", _particle_workflow),
+        MenuItem("2", "Decapping sensor", "10-step decapping sensor pipeline", _decapping_sensor_workflow),
     ], state).run()
     raise _MenuCancel()
 
@@ -1779,8 +1780,8 @@ def _config_management_menu(state: MenuState) -> None:
     """Layer-based configuration management sub-menu."""
     Menu("CONFIG MANAGEMENT", [
         MenuItem("1", "Show config matrix", "Display FOV-segmentation-threshold matrix", _show_config_matrix),
-        MenuItem("2", "Assign segmentation", "Assign a segmentation to selected FOVs", _assign_segmentation),
-        MenuItem("3", "Assign threshold", "Assign a threshold to selected FOVs", _assign_threshold),
+        MenuItem("2", "Assign segmentation", "Assign segmentation(s) to FOVs one-by-one", _assign_segmentation),
+        MenuItem("3", "Assign threshold", "Assign threshold(s) to FOVs one-by-one", _assign_threshold),
         MenuItem("4", "Rename segmentation", "Rename a segmentation entity", _rename_segmentation),
         MenuItem("5", "Rename threshold", "Rename a threshold entity", _rename_threshold),
         MenuItem("6", "Delete segmentation", "Delete a segmentation with impact preview", _delete_segmentation),
@@ -1833,7 +1834,7 @@ def _show_config_matrix(state: MenuState) -> None:
 
 
 def _assign_segmentation(state: MenuState) -> None:
-    """Assign a segmentation to selected FOVs."""
+    """Assign segmentation(s) to FOVs — one segmentation per FOV."""
     store = state.require_experiment()
 
     segs = store.get_segmentations(seg_type="cellular")
@@ -1842,9 +1843,9 @@ def _assign_segmentation(state: MenuState) -> None:
         return
 
     seg_labels = [f"{s.name} ({s.cell_count or 0} cells, {s.width}x{s.height})" for s in segs]
-    console.print("\n[bold]Select segmentation:[/bold]")
-    selected = numbered_select_one(seg_labels, "Segmentation")
-    seg = segs[seg_labels.index(selected)]
+    console.print(f"\n[bold]Segmentations ({len(seg_labels)}):[/bold]")
+    selected_labels = numbered_select_many(seg_labels, "Segmentations to assign")
+    selected_segs = [segs[seg_labels.index(lbl)] for lbl in selected_labels]
 
     fovs = store.get_fovs()
     if not fovs:
@@ -1852,50 +1853,54 @@ def _assign_segmentation(state: MenuState) -> None:
         return
 
     fov_labels = [f.display_name for f in fovs]
-    console.print(f"\n[bold]Select FOVs to assign '{seg.name}' to:[/bold]")
-    selected_names = numbered_select_many(fov_labels, "FOVs")
-    target_fovs = [f for f in fovs if f.display_name in selected_names]
-
     assigned = 0
     skipped = 0
-    for fov in target_fovs:
-        if fov.width != seg.width or fov.height != seg.height:
-            console.print(
-                f"  [yellow]Skipped {fov.display_name}: "
-                f"dimension mismatch ({fov.width}x{fov.height} vs {seg.width}x{seg.height})[/yellow]"
-            )
-            skipped += 1
-            continue
+    affected_fov_ids: list[int] = []
 
-        # Replace existing config with new segmentation
-        existing = store.get_fov_config(fov.id)
-        for entry in existing:
-            store.delete_fov_config_entry(entry.id)
-        store.set_fov_config_entry(fov.id, seg.id)
-        # Re-add any existing thresholds
-        for entry in existing:
-            if entry.threshold_id is not None:
-                store.set_fov_config_entry(
-                    fov.id, seg.id,
-                    threshold_id=entry.threshold_id,
-                    scopes=entry.scopes,
+    for seg in selected_segs:
+        console.print(f"\n[bold]Assign '{seg.name}' to which FOV(s)?[/bold]")
+        selected_fov_names = numbered_select_many(fov_labels, "FOVs")
+        target_fovs = [f for f in fovs if f.display_name in selected_fov_names]
+
+        for fov in target_fovs:
+            if fov.width != seg.width or fov.height != seg.height:
+                console.print(
+                    f"  [yellow]Skipped {fov.display_name}: "
+                    f"dimension mismatch ({fov.width}x{fov.height} vs {seg.width}x{seg.height})[/yellow]"
                 )
-        assigned += 1
+                skipped += 1
+                continue
 
-    console.print(f"\n[green]Assigned to {assigned} FOVs.[/green]")
+            # Replace existing config with new segmentation
+            existing = store.get_fov_config(fov.id)
+            for entry in existing:
+                store.delete_fov_config_entry(entry.id)
+            store.set_fov_config_entry(fov.id, seg.id)
+            # Re-add any existing thresholds
+            for entry in existing:
+                if entry.threshold_id is not None:
+                    store.set_fov_config_entry(
+                        fov.id, seg.id,
+                        threshold_id=entry.threshold_id,
+                        scopes=entry.scopes,
+                    )
+            assigned += 1
+            affected_fov_ids.append(fov.id)
+            console.print(f"  [green]Assigned '{seg.name}' → {fov.display_name}[/green]")
+
+    console.print(f"\n[green]Assigned {assigned} segmentation(s).[/green]")
     if skipped:
-        console.print(f"[yellow]Skipped {skipped} FOVs (dimension mismatch).[/yellow]")
+        console.print(f"[yellow]Skipped {skipped} (dimension mismatch).[/yellow]")
 
     # Trigger auto-measurement for affected FOVs
-    if assigned:
+    if affected_fov_ids:
         from percell3.measure.auto_measure import on_config_changed
-        for fov in target_fovs:
-            if fov.width == seg.width and fov.height == seg.height:
-                on_config_changed(store, fov.id)
+        for fov_id in affected_fov_ids:
+            on_config_changed(store, fov_id)
 
 
 def _assign_threshold(state: MenuState) -> None:
-    """Assign a threshold to selected FOVs."""
+    """Assign threshold(s) to FOVs — each threshold can go to multiple FOVs."""
     store = state.require_experiment()
 
     thresholds = store.get_thresholds()
@@ -1904,9 +1909,9 @@ def _assign_threshold(state: MenuState) -> None:
         return
 
     thr_labels = [f"{t.name} ({t.width}x{t.height})" for t in thresholds]
-    console.print("\n[bold]Select threshold:[/bold]")
-    selected = numbered_select_one(thr_labels, "Threshold")
-    thr = thresholds[thr_labels.index(selected)]
+    console.print(f"\n[bold]Thresholds ({len(thr_labels)}):[/bold]")
+    selected_labels = numbered_select_many(thr_labels, "Thresholds to assign")
+    selected_thrs = [thresholds[thr_labels.index(lbl)] for lbl in selected_labels]
 
     fovs = store.get_fovs()
     if not fovs:
@@ -1914,49 +1919,51 @@ def _assign_threshold(state: MenuState) -> None:
         return
 
     fov_labels = [f.display_name for f in fovs]
-    console.print(f"\n[bold]Select FOVs to assign '{thr.name}' to:[/bold]")
-    selected_names = numbered_select_many(fov_labels, "FOVs")
-    target_fovs = [f for f in fovs if f.display_name in selected_names]
-
     assigned = 0
     skipped = 0
-    for fov in target_fovs:
-        if fov.width != thr.width or fov.height != thr.height:
-            console.print(
-                f"  [yellow]Skipped {fov.display_name}: "
-                f"dimension mismatch ({fov.width}x{fov.height} vs {thr.width}x{thr.height})[/yellow]"
+    affected_fov_ids: list[int] = []
+
+    for thr in selected_thrs:
+        console.print(f"\n[bold]Assign '{thr.name}' to which FOV(s)?[/bold]")
+        selected_fov_names = numbered_select_many(fov_labels, "FOVs")
+        target_fovs = [f for f in fovs if f.display_name in selected_fov_names]
+
+        for fov in target_fovs:
+            if fov.width != thr.width or fov.height != thr.height:
+                console.print(
+                    f"  [yellow]Skipped {fov.display_name}: "
+                    f"dimension mismatch ({fov.width}x{fov.height} vs {thr.width}x{thr.height})[/yellow]"
+                )
+                skipped += 1
+                continue
+
+            existing = store.get_fov_config(fov.id)
+            if not existing:
+                console.print(
+                    f"  [yellow]Skipped {fov.display_name}: no segmentation configured.[/yellow]"
+                )
+                skipped += 1
+                continue
+
+            seg_id = existing[0].segmentation_id
+            store.set_fov_config_entry(
+                fov.id, seg_id,
+                threshold_id=thr.id,
+                scopes=["whole_cell", "mask_inside", "mask_outside"],
             )
-            skipped += 1
-            continue
+            assigned += 1
+            affected_fov_ids.append(fov.id)
+            console.print(f"  [green]Assigned '{thr.name}' → {fov.display_name}[/green]")
 
-        existing = store.get_fov_config(fov.id)
-        if not existing:
-            console.print(
-                f"  [yellow]Skipped {fov.display_name}: no segmentation configured.[/yellow]"
-            )
-            skipped += 1
-            continue
-
-        seg_id = existing[0].segmentation_id
-        store.set_fov_config_entry(
-            fov.id, seg_id,
-            threshold_id=thr.id,
-            scopes=["whole_cell", "mask_inside", "mask_outside"],
-        )
-        assigned += 1
-
-    console.print(f"\n[green]Assigned to {assigned} FOVs.[/green]")
+    console.print(f"\n[green]Assigned {assigned} threshold-FOV pairing(s).[/green]")
     if skipped:
-        console.print(f"[yellow]Skipped {skipped} FOVs.[/yellow]")
+        console.print(f"[yellow]Skipped {skipped} (dimension mismatch or no segmentation).[/yellow]")
 
     # Trigger auto-measurement for affected FOVs
-    if assigned:
+    if affected_fov_ids:
         from percell3.measure.auto_measure import on_config_changed
-        for fov in target_fovs:
-            if fov.width == thr.width and fov.height == thr.height:
-                existing = store.get_fov_config(fov.id)
-                if existing:
-                    on_config_changed(store, fov.id)
+        for fov_id in set(affected_fov_ids):
+            on_config_changed(store, fov_id)
 
 
 def _rename_segmentation(state: MenuState) -> None:
@@ -1996,7 +2003,7 @@ def _rename_threshold(state: MenuState) -> None:
 
 
 def _delete_segmentation(state: MenuState) -> None:
-    """Delete a segmentation with impact preview."""
+    """Delete segmentation(s) with impact preview."""
     store = state.require_experiment()
     segs = store.get_segmentations(seg_type="cellular")
     if not segs:
@@ -2004,26 +2011,39 @@ def _delete_segmentation(state: MenuState) -> None:
         return
 
     seg_labels = [f"{s.name} ({s.cell_count or 0} cells)" for s in segs]
-    console.print("\n[bold]Select segmentation to delete:[/bold]")
-    selected = numbered_select_one(seg_labels, "Segmentation")
-    seg = segs[seg_labels.index(selected)]
+    console.print(f"\n[bold]Segmentations ({len(seg_labels)}):[/bold]")
+    selected_labels = numbered_select_many(seg_labels, "Segmentations to delete")
+    selected_segs = [segs[seg_labels.index(lbl)] for lbl in selected_labels]
 
-    impact = store.get_segmentation_impact(seg.id)
-    console.print(f"\n[bold]Deleting '{seg.name}' will remove:[/bold]")
-    console.print(f"  Cells: {impact.cells}")
-    console.print(f"  Measurements: {impact.measurements}")
-    console.print(f"  Config entries: {impact.config_entries}")
+    total_cells = 0
+    total_measurements = 0
+    total_config = 0
+    for seg in selected_segs:
+        impact = store.get_segmentation_impact(seg.id)
+        total_cells += impact.cells
+        total_measurements += impact.measurements
+        total_config += impact.config_entries
+
+    console.print(f"\n[yellow]Deleting {len(selected_segs)} segmentation(s) will remove:[/yellow]")
+    for seg in selected_segs:
+        console.print(f"  - {seg.name}")
+    console.print(f"  Cells: {total_cells}")
+    console.print(f"  Measurements: {total_measurements}")
+    console.print(f"  Config entries: {total_config}")
 
     if numbered_select_one(["No", "Yes"], "Proceed with deletion?") != "Yes":
         console.print("[dim]Deletion cancelled.[/dim]")
         return
 
-    store.delete_segmentation(seg.id)
-    console.print(f"[green]Segmentation '{seg.name}' deleted.[/green]")
+    for seg in selected_segs:
+        store.delete_segmentation(seg.id)
+        console.print(f"  [red]Deleted:[/red] {seg.name}")
+
+    console.print(f"\n[green]{len(selected_segs)} segmentation(s) deleted.[/green]")
 
 
 def _delete_threshold(state: MenuState) -> None:
-    """Delete a threshold with impact preview."""
+    """Delete threshold(s) with impact preview."""
     store = state.require_experiment()
     thresholds = store.get_thresholds()
     if not thresholds:
@@ -2031,22 +2051,35 @@ def _delete_threshold(state: MenuState) -> None:
         return
 
     thr_labels = [t.name for t in thresholds]
-    console.print("\n[bold]Select threshold to delete:[/bold]")
-    selected = numbered_select_one(thr_labels, "Threshold")
-    thr = thresholds[thr_labels.index(selected)]
+    console.print(f"\n[bold]Thresholds ({len(thr_labels)}):[/bold]")
+    selected_labels = numbered_select_many(thr_labels, "Thresholds to delete")
+    selected_thrs = [thresholds[thr_labels.index(lbl)] for lbl in selected_labels]
 
-    impact = store.get_threshold_impact(thr.id)
-    console.print(f"\n[bold]Deleting '{thr.name}' will remove:[/bold]")
-    console.print(f"  Particles: {impact.particles}")
-    console.print(f"  Measurements: {impact.measurements}")
-    console.print(f"  Config entries: {impact.config_entries}")
+    total_particles = 0
+    total_measurements = 0
+    total_config = 0
+    for thr in selected_thrs:
+        impact = store.get_threshold_impact(thr.id)
+        total_particles += impact.particles
+        total_measurements += impact.measurements
+        total_config += impact.config_entries
+
+    console.print(f"\n[yellow]Deleting {len(selected_thrs)} threshold(s) will remove:[/yellow]")
+    for thr in selected_thrs:
+        console.print(f"  - {thr.name}")
+    console.print(f"  Particles: {total_particles}")
+    console.print(f"  Measurements: {total_measurements}")
+    console.print(f"  Config entries: {total_config}")
 
     if numbered_select_one(["No", "Yes"], "Proceed with deletion?") != "Yes":
         console.print("[dim]Deletion cancelled.[/dim]")
         return
 
-    store.delete_threshold(thr.id)
-    console.print(f"[green]Threshold '{thr.name}' deleted.[/green]")
+    for thr in selected_thrs:
+        store.delete_threshold(thr.id)
+        console.print(f"  [red]Deleted:[/red] {thr.name}")
+
+    console.print(f"\n[green]{len(selected_thrs)} threshold(s) deleted.[/green]")
 
 
 def _segment_cells(state: MenuState) -> None:
@@ -3463,24 +3496,38 @@ def _manage_seg_runs(state: MenuState) -> None:
 
     elif action == "Delete":
         seg_labels = [f"{s.name} ({s.cell_count} cells)" for s in segs]
-        selected_label = numbered_select_one(seg_labels, "Segmentation to delete")
-        idx = seg_labels.index(selected_label)
-        seg = segs[idx]
+        selected_labels = numbered_select_many(seg_labels, "Segmentations to delete")
+        selected_segs = [segs[seg_labels.index(lbl)] for lbl in selected_labels]
 
-        # Show impact
-        impact = store.get_segmentation_impact(seg.id)
-        console.print(f"\n[yellow]Deleting '{seg.name}' will remove:[/yellow]")
-        console.print(f"  Cells: {impact.cells}")
-        console.print(f"  Measurements: {impact.measurements}")
-        console.print(f"  Particles: {impact.particles}")
-        console.print(f"  Config entries: {impact.config_entries}")
+        # Show aggregate impact
+        total_cells = 0
+        total_measurements = 0
+        total_particles = 0
+        total_config = 0
+        for seg in selected_segs:
+            impact = store.get_segmentation_impact(seg.id)
+            total_cells += impact.cells
+            total_measurements += impact.measurements
+            total_particles += impact.particles
+            total_config += impact.config_entries
+
+        console.print(f"\n[yellow]Deleting {len(selected_segs)} segmentation(s) will remove:[/yellow]")
+        for seg in selected_segs:
+            console.print(f"  - {seg.name}")
+        console.print(f"  Cells: {total_cells}")
+        console.print(f"  Measurements: {total_measurements}")
+        console.print(f"  Particles: {total_particles}")
+        console.print(f"  Config entries: {total_config}")
 
         if numbered_select_one(["No", "Yes"], "Confirm deletion?") != "Yes":
             console.print("[dim]Deletion cancelled.[/dim]")
             return
 
-        store.delete_segmentation(seg.id)
-        console.print(f"[green]Segmentation '{seg.name}' deleted.[/green]")
+        for seg in selected_segs:
+            store.delete_segmentation(seg.id)
+            console.print(f"  [red]Deleted:[/red] {seg.name}")
+
+        console.print(f"\n[green]{len(selected_segs)} segmentation(s) deleted.[/green]")
 
     elif action == "Unassign from FOVs":
         # Filter to cellular segmentations only
@@ -3569,24 +3616,37 @@ def _manage_thr_runs(state: MenuState) -> None:
 
     elif action == "Delete":
         thr_labels = [f"{(t.source_channel or 'n/a')}/{t.name}" for t in thresholds]
-        selected_label = numbered_select_one(thr_labels, "Threshold to delete")
-        idx = thr_labels.index(selected_label)
-        thr = thresholds[idx]
+        selected_labels = numbered_select_many(thr_labels, "Thresholds to delete")
+        selected_thrs = [thresholds[thr_labels.index(lbl)] for lbl in selected_labels]
 
-        # Show impact
-        impact = store.get_threshold_impact(thr.id)
-        ch_label = thr.source_channel or "n/a"
-        console.print(f"\n[yellow]Deleting '{ch_label}/{thr.name}' will remove:[/yellow]")
-        console.print(f"  Measurements: {impact.measurements}")
-        console.print(f"  Particles: {impact.particles}")
-        console.print(f"  Config entries: {impact.config_entries}")
+        # Show aggregate impact
+        total_measurements = 0
+        total_particles = 0
+        total_config = 0
+        for thr in selected_thrs:
+            impact = store.get_threshold_impact(thr.id)
+            total_measurements += impact.measurements
+            total_particles += impact.particles
+            total_config += impact.config_entries
+
+        console.print(f"\n[yellow]Deleting {len(selected_thrs)} threshold(s) will remove:[/yellow]")
+        for thr in selected_thrs:
+            ch_label = thr.source_channel or "n/a"
+            console.print(f"  - {ch_label}/{thr.name}")
+        console.print(f"  Measurements: {total_measurements}")
+        console.print(f"  Particles: {total_particles}")
+        console.print(f"  Config entries: {total_config}")
 
         if numbered_select_one(["No", "Yes"], "Confirm deletion?") != "Yes":
             console.print("[dim]Deletion cancelled.[/dim]")
             return
 
-        store.delete_threshold(thr.id)
-        console.print(f"[green]Threshold '{ch_label}/{thr.name}' deleted.[/green]")
+        for thr in selected_thrs:
+            ch_label = thr.source_channel or "n/a"
+            store.delete_threshold(thr.id)
+            console.print(f"  [red]Deleted:[/red] {ch_label}/{thr.name}")
+
+        console.print(f"\n[green]{len(selected_thrs)} threshold(s) deleted.[/green]")
 
     elif action == "Unassign from FOVs":
         thr_labels = [f"{(t.source_channel or 'n/a')}/{t.name}" for t in thresholds]
@@ -4303,6 +4363,591 @@ def _particle_workflow(state: MenuState) -> None:
     console.print(f"  Measurements:      {total_measurements}")
     console.print(f"  Particles found:   {total_particles}")
     console.print(f"  Export directory:   {out_dir}")
+    console.print()
+
+
+def _assign_original_seg_to_derived(
+    store: "ExperimentStore",
+    original_fov_id: int,
+    derived_fov_id: int,
+) -> None:
+    """Assign the cellular segmentation from original FOV to a derived FOV."""
+    from percell3.measure.auto_measure import on_config_changed
+
+    orig_config = store.get_fov_config(original_fov_id)
+    cellular_entries = [e for e in orig_config if e.segmentation_id is not None]
+    if not cellular_entries:
+        return
+    seg_id = cellular_entries[0].segmentation_id
+
+    # Clear auto-created whole-field config on derived FOV
+    store.delete_fov_config_for_fov(derived_fov_id)
+
+    # Assign original segmentation
+    store.set_fov_config_entry(derived_fov_id, seg_id)
+    on_config_changed(store, derived_fov_id)
+
+
+def _decapping_sensor_workflow(state: MenuState) -> None:
+    """10-step decapping sensor pipeline.
+
+    Steps:
+      1. Grouped thresholding on original FOVs (interactive napari)
+      2. Split-halo condensate analysis → delete condensed, keep dilute
+      3. Auto-assign original segmentation to step 2 FOVs
+      4. Grouped thresholding on step 2 FOVs (interactive napari)
+      5. Split-halo again on step 2 FOVs → delete condensed, keep dilute
+      6. Auto-assign original segmentation to step 5 FOVs
+      7. Grouped thresholding on step 5 FOVs (interactive napari)
+      8. BG subtraction (step 5 FOVs as histogram, originals as apply)
+      9. Auto-assign original segmentation to step 8 FOVs
+     10. Assign thresholds (all step 1 + matching step 7) to step 8 FOVs
+    """
+    from percell3.plugins.registry import PluginRegistry
+
+    store = state.require_experiment()
+
+    # ── Prerequisites ────────────────────────────────────────────────
+    channels = store.get_channels()
+    if not channels:
+        console.print("[red]No channels found.[/red] Import images first.")
+        return
+
+    ch_names = [ch.name for ch in channels]
+
+    all_fovs = store.get_fovs()
+    if not all_fovs:
+        console.print("[red]No FOVs found.[/red] Import images first.")
+        return
+
+    # Filter to FOVs with cellular segmentation and cells
+    seg_summary = store.get_fov_segmentation_summary()
+    fovs_with_cells = [f for f in all_fovs if seg_summary.get(f.id, (0, None))[0] > 0]
+    if not fovs_with_cells:
+        console.print("[red]No FOVs with segmented cells.[/red] Segment cells first.")
+        return
+
+    registry = PluginRegistry()
+    registry.discover()
+
+    # Verify required plugins
+    try:
+        registry.get_plugin("split_halo_condensate_analysis")
+        registry.get_plugin("threshold_bg_subtraction")
+    except KeyError as e:
+        console.print(f"[red]Required plugin not found: {e}[/red]")
+        return
+
+    # ── Upfront Parameter Collection ─────────────────────────────────
+    console.print("\n[bold]DECAPPING SENSOR WORKFLOW[/bold]")
+    console.print("[dim]10-step pipeline: threshold → split-halo → threshold → "
+                  "split-halo → threshold → BG subtraction → assign[/dim]\n")
+
+    # FOV selection
+    console.print("[bold]Select FOVs to process:[/bold]")
+    _show_fov_status_table(fovs_with_cells, seg_summary)
+    if len(fovs_with_cells) == 1:
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].display_name})[/dim]")
+        selected_fovs = fovs_with_cells
+    else:
+        selected_fovs = _select_fovs_from_table(fovs_with_cells)
+
+    fov_display_names = [f.display_name for f in selected_fovs]
+
+    # Thresholding parameters (shared across steps 1, 4, 7)
+    console.print("\n[bold]Thresholding Parameters[/bold]")
+    console.print("  [dim]Used for all three thresholding steps (1, 4, 7).[/dim]\n")
+
+    console.print("[bold]Grouping channel:[/bold]")
+    grouping_channel = numbered_select_one(ch_names, "Grouping channel")
+
+    console.print("\n[bold]Grouping metric:[/bold]")
+    metric_choices = ["mean_intensity", "median_intensity", "integrated_intensity"]
+    grouping_metric = numbered_select_one(metric_choices, "Metric")
+
+    console.print("\n[bold]Threshold channel:[/bold]")
+    threshold_channel = numbered_select_one(ch_names, "Threshold channel")
+
+    console.print("\n[bold]Gaussian sigma for steps 1 & 4 (optional):[/bold]")
+    sigma_str = menu_prompt("Gaussian sigma (blank = none)", default="")
+    gaussian_sigma_early: float | None = None
+    if sigma_str:
+        try:
+            gaussian_sigma_early = float(sigma_str)
+        except ValueError:
+            console.print("[yellow]Invalid sigma, using none.[/yellow]")
+
+    console.print("\n[bold]Gaussian sigma for step 7 (optional):[/bold]")
+    sigma_str_7 = menu_prompt("Gaussian sigma (blank = none)", default="")
+    gaussian_sigma_step7: float | None = None
+    if sigma_str_7:
+        try:
+            gaussian_sigma_step7 = float(sigma_str_7)
+        except ValueError:
+            console.print("[yellow]Invalid sigma, using none.[/yellow]")
+
+    console.print("\n[bold]Min particle area:[/bold]")
+    area_str = menu_prompt("Min particle area in pixels", default="1")
+    try:
+        min_particle_area = int(area_str)
+    except ValueError:
+        console.print("[yellow]Invalid area, using default of 1.[/yellow]")
+        min_particle_area = 1
+
+    # Split-halo parameters (shared for steps 2 and 5)
+    console.print("\n[bold]Split-Halo Parameters[/bold]")
+    console.print("  [dim]Used for both split-halo steps (2, 5).[/dim]\n")
+
+    console.print("[bold]Measurement channel:[/bold]")
+    meas_channel = numbered_select_one(ch_names, "Measurement channel")
+
+    thresholds = store.get_thresholds()
+    particle_channels = sorted({tr.source_channel for tr in thresholds if tr.source_channel})
+    if not particle_channels:
+        console.print("\n[red]No particle masks found.[/red]")
+        console.print("[dim]Run 'Grouped intensity thresholding' first.[/dim]")
+        return
+
+    console.print("\n[bold]Particle mask channel:[/bold]")
+    particle_channel = numbered_select_one(particle_channels, "Particle mask")
+
+    other_particle_channels = [c for c in particle_channels if c != particle_channel]
+    exclusion_channel = None
+    if other_particle_channels:
+        console.print("\n[bold]Exclusion mask (optional):[/bold]")
+        excl_choices = ["(none)"] + other_particle_channels
+        excl_choice = numbered_select_one(excl_choices, "Exclusion mask")
+        if excl_choice != "(none)":
+            exclusion_channel = excl_choice
+
+    console.print("\n[bold]Ring dilation pixels:[/bold]")
+    ring_str = menu_prompt("Ring dilation pixels", default="5")
+    try:
+        ring_dilation_pixels = int(ring_str)
+    except ValueError:
+        ring_dilation_pixels = 5
+
+    console.print("\n[bold]Exclusion dilation pixels:[/bold]")
+    excl_dil_str = menu_prompt("Exclusion dilation pixels", default="5")
+    try:
+        exclusion_dilation_pixels = int(excl_dil_str)
+    except ValueError:
+        exclusion_dilation_pixels = 5
+
+    console.print("\n[bold]Normalization channel (optional):[/bold]")
+    norm_choices = ["(none)"] + ch_names
+    norm_choice = numbered_select_one(norm_choices, "Normalization channel")
+    normalization_channel = None if norm_choice == "(none)" else norm_choice
+
+    # BG subtraction channel
+    console.print("\n[bold]BG Subtraction Channel[/bold]")
+    console.print("  [dim]Channel for background subtraction (may differ from threshold channel).[/dim]\n")
+    bg_channel = numbered_select_one(ch_names, "BG subtraction channel")
+
+    # 6 naming prefixes
+    console.print("\n[bold]Naming Prefixes[/bold]")
+    console.print("  [dim]Enter 6 prefixes for each step's outputs.[/dim]\n")
+
+    console.print("[bold]Step 1 threshold prefix:[/bold]")
+    step1_prefix = _prompt_prefix(fov_display_names, suffix_example="g1")
+
+    console.print("\n[bold]Step 2 split-halo prefix:[/bold]")
+    step2_prefix = _prompt_prefix(fov_display_names, suffix_example="dilute_phase")
+
+    console.print("\n[bold]Step 4 threshold prefix:[/bold]")
+    step4_prefix = _prompt_prefix(fov_display_names, suffix_example="g1")
+
+    console.print("\n[bold]Step 5 split-halo prefix:[/bold]")
+    step5_prefix = _prompt_prefix(fov_display_names, suffix_example="dilute_phase")
+
+    console.print("\n[bold]Step 7 threshold prefix:[/bold]")
+    step7_prefix = _prompt_prefix(fov_display_names, suffix_example="g1")
+
+    console.print("\n[bold]Step 8 BG subtraction prefix:[/bold]")
+    step8_prefix = _prompt_prefix(fov_display_names, suffix_example=bg_channel)
+
+    # Confirmation summary
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold]Decapping Sensor Workflow Summary[/bold]")
+    console.print(f"  FOVs:                  {len(selected_fovs)}")
+    console.print(f"  Grouping channel:      {grouping_channel}")
+    console.print(f"  Grouping metric:       {grouping_metric}")
+    console.print(f"  Threshold channel:     {threshold_channel}")
+    console.print(f"  Gaussian sigma (1,4):  {gaussian_sigma_early or '(none)'}")
+    console.print(f"  Gaussian sigma (7):    {gaussian_sigma_step7 or '(none)'}")
+    console.print(f"  Min particle area:     {min_particle_area}")
+    console.print(f"  Measurement channel:   {meas_channel}")
+    console.print(f"  Particle mask:         {particle_channel}")
+    console.print(f"  Exclusion mask:        {exclusion_channel or '(none)'}")
+    console.print(f"  Ring dilation:         {ring_dilation_pixels} px")
+    console.print(f"  Exclusion dilation:    {exclusion_dilation_pixels} px")
+    console.print(f"  Normalization:         {normalization_channel or '(none)'}")
+    console.print(f"  BG subtraction ch:     {bg_channel}")
+    console.print(f"  Prefixes:")
+    console.print(f"    Step 1 (threshold):  {step1_prefix}")
+    console.print(f"    Step 2 (split-halo): {step2_prefix}")
+    console.print(f"    Step 4 (threshold):  {step4_prefix}")
+    console.print(f"    Step 5 (split-halo): {step5_prefix}")
+    console.print(f"    Step 7 (threshold):  {step7_prefix}")
+    console.print(f"    Step 8 (BG sub):     {step8_prefix}")
+
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
+        console.print("[yellow]Workflow cancelled.[/yellow]")
+        return
+
+    # ── Lineage tracking dicts ───────────────────────────────────────
+    # original_fov_id → step2_dilute_fov_id
+    step2_lineage: dict[int, int] = {}
+    # step2_fov_id → step5_dilute_fov_id
+    step5_lineage: dict[int, int] = {}
+    # original_fov_id → list of step8_bgsub_fov_ids
+    step8_lineage: dict[int, list[int]] = {}
+    # step1 thresholds: original_fov_id → list of threshold_ids
+    step1_thresholds: dict[int, list[int]] = {}
+    # step7 thresholds: step5_fov_id → list of threshold_ids
+    step7_thresholds: dict[int, list[int]] = {}
+
+    # ── STEP 1: Grouped thresholding on original FOVs ────────────────
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold]STEP 1: Grouped thresholding on original FOVs[/bold]")
+    console.print("[dim]Interactive napari thresholding for each FOV.[/dim]\n")
+
+    for fov_info in selected_fovs:
+        _threshold_fov(
+            store, fov_info,
+            threshold_channel=threshold_channel,
+            grouping_channel=grouping_channel,
+            grouping_metric=grouping_metric,
+            gaussian_sigma=gaussian_sigma_early,
+            min_particle_area=min_particle_area,
+            name_prefix=step1_prefix,
+        )
+        # Collect thresholds created for this FOV
+        all_thrs = store.get_thresholds()
+        fov_thrs = [
+            t for t in all_thrs
+            if t.source_fov_id == fov_info.id
+            and t.name.startswith(f"{step1_prefix}_")
+        ]
+        step1_thresholds[fov_info.id] = [t.id for t in fov_thrs]
+
+    console.print(f"\n[green]Step 1 complete.[/green] "
+                  f"Thresholds created for {len(step1_thresholds)} FOVs.")
+
+    # ── STEP 2: Split-halo on original FOVs ──────────────────────────
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold]STEP 2: Split-halo condensate analysis[/bold]\n")
+
+    # Get cell_ids for selected FOVs
+    cell_ids = []
+    for fov in selected_fovs:
+        cells_df = store.get_cells(fov_id=fov.id)
+        cell_ids.extend(cells_df["id"].tolist())
+
+    split_halo_params = {
+        "measurement_channel": meas_channel,
+        "particle_channel": particle_channel,
+        "exclusion_channel": exclusion_channel,
+        "ring_dilation_pixels": ring_dilation_pixels,
+        "exclusion_dilation_pixels": exclusion_dilation_pixels,
+        "normalization_channel": normalization_channel,
+        "save_images": True,
+        "name_prefix": step2_prefix,
+    }
+
+    with make_progress() as progress:
+        task = progress.add_task("Split-halo analysis...", total=len(selected_fovs))
+
+        def on_progress_s2(current, total, fov_name):
+            progress.update(task, total=total, completed=current,
+                            description=f"Processing {fov_name}")
+
+        registry.run_plugin(
+            "split_halo_condensate_analysis", store,
+            cell_ids=cell_ids, parameters=split_halo_params,
+            progress_callback=on_progress_s2,
+        )
+
+    # Delete condensed-phase FOVs and build step2_lineage
+    all_fovs_after = store.get_fovs()
+    fov_by_name = {f.display_name: f for f in all_fovs_after}
+
+    for orig_fov in selected_fovs:
+        # Delete condensed phase
+        condensed_name = f"{step2_prefix}_{orig_fov.display_name}_condensed_phase"
+        if condensed_name in fov_by_name:
+            store.delete_fov(fov_by_name[condensed_name].id)
+            console.print(f"  Deleted condensed: {condensed_name}")
+
+        # Track dilute phase
+        dilute_name = f"{step2_prefix}_{orig_fov.display_name}_dilute_phase"
+        if dilute_name in fov_by_name:
+            step2_lineage[orig_fov.id] = fov_by_name[dilute_name].id
+        else:
+            console.print(f"  [yellow]Warning: dilute FOV not found for {orig_fov.display_name}[/yellow]")
+
+    console.print(f"\n[green]Step 2 complete.[/green] "
+                  f"Dilute FOVs created: {len(step2_lineage)}")
+
+    # ── STEP 3: Assign original segmentation to step 2 FOVs ─────────
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold]STEP 3: Assign segmentation to step 2 FOVs[/bold]\n")
+
+    for orig_fov_id, step2_fov_id in step2_lineage.items():
+        _assign_original_seg_to_derived(store, orig_fov_id, step2_fov_id)
+        step2_fov = store.get_fov_by_id(step2_fov_id)
+        console.print(f"  Assigned segmentation to {step2_fov.display_name}")
+
+    console.print(f"\n[green]Step 3 complete.[/green]")
+
+    # ── STEP 4: Grouped thresholding on step 2 FOVs ─────────────────
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold]STEP 4: Grouped thresholding on step 2 (dilute) FOVs[/bold]")
+    console.print("[dim]Interactive napari thresholding for each dilute FOV.[/dim]\n")
+
+    step2_fovs = [store.get_fov_by_id(fov_id) for fov_id in step2_lineage.values()]
+    for fov_info in step2_fovs:
+        _threshold_fov(
+            store, fov_info,
+            threshold_channel=threshold_channel,
+            grouping_channel=grouping_channel,
+            grouping_metric=grouping_metric,
+            gaussian_sigma=gaussian_sigma_early,
+            min_particle_area=min_particle_area,
+            name_prefix=step4_prefix,
+        )
+
+    console.print(f"\n[green]Step 4 complete.[/green]")
+
+    # ── STEP 5: Split-halo on step 2 FOVs ───────────────────────────
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold]STEP 5: Split-halo on step 2 (dilute) FOVs[/bold]\n")
+
+    # Get cell_ids for step 2 FOVs
+    step2_cell_ids = []
+    for fov_info in step2_fovs:
+        cells_df = store.get_cells(fov_id=fov_info.id)
+        step2_cell_ids.extend(cells_df["id"].tolist())
+
+    step5_halo_params = {
+        "measurement_channel": meas_channel,
+        "particle_channel": particle_channel,
+        "exclusion_channel": exclusion_channel,
+        "ring_dilation_pixels": ring_dilation_pixels,
+        "exclusion_dilation_pixels": exclusion_dilation_pixels,
+        "normalization_channel": normalization_channel,
+        "save_images": True,
+        "name_prefix": step5_prefix,
+    }
+
+    with make_progress() as progress:
+        task = progress.add_task("Split-halo analysis (round 2)...", total=len(step2_fovs))
+
+        def on_progress_s5(current, total, fov_name):
+            progress.update(task, total=total, completed=current,
+                            description=f"Processing {fov_name}")
+
+        registry.run_plugin(
+            "split_halo_condensate_analysis", store,
+            cell_ids=step2_cell_ids, parameters=step5_halo_params,
+            progress_callback=on_progress_s5,
+        )
+
+    # Delete condensed-phase FOVs and build step5_lineage
+    all_fovs_after = store.get_fovs()
+    fov_by_name = {f.display_name: f for f in all_fovs_after}
+
+    for step2_fov in step2_fovs:
+        condensed_name = f"{step5_prefix}_{step2_fov.display_name}_condensed_phase"
+        if condensed_name in fov_by_name:
+            store.delete_fov(fov_by_name[condensed_name].id)
+            console.print(f"  Deleted condensed: {condensed_name}")
+
+        dilute_name = f"{step5_prefix}_{step2_fov.display_name}_dilute_phase"
+        if dilute_name in fov_by_name:
+            step5_lineage[step2_fov.id] = fov_by_name[dilute_name].id
+        else:
+            console.print(f"  [yellow]Warning: dilute FOV not found for {step2_fov.display_name}[/yellow]")
+
+    console.print(f"\n[green]Step 5 complete.[/green] "
+                  f"Dilute FOVs created: {len(step5_lineage)}")
+
+    # ── STEP 6: Assign original segmentation to step 5 FOVs ─────────
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold]STEP 6: Assign segmentation to step 5 FOVs[/bold]\n")
+
+    for orig_fov_id, step2_fov_id in step2_lineage.items():
+        step5_fov_id = step5_lineage.get(step2_fov_id)
+        if step5_fov_id is not None:
+            _assign_original_seg_to_derived(store, orig_fov_id, step5_fov_id)
+            step5_fov = store.get_fov_by_id(step5_fov_id)
+            console.print(f"  Assigned segmentation to {step5_fov.display_name}")
+
+    console.print(f"\n[green]Step 6 complete.[/green]")
+
+    # ── STEP 7: Grouped thresholding on step 5 FOVs ─────────────────
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold]STEP 7: Grouped thresholding on step 5 (2nd dilute) FOVs[/bold]")
+    console.print("[dim]Interactive napari thresholding for each FOV.[/dim]\n")
+
+    step5_fovs = [store.get_fov_by_id(fov_id) for fov_id in step5_lineage.values()]
+    for fov_info in step5_fovs:
+        _threshold_fov(
+            store, fov_info,
+            threshold_channel=threshold_channel,
+            grouping_channel=grouping_channel,
+            grouping_metric=grouping_metric,
+            gaussian_sigma=gaussian_sigma_step7,
+            min_particle_area=min_particle_area,
+            name_prefix=step7_prefix,
+        )
+        # Collect step 7 thresholds
+        all_thrs = store.get_thresholds()
+        fov_thrs = [
+            t for t in all_thrs
+            if t.source_fov_id == fov_info.id
+            and t.name.startswith(f"{step7_prefix}_")
+        ]
+        step7_thresholds[fov_info.id] = [t.id for t in fov_thrs]
+
+    console.print(f"\n[green]Step 7 complete.[/green] "
+                  f"Thresholds created for {len(step7_thresholds)} FOVs.")
+
+    # ── STEP 8: BG subtraction ───────────────────────────────────────
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold]STEP 8: Threshold background subtraction[/bold]\n")
+
+    # Build pairings: histogram=step5 FOV, apply=original FOV
+    pairings: list[dict[str, int]] = []
+    for orig_fov_id, step2_fov_id in step2_lineage.items():
+        step5_fov_id = step5_lineage.get(step2_fov_id)
+        if step5_fov_id is not None:
+            pairings.append({
+                "histogram_fov_id": step5_fov_id,
+                "apply_fov_id": orig_fov_id,
+            })
+
+    if not pairings:
+        console.print("[red]No valid pairings for BG subtraction.[/red]")
+        return
+
+    console.print(f"  Auto-paired {len(pairings)} histogram → apply FOV(s)")
+    for p in pairings:
+        hist_name = store.get_fov_by_id(p["histogram_fov_id"]).display_name
+        apply_name = store.get_fov_by_id(p["apply_fov_id"]).display_name
+        console.print(f"    {hist_name}  →  {apply_name}")
+
+    bg_params = {
+        "channel": bg_channel,
+        "pairings": pairings,
+        "name_prefix": step8_prefix,
+    }
+
+    with make_progress() as progress:
+        task = progress.add_task("Background subtraction...", total=len(pairings))
+
+        def on_progress_s8(current, total, fov_name):
+            progress.update(task, total=total, completed=current,
+                            description=f"Processing {fov_name}")
+
+        result = registry.run_plugin(
+            "threshold_bg_subtraction", store,
+            parameters=bg_params, progress_callback=on_progress_s8,
+        )
+
+    # Build step8_lineage by finding derived FOV names
+    all_fovs_after = store.get_fovs()
+    fov_by_name = {f.display_name: f for f in all_fovs_after}
+
+    for orig_fov in selected_fovs:
+        bgsub_fov_ids = []
+        for fov_after in all_fovs_after:
+            if fov_after.display_name.startswith(f"{step8_prefix}_{orig_fov.display_name}_"):
+                bgsub_fov_ids.append(fov_after.id)
+        if bgsub_fov_ids:
+            step8_lineage[orig_fov.id] = bgsub_fov_ids
+
+    for w in result.warnings:
+        console.print(f"  [yellow]Warning: {w}[/yellow]")
+
+    console.print(f"\n[green]Step 8 complete.[/green] "
+                  f"BG-subtracted FOVs: {sum(len(v) for v in step8_lineage.values())}")
+
+    # ── STEP 9: Assign original segmentation to step 8 FOVs ─────────
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold]STEP 9: Assign segmentation to BG-subtracted FOVs[/bold]\n")
+
+    for orig_fov_id, bgsub_fov_ids in step8_lineage.items():
+        for bgsub_fov_id in bgsub_fov_ids:
+            _assign_original_seg_to_derived(store, orig_fov_id, bgsub_fov_id)
+            bgsub_fov = store.get_fov_by_id(bgsub_fov_id)
+            console.print(f"  Assigned segmentation to {bgsub_fov.display_name}")
+
+    console.print(f"\n[green]Step 9 complete.[/green]")
+
+    # ── STEP 10: Assign thresholds to step 8 FOVs ───────────────────
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold]STEP 10: Assign thresholds to BG-subtracted FOVs[/bold]\n")
+
+    from percell3.measure.auto_measure import on_config_changed
+
+    threshold_assignments = 0
+    all_bgsub_fov_ids = [
+        fov_id
+        for fov_ids in step8_lineage.values()
+        for fov_id in fov_ids
+    ]
+    total_bgsub = len(all_bgsub_fov_ids)
+
+    for idx, (orig_fov_id, bgsub_fov_ids) in enumerate(step8_lineage.items()):
+        for bgsub_fov_id in bgsub_fov_ids:
+            bgsub_fov_info = store.get_fov_by_id(bgsub_fov_id)
+            console.print(f"  Assigning thresholds to {bgsub_fov_info.display_name}...")
+
+            config = store.get_fov_config(bgsub_fov_id)
+            if not config:
+                continue
+            seg_id = config[0].segmentation_id
+
+            # Assign ALL step 1 thresholds for this original FOV
+            for thr_id in step1_thresholds.get(orig_fov_id, []):
+                store.set_fov_config_entry(
+                    bgsub_fov_id, seg_id,
+                    threshold_id=thr_id,
+                    scopes=["whole_cell", "mask_inside", "mask_outside"],
+                )
+                threshold_assignments += 1
+
+            # Assign matching step 7 threshold by checking name in BG-sub FOV name
+            for step5_fov_id, thr_ids in step7_thresholds.items():
+                for thr_id in thr_ids:
+                    thr_info = store.get_threshold(thr_id)
+                    if thr_info.name in bgsub_fov_info.display_name:
+                        store.set_fov_config_entry(
+                            bgsub_fov_id, seg_id,
+                            threshold_id=thr_id,
+                            scopes=["whole_cell", "mask_inside", "mask_outside"],
+                        )
+                        threshold_assignments += 1
+                        break
+
+            console.print(f"    Auto-measuring {bgsub_fov_info.display_name}...")
+            on_config_changed(store, bgsub_fov_id)
+            console.print(f"    [green]Done[/green]")
+
+    console.print(f"\n[green]Step 10 complete.[/green] "
+                  f"Threshold assignments: {threshold_assignments}")
+
+    # ── Final Summary ────────────────────────────────────────────────
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold green]Decapping sensor workflow complete![/bold green]")
+    console.print(f"  Original FOVs processed:   {len(selected_fovs)}")
+    console.print(f"  Step 2 dilute FOVs:        {len(step2_lineage)}")
+    console.print(f"  Step 5 dilute FOVs:        {len(step5_lineage)}")
+    console.print(f"  Step 8 BG-sub FOVs:        {sum(len(v) for v in step8_lineage.values())}")
+    console.print(f"  Step 1 threshold groups:   {sum(len(v) for v in step1_thresholds.values())}")
+    console.print(f"  Step 7 threshold groups:   {sum(len(v) for v in step7_thresholds.values())}")
+    console.print(f"  Threshold assignments:     {threshold_assignments}")
     console.print()
 
 

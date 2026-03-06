@@ -101,18 +101,20 @@ class TestShowConfigMatrix:
 class TestAssignSegmentation:
     """Tests for _assign_segmentation()."""
 
-    @patch("percell3.cli.menu.numbered_select_one")
     @patch("percell3.cli.menu.numbered_select_many")
     @patch("percell3.measure.auto_measure.on_config_changed")
     def test_assign_seg_to_second_fov(
-        self, mock_config_changed, mock_select_many, mock_select_one,
+        self, mock_config_changed, mock_select_many,
         config_experiment: ExperimentStore,
     ):
         from percell3.cli.menu import _assign_segmentation
 
         seg = config_experiment.get_segmentation(config_experiment._test_seg_id)
-        mock_select_one.return_value = f"{seg.name} ({seg.cell_count or 0} cells, {seg.width}x{seg.height})"
-        mock_select_many.return_value = ["fov_002"]
+        # First call: select segmentations, second call: select FOVs
+        mock_select_many.side_effect = [
+            [f"{seg.name} ({seg.cell_count or 0} cells, {seg.width}x{seg.height})"],
+            ["fov_002"],
+        ]
 
         state = MockMenuState(config_experiment)
         _assign_segmentation(state)
@@ -122,11 +124,10 @@ class TestAssignSegmentation:
         assert len(config) > 0
         assert any(e.segmentation_id == config_experiment._test_seg_id for e in config)
 
-    @patch("percell3.cli.menu.numbered_select_one")
     @patch("percell3.cli.menu.numbered_select_many")
     @patch("percell3.measure.auto_measure.on_config_changed")
     def test_assign_seg_dimension_mismatch_skipped(
-        self, mock_config_changed, mock_select_many, mock_select_one,
+        self, mock_config_changed, mock_select_many,
         config_experiment: ExperimentStore,
     ):
         from percell3.cli.menu import _assign_segmentation
@@ -140,8 +141,10 @@ class TestAssignSegmentation:
         config_experiment.write_image(fov3_id, "DAPI", img)
 
         seg = config_experiment.get_segmentation(config_experiment._test_seg_id)
-        mock_select_one.return_value = f"{seg.name} ({seg.cell_count or 0} cells, {seg.width}x{seg.height})"
-        mock_select_many.return_value = ["fov_003"]
+        mock_select_many.side_effect = [
+            [f"{seg.name} ({seg.cell_count or 0} cells, {seg.width}x{seg.height})"],
+            ["fov_003"],
+        ]
 
         state = MockMenuState(config_experiment)
         _assign_segmentation(state)
@@ -157,11 +160,10 @@ class TestAssignSegmentation:
 class TestAssignThreshold:
     """Tests for _assign_threshold()."""
 
-    @patch("percell3.cli.menu.numbered_select_one")
     @patch("percell3.cli.menu.numbered_select_many")
     @patch("percell3.measure.auto_measure.on_config_changed")
     def test_assign_threshold_to_fov(
-        self, mock_config_changed, mock_select_many, mock_select_one,
+        self, mock_config_changed, mock_select_many,
         config_experiment: ExperimentStore,
     ):
         from percell3.cli.menu import _assign_threshold
@@ -180,8 +182,11 @@ class TestAssignThreshold:
         store.write_mask(mask, thr_id)
 
         thr = store.get_threshold(thr_id)
-        mock_select_one.return_value = f"{thr.name} ({thr.width}x{thr.height})"
-        mock_select_many.return_value = ["fov_002"]
+        # First call: select thresholds, second call: select FOVs
+        mock_select_many.side_effect = [
+            [f"{thr.name} ({thr.width}x{thr.height})"],
+            ["fov_002"],
+        ]
 
         state = MockMenuState(store)
         _assign_threshold(state)
@@ -242,8 +247,9 @@ class TestDeleteEntities:
     """Tests for _delete_segmentation() and _delete_threshold()."""
 
     @patch("percell3.cli.menu.numbered_select_one")
+    @patch("percell3.cli.menu.numbered_select_many")
     def test_delete_segmentation_confirmed(
-        self, mock_select,
+        self, mock_select_many, mock_select_one,
         config_experiment: ExperimentStore,
     ):
         from percell3.cli.menu import _delete_segmentation
@@ -252,11 +258,8 @@ class TestDeleteEntities:
         seg = store.get_segmentation(store._test_seg_id)
         cell_count = seg.cell_count or 0
 
-        # First call: select the segmentation, second call: confirm "Yes"
-        mock_select.side_effect = [
-            f"{seg.name} ({cell_count} cells)",
-            "Yes",
-        ]
+        mock_select_many.return_value = [f"{seg.name} ({cell_count} cells)"]
+        mock_select_one.return_value = "Yes"
 
         state = MockMenuState(store)
         _delete_segmentation(state)
@@ -266,8 +269,9 @@ class TestDeleteEntities:
             store.get_segmentation(store._test_seg_id)
 
     @patch("percell3.cli.menu.numbered_select_one")
+    @patch("percell3.cli.menu.numbered_select_many")
     def test_delete_segmentation_cancelled(
-        self, mock_select,
+        self, mock_select_many, mock_select_one,
         config_experiment: ExperimentStore,
     ):
         from percell3.cli.menu import _delete_segmentation
@@ -276,10 +280,8 @@ class TestDeleteEntities:
         seg = store.get_segmentation(store._test_seg_id)
         cell_count = seg.cell_count or 0
 
-        mock_select.side_effect = [
-            f"{seg.name} ({cell_count} cells)",
-            "No",
-        ]
+        mock_select_many.return_value = [f"{seg.name} ({cell_count} cells)"]
+        mock_select_one.return_value = "No"
 
         state = MockMenuState(store)
         _delete_segmentation(state)
@@ -289,8 +291,9 @@ class TestDeleteEntities:
         assert seg_after.name == seg.name
 
     @patch("percell3.cli.menu.numbered_select_one")
+    @patch("percell3.cli.menu.numbered_select_many")
     def test_delete_threshold_confirmed(
-        self, mock_select,
+        self, mock_select_many, mock_select_one,
         config_experiment: ExperimentStore,
     ):
         from percell3.cli.menu import _delete_threshold
@@ -302,7 +305,8 @@ class TestDeleteEntities:
             parameters={},
         )
 
-        mock_select.side_effect = ["thresh_test", "Yes"]
+        mock_select_many.return_value = ["thresh_test"]
+        mock_select_one.return_value = "Yes"
 
         state = MockMenuState(store)
         _delete_threshold(state)

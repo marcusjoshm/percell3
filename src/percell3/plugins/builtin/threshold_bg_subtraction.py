@@ -283,7 +283,7 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
         name_prefix = self._name_prefix
         if name_prefix:
             derived_name = (
-                f"{name_prefix}_{apply_fov_info.display_name}_{channel}"
+                f"{name_prefix}_{apply_fov_info.display_name}_{thr_info.name}_{channel}"
             )
         else:
             derived_name = (
