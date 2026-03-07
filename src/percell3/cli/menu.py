@@ -447,6 +447,8 @@ def _make_plugin_runner(registry, plugin_name: str):
             _run_image_calculator(state, registry)
         elif plugin_name == "threshold_bg_subtraction":
             _run_threshold_bg_subtraction(state, registry)
+        elif plugin_name == "nan_zero":
+            _run_nan_zero(state, registry)
         else:
             # Generic plugin runner for future plugins
             _run_generic_plugin(state, registry, plugin_name)
@@ -576,6 +578,73 @@ def _run_image_calculator(state: MenuState, registry) -> None:
     derived_fov_id = result.custom_outputs.get("derived_fov_id")
     if derived_fov_id:
         console.print(f"  Derived FOV ID: {derived_fov_id}")
+    for w in result.warnings:
+        console.print(f"  [yellow]Warning: {w}[/yellow]")
+
+
+def _run_nan_zero(state: MenuState, registry) -> None:
+    """Interactive handler for NaN-Zero plugin (replace zeros with NaN)."""
+    store = state.require_experiment()
+
+    plugin = registry.get_plugin("nan_zero")
+    errors = plugin.validate(store)
+    if errors:
+        console.print("\n[red]Cannot run nan_zero:[/red]")
+        for e in errors:
+            console.print(f"  - {e}")
+        return
+
+    # Step 1: Select FOVs
+    all_fovs = store.get_fovs()
+    if not all_fovs:
+        console.print("\n[red]No FOVs found.[/red]")
+        return
+
+    console.print("\n[bold]Step 1: Select FOVs[/bold]")
+    console.print("  [dim]Choose FOVs in which to replace zeros with NaN.[/dim]\n")
+    seg_summary = store.get_fov_segmentation_summary()
+    _show_fov_status_table(all_fovs, seg_summary)
+    selected_fovs = _select_fovs_from_table(all_fovs)
+
+    # Step 2: Select channels
+    channels = store.get_channels()
+    ch_names = [ch.name for ch in channels]
+
+    console.print("\n[bold]Step 2: Select channels[/bold]")
+    console.print("  [dim]Zeros will be replaced with NaN in these channels.[/dim]\n")
+    selected_channels = numbered_select_many(ch_names, "Channels (numbers, 'all')")
+
+    # Step 3: Naming prefix
+    console.print("\n[bold]Step 3: Naming prefix[/bold]")
+    console.print("  [dim]Enter a prefix for the derived FOV names.[/dim]")
+    fov_display_names = [f.display_name for f in selected_fovs]
+    name_prefix = _prompt_prefix(fov_display_names)
+
+    # Run
+    fov_ids = [f.id for f in selected_fovs]
+    params = {
+        "fov_ids": fov_ids,
+        "channels": selected_channels,
+        "name_prefix": name_prefix,
+    }
+
+    with make_progress() as progress:
+        task = progress.add_task("Replacing zeros with NaN...", total=len(selected_fovs))
+
+        def on_progress(current, total, fov_name):
+            progress.update(task, total=total, completed=current,
+                            description=f"Processing {fov_name}")
+
+        result = registry.run_plugin(
+            "nan_zero", store, parameters=params,
+            progress_callback=on_progress,
+        )
+
+    console.print("\n[green]NaN-zero conversion complete[/green]")
+    console.print(f"  FOVs processed: {result.custom_outputs.get('fovs_processed', '0')}")
+    derived_ids = result.custom_outputs.get("derived_fov_ids")
+    if derived_ids:
+        console.print(f"  Derived FOV IDs: {derived_ids}")
     for w in result.warnings:
         console.print(f"  [yellow]Warning: {w}[/yellow]")
 

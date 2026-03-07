@@ -11,33 +11,33 @@ MetricFunction = Callable[[np.ndarray, np.ndarray], float]
 
 
 def mean_intensity(image: np.ndarray, mask: np.ndarray) -> float:
-    """Average pixel intensity within the cell mask."""
-    return float(np.mean(image[mask]))
+    """Average pixel intensity within the cell mask (NaN-safe)."""
+    return float(np.nanmean(image[mask]))
 
 
 def max_intensity(image: np.ndarray, mask: np.ndarray) -> float:
-    """Maximum pixel intensity within the cell mask."""
-    return float(np.max(image[mask]))
+    """Maximum pixel intensity within the cell mask (NaN-safe)."""
+    return float(np.nanmax(image[mask]))
 
 
 def min_intensity(image: np.ndarray, mask: np.ndarray) -> float:
-    """Minimum pixel intensity within the cell mask."""
-    return float(np.min(image[mask]))
+    """Minimum pixel intensity within the cell mask (NaN-safe)."""
+    return float(np.nanmin(image[mask]))
 
 
 def integrated_intensity(image: np.ndarray, mask: np.ndarray) -> float:
-    """Total (summed) pixel intensity within the cell mask."""
-    return float(np.sum(image[mask]))
+    """Total (summed) pixel intensity within the cell mask (NaN-safe)."""
+    return float(np.nansum(image[mask]))
 
 
 def std_intensity(image: np.ndarray, mask: np.ndarray) -> float:
-    """Standard deviation of pixel intensity within the cell mask."""
-    return float(np.std(image[mask]))
+    """Standard deviation of pixel intensity within the cell mask (NaN-safe)."""
+    return float(np.nanstd(image[mask]))
 
 
 def median_intensity(image: np.ndarray, mask: np.ndarray) -> float:
-    """Median pixel intensity within the cell mask."""
-    return float(np.median(image[mask]))
+    """Median pixel intensity within the cell mask (NaN-safe)."""
+    return float(np.nanmedian(image[mask]))
 
 
 def area(image: np.ndarray, mask: np.ndarray) -> float:
