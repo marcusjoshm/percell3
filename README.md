@@ -123,6 +123,27 @@ Sub-menus (Edit, Query, Measure, Workflow) loop after completing an action so yo
 - Scope filter: all scopes, whole cell only, inside mask only, outside mask only
 - Particle metric filter: area, perimeter, circularity, intensity metrics
 - When exporting both, creates `output.csv` + `output_particles.csv`
+- **Threshold pair filter** — optional post-export step that drops rows where a selected channel's `area_mask_inside` is zero, then keeps only cell_ids with exactly 2 remaining rows (one per threshold). Useful for paired P-body + dilute phase analyses.
+
+### Workflows (Menu 7)
+
+**Particle Analysis** — Segment → measure → threshold → export pipeline.
+
+**Decapping Sensor** — 11-step pipeline for decapping sensor phospho-mutant analysis:
+
+1. Grouped thresholding on original FOVs (P-body detection)
+2. Split-halo condensate analysis → keep dilute phase
+3. Auto-assign segmentation to dilute FOVs
+4. Grouped thresholding on dilute FOVs
+5. Split-halo again → keep 2nd dilute phase
+6. Auto-assign segmentation to 2nd dilute FOVs
+7. Grouped thresholding on 2nd dilute FOVs (dilute phase detection)
+8. Threshold background subtraction (dilute FOVs as histogram, originals as apply)
+9. Auto-assign segmentation to BG-subtracted FOVs
+10. Assign P-body + DP thresholds to BG-subtracted FOVs with auto-measurement
+11. Export filtered CSV — drops rows with zero `area_mask_inside` for the BG subtraction channel, then keeps only cells with exactly 2 threshold rows (1 P-body + 1 DP)
+
+All parameters (channels, prefixes, sigma, particle size, etc.) are collected upfront before the pipeline runs.
 
 ### Plugins (Menu 8)
 
