@@ -403,7 +403,7 @@ def _data_menu(state: MenuState) -> None:
 def _workflows_menu(state: MenuState) -> None:
     Menu("WORKFLOWS", [
         MenuItem("1", "Particle analysis", "Segment → measure → threshold → export", _particle_workflow),
-        MenuItem("2", "Decapping sensor", "10-step decapping sensor pipeline", _decapping_sensor_workflow),
+        MenuItem("2", "Decapping sensor", "11-step decapping sensor pipeline", _decapping_sensor_workflow),
     ], state).run()
     raise _MenuCancel()
 
@@ -3865,6 +3865,104 @@ def _combine_masks(state: MenuState) -> None:
         console.print(f"[red]Combine failed:[/red] {e}")
 
 
+def _offer_threshold_dedup_filter(
+    store: "ExperimentStore",
+    csv_path: Path,
+    *,
+    channels: list[str] | None,
+    metrics: list[str] | None,
+    scope: str | None,
+    fov_ids: list[int] | None,
+) -> None:
+    """Optionally filter an exported CSV to paired thresholds per cell.
+
+    After a normal CSV export, this asks whether the user wants to filter
+    rows by a channel's mask_inside area.  Rows where the selected channel's
+    ``area_mask_inside`` is zero are dropped, then only cell_ids that appear
+    exactly twice (one P-body + one DP threshold) are kept.
+    """
+    import pandas as pd
+
+    # Need threshold data and mask_inside scope to filter
+    pivot = store.get_measurement_pivot(
+        channels=channels, metrics=metrics, scope=scope,
+        include_cell_info=True, fov_ids=fov_ids,
+    )
+    if pivot.empty or "threshold_name" not in pivot.columns:
+        return
+
+    threshold_names = sorted(
+        pivot["threshold_name"].dropna().unique().tolist()
+    )
+    threshold_names = [n for n in threshold_names if n]
+    if len(threshold_names) < 2:
+        return
+
+    # Find area_mask_inside columns and extract channel names
+    area_cols = [c for c in pivot.columns if c.endswith("_area_mask_inside")]
+    if not area_cols:
+        return
+
+    console.print("\n[bold]Threshold pair filter:[/bold]")
+    console.print("  [dim]Drop rows where a channel's mask_inside area is zero,[/dim]")
+    console.print("  [dim]then keep only cells with exactly 2 remaining rows[/dim]")
+    console.print("  [dim](one per threshold).[/dim]")
+
+    apply_filter = numbered_select_one(["No", "Yes"], "Apply filter?")
+    if apply_filter != "Yes":
+        return
+
+    # Let user pick the channel to filter on
+    filter_channels = [c.removesuffix("_area_mask_inside") for c in area_cols]
+    if len(filter_channels) == 1:
+        filter_channel = filter_channels[0]
+        console.print(f"  [dim](auto-selected channel: {filter_channel})[/dim]")
+    else:
+        console.print("\n[bold]Filter channel:[/bold]")
+        filter_channel = numbered_select_one(filter_channels, "Channel")
+
+    area_col = f"{filter_channel}_area_mask_inside"
+
+    # Drop rows where area_mask_inside is zero
+    nonzero = pivot[pivot[area_col] > 0].copy()
+
+    # Keep cell_ids that appear exactly twice
+    cell_counts = nonzero["cell_id"].value_counts()
+    paired_cells = set(cell_counts[cell_counts == 2].index)
+    filtered = nonzero[nonzero["cell_id"].isin(paired_cells)].copy()
+
+    total_cells = pivot["cell_id"].nunique()
+    kept_cells = len(paired_cells)
+    dropped_cells = total_cells - kept_cells
+
+    console.print(f"\n  Filter channel:  {filter_channel}")
+    console.print(f"  Total cells:     {total_cells}")
+    console.print(f"  Kept cells:      {kept_cells} (paired)")
+    console.print(f"  Dropped cells:   {dropped_cells}")
+
+    # Save alongside original with _filtered suffix
+    filtered_path = csv_path.with_name(
+        f"{csv_path.stem}_filtered{csv_path.suffix}"
+    )
+    if filtered_path.exists():
+        if numbered_select_one(["No", "Yes"], "Filtered file exists. Overwrite?") != "Yes":
+            console.print("[yellow]Filter cancelled.[/yellow]")
+            return
+
+    provenance = store._get_config_provenance()
+    with open(filtered_path, "w") as f:
+        for line in provenance:
+            f.write(line + "\n")
+        f.write(
+            f"# Filtered on {area_col} > 0,"
+            f" paired cell_ids"
+            f" ({kept_cells}/{total_cells} cells)\n"
+        )
+        filtered.to_csv(f, index=False)
+
+    console.print(f"[green]Exported filtered CSV to {filtered_path}[/green]")
+
+
 def _export_csv(state: MenuState) -> None:
     """Interactively export measurements to CSV."""
     store = state.require_experiment()
@@ -4022,6 +4120,15 @@ def _export_csv(state: MenuState) -> None:
             console.print(f"[green]Exported particle data to {particle_path}[/green]")
     except OSError as exc:
         console.print(f"[red]Export failed:[/red] {exc}")
+        return
+
+    # --- Optional threshold deduplication filter ---
+    if include_cells:
+        _offer_threshold_dedup_filter(
+            store, out_path,
+            channels=ch_list, metrics=met_list, scope=scope_val,
+            fov_ids=fov_ids,
+        )
 
 
 def _export_prism(state: MenuState) -> None:
@@ -4475,7 +4582,7 @@ def _assign_original_seg_to_derived(
 
 
 def _decapping_sensor_workflow(state: MenuState) -> None:
-    """10-step decapping sensor pipeline.
+    """11-step decapping sensor pipeline.
 
     Steps:
       1. Grouped thresholding on original FOVs (interactive napari)
@@ -4488,6 +4595,7 @@ def _decapping_sensor_workflow(state: MenuState) -> None:
       8. BG subtraction (step 5 FOVs as histogram, originals as apply)
       9. Auto-assign original segmentation to step 8 FOVs
      10. Assign thresholds (all step 1 + matching step 7) to step 8 FOVs
+     11. Export filtered CSV (1 P-body + 1 DP per cell)
     """
     from percell3.plugins.registry import PluginRegistry
 
@@ -4526,8 +4634,8 @@ def _decapping_sensor_workflow(state: MenuState) -> None:
 
     # ── Upfront Parameter Collection ─────────────────────────────────
     console.print("\n[bold]DECAPPING SENSOR WORKFLOW[/bold]")
-    console.print("[dim]10-step pipeline: threshold → split-halo → threshold → "
-                  "split-halo → threshold → BG subtraction → assign[/dim]\n")
+    console.print("[dim]11-step pipeline: threshold → split-halo → threshold → "
+                  "split-halo → threshold → BG subtraction → assign → export[/dim]\n")
 
     # FOV selection
     console.print("[bold]Select FOVs to process:[/bold]")
@@ -5018,6 +5126,74 @@ def _decapping_sensor_workflow(state: MenuState) -> None:
     console.print(f"\n[green]Step 10 complete.[/green] "
                   f"Threshold assignments: {threshold_assignments}")
 
+    # ── STEP 11: Export filtered CSV ─────────────────────────────────
+    console.print(f"\n[bold]{'='*60}[/bold]")
+    console.print("[bold]STEP 11: Export filtered measurements CSV[/bold]")
+    console.print("[dim]Keeping cells with exactly 2 thresholds with "
+                  "non-zero mask_inside area.[/dim]\n")
+
+    filtered_path: Path | None = None
+
+    with console.status("[bold blue]Building measurement pivot..."):
+        pivot = store.get_measurement_pivot(
+            fov_ids=all_bgsub_fov_ids, include_cell_info=True,
+        )
+
+    if pivot.empty:
+        console.print("[yellow]No measurements found for BG-subtracted FOVs.[/yellow]")
+    else:
+        # Use the BG subtraction channel for filtering
+        area_col = f"{bg_channel}_area_mask_inside"
+        if area_col not in pivot.columns:
+            console.print(
+                f"[yellow]Column {area_col} not found — cannot filter.[/yellow]"
+            )
+        else:
+            # Drop rows where the channel's area_mask_inside is zero
+            nonzero = pivot[pivot[area_col] > 0].copy()
+
+            # Keep cell_ids that appear exactly twice (1 P-body + 1 DP)
+            cell_counts = nonzero["cell_id"].value_counts()
+            paired_cells = set(cell_counts[cell_counts == 2].index)
+            filtered = nonzero[nonzero["cell_id"].isin(paired_cells)].copy()
+
+            total_cells = pivot["cell_id"].nunique()
+            kept_cells = len(paired_cells)
+            dropped_cells = total_cells - kept_cells
+
+            console.print(f"  Filter channel:  {bg_channel}")
+            console.print(f"  Total cells:     {total_cells}")
+            console.print(f"  Kept cells:      {kept_cells} (paired)")
+            console.print(f"  Dropped cells:   {dropped_cells}")
+
+            # Save to exports directory
+            exports_dir = store.path / "exports"
+            exports_dir.mkdir(exist_ok=True)
+
+            from datetime import datetime
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filtered_path = (
+                exports_dir / f"filtered_measurements_{timestamp}.csv"
+            )
+
+            provenance = store._get_config_provenance()
+            with open(filtered_path, "w") as f:
+                for line in provenance:
+                    f.write(line + "\n")
+                f.write(
+                    f"# Filtered on {bg_channel}_area_mask_inside > 0,"
+                    f" paired cell_ids"
+                    f" ({kept_cells}/{total_cells} cells)\n"
+                )
+                filtered.to_csv(f, index=False)
+
+            console.print(
+                f"\n[green]Exported filtered CSV to {filtered_path}[/green]"
+            )
+
+    console.print(f"\n[green]Step 11 complete.[/green]")
+
     # ── Final Summary ────────────────────────────────────────────────
     console.print(f"\n[bold]{'='*60}[/bold]")
     console.print("[bold green]Decapping sensor workflow complete![/bold green]")
@@ -5028,6 +5204,8 @@ def _decapping_sensor_workflow(state: MenuState) -> None:
     console.print(f"  Step 1 threshold groups:   {sum(len(v) for v in step1_thresholds.values())}")
     console.print(f"  Step 7 threshold groups:   {sum(len(v) for v in step7_thresholds.values())}")
     console.print(f"  Threshold assignments:     {threshold_assignments}")
+    if filtered_path is not None:
+        console.print(f"  Filtered CSV:              {filtered_path}")
     console.print()
 
 
