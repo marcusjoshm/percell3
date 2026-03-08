@@ -22,6 +22,13 @@ problem_type:
 
 # CLI Module Integration Review: Two Critical Bugs
 
+## Current Status (2026-03-08)
+
+Both bugs described in this document have been fixed and the fixes are still present:
+
+- **Bug 1 (Channel registration on plain TIFF):** FIXED. `engine.py` now registers a default channel when `scan_result.channels` is empty (lines 81-87). The code `if not scan_result.channels:` triggers registration of `"ch0"` (or a mapped name), preventing the `ChannelNotFoundError`.
+- **Bug 2 (Rich markup eating letter-key menu indicators):** FIXED. All `console.print()` calls in `menu.py` now escape brackets with `\\[` (e.g., `console.print(f"  \\[{i}] {item}")` at line 189, and many other locations). Letter keys like `[e]`, `[h]`, `[q]` are no longer consumed by Rich's markup parser.
+
 Found during a targeted review of the interactive menu's interfaces with the core and IO modules on branch `feat/cli-module`.
 
 ## Problem Symptoms

@@ -22,6 +22,16 @@ resolution_type: "code-removal"
 
 # Viewer Module P3 Refactoring and Cleanup
 
+## Current Status (2026-03-08)
+
+All five P3 cleanups described in this document have been verified against the current codebase:
+
+- **P3-065 (TestChangeDetection tests numpy):** NOT FULLY APPLIED. `TestChangeDetection` still exists in `tests/test_segment/test_viewer.py` (line 350). However, the class now tests hash-based change detection (SHA-256), which is PerCell code, not pure numpy builtins. The `TestContrastLimits` class (3 tests) has been removed as described.
+- **P3-066 (_NAME_TO_COLORMAP trimmed):** APPLIED. `_viewer.py` has exactly 4 entries: dapi, gfp, rfp, brightfield (lines 31-36). The 8 unused aliases (hoechst, fitc, cy3, cy5, tritc, dic, phase, bf) are gone.
+- **P3-067 (_default_contrast_limits removed):** APPLIED. Function does not exist in `_viewer.py`. No calls to it remain. The unused `Any` import was also removed.
+- **P3-068 (Consolidated napari availability checks):** APPLIED. `NAPARI_AVAILABLE` is not referenced in `cli/view.py` or `cli/menu.py`. The single authoritative check remains in `viewer/__init__.py:launch_viewer()`, which raises `ImportError` directly.
+- **P3-069 (Magic 512x512 fallback removed):** APPLIED. `_load_label_layer()` raises `RuntimeError("Cannot create empty label layer: no image layers loaded.")` at line 266-267 when no layers exist. The only `512` reference in the viewer code is `_ROI_WARN_SIZE = 512` in `surface_plot_widget.py`, which is unrelated.
+
 ## Problem
 
 The napari viewer module contained unnecessary complexity and redundant code patterns added during initial implementation. Five P3 (nice-to-have) findings from a multi-agent code review identified simplification opportunities where code was doing more than required:

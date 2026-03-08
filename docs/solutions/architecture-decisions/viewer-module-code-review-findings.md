@@ -32,6 +32,30 @@ lines_added: 1281
 
 # Code Review: Napari Viewer Module (Module 3b) — 14 Findings
 
+## Current Status (2026-03-08)
+
+The viewer module has been substantially refactored since this review. Status of the three P1 findings:
+
+**P1 Findings:**
+- **P1-057 (Dict key mismatch `"channel_name"` vs `"channel"`):** FIXED. The viewer no longer uses raw dict access on SQL results. `_load_label_layer()` now retrieves the active segmentation via `store.get_fov_config()` and `store.get_segmentation()`, reading `seg.source_channel` from a proper model object (line 248 of `_viewer.py`), not a raw dict `.get("channel_name")`.
+- **P1-056 (Bare `except Exception` swallowing label load errors):** FIXED (for the critical path). Label loading now catches `KeyError` specifically (line 260), not bare `Exception`. When labels are not found, `active_seg_id` is set to `None` and falls through to the empty-layer path safely. However, there is still a bare `except Exception: continue` at line 250 in the segmentation config loop, and several bare `except Exception` catches in `save_edited_labels()` (lines 367, 380, 399, 411) -- these log warnings and are in non-critical post-save paths (cell extraction, auto-measurement), so they do not cause data loss.
+- **P1-058 (Private `_save_edited_labels` / no headless access):** FIXED. `save_edited_labels()` is now a public function exported from `percell3.segment.viewer` (and re-exported from `percell3.segment.__init__`). The `__init__.py` wrapper is explicitly headless-safe and does not require napari. `RoiImporter` and the viewer both share `store_labels_and_cells()` from `roi_import.py` as the common label-save primitive (P2-064 also addressed).
+
+**P2 Findings:**
+- **059 (Unused `import json`):** FIXED. No `import json` in `_viewer.py`.
+- **060 (Display check misses `WAYLAND_DISPLAY`):** FIXED. `_launch()` line 87 now checks both `DISPLAY` and `WAYLAND_DISPLAY`.
+- **061 (`np.unique()` redundant):** FIXED. No `np.unique()` calls remain in the viewer code.
+- **062 (Double label array copy for change detection):** FIXED. Change detection now uses SHA-256 hash (line 258) instead of keeping a full copy, eliminating the ~400MB memory overhead.
+- **063 (`viewer: object` type annotation):** FIXED. No `viewer: object` annotations remain; uses `napari.Viewer` under `TYPE_CHECKING`.
+- **064 (Duplicate label-save logic):** FIXED. Both viewer and `RoiImporter` use `store_labels_and_cells()` from `roi_import.py`.
+
+**P3 Findings:**
+- **065 (TestChangeDetection tests numpy):** STILL PRESENT. `TestChangeDetection` class still exists in `tests/test_segment/test_viewer.py` (line 350).
+- **066 (_NAME_TO_COLORMAP over-populated):** FIXED. Trimmed to 4 entries (dapi, gfp, rfp, brightfield).
+- **067 (_default_contrast_limits duplicates napari):** FIXED. Function removed entirely.
+- **068 (Redundant napari availability checks):** FIXED. `NAPARI_AVAILABLE` is no longer referenced in `cli/view.py` or `cli/menu.py`. The authoritative check is in `viewer/__init__.py:launch_viewer()`.
+- **069 (Magic 512x512 fallback shape):** FIXED. Replaced with explicit `RuntimeError` when no image layers are loaded (line 266).
+
 ## Problem Statement
 
 A comprehensive code review was performed on the napari viewer integration for PerCell 3 (Module 3b, branch `feat/napari-viewer`). The module adds interactive segmentation label viewing and editing via napari, with automatic save-back to ExperimentStore. The review covered 11 files (~1281 lines added) across the viewer subpackage, CLI command, and interactive menu integration.

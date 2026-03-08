@@ -36,6 +36,16 @@ related_todos:
 
 # CLI Dual-Mode Integration Review Fixes
 
+## Current Status (2026-03-08)
+
+All five fixes described in this document have been verified as applied and still present in the codebase:
+
+- **Fix 1 (Variable shadowing in scanner.py):** APPLIED. `scanner.py` uses `discovered: list[DiscoveredFile]` (line 61), not `files`, eliminating the parameter shadowing.
+- **Fix 2 (Pass `scan_result` to avoid double-scan):** APPLIED. `_run_import()` in `import_cmd.py` accepts `scan_result: ScanResult | None = None` (line 188) and skips rescanning when provided. The menu's `_import_images()` passes its pre-scanned result through (line 1371 of `menu.py`).
+- **Fix 3 (CLI tests for `--auto-conditions`):** STATUS UNCLEAR. The `--auto-conditions` flag is no longer present in `import_cmd.py` -- the auto-import now uses `build_auto_assignments()` from `import_cmd.py` which auto-detects conditions from file group tokens without a separate flag. The `detect_conditions()` heuristic from `io/conditions.py` has been removed entirely.
+- **Fix 4 (`--files` CLI flag):** APPLIED. `import_cmd.py` has `--files` option (line 46) with `multiple=True, type=click.Path(exists=True)`.
+- **Fix 5 (Type annotation for `_parse_channel_maps`):** APPLIED. Returns `list[ChannelMapping]` (line 461 of `import_cmd.py`).
+
 ## Problem Symptom
 
 After implementing a multi-condition import workflow with file picker support across PerCell 3's dual-mode CLI (interactive menu + Click commands), a multi-agent code review identified 5 issues at the CLI-IO module boundary:

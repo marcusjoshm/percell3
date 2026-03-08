@@ -10,6 +10,24 @@ status: resolved
 
 # CLI Module — Build Patterns and Code Review Findings
 
+## Current Status (2026-03-08)
+
+The CLI module has evolved significantly since this review. Status of each finding:
+
+**P2 Findings:**
+- **016 (Eager imports / startup latency):** PARTIALLY FIXED. `utils.py` now imports `ExperimentStore` under `TYPE_CHECKING` only. CLI submodules import domain modules (core, io, segment) inside function bodies, not at top level. However, `_register_commands()` in `main.py` is still called at module level (line 58), importing all CLI submodule files eagerly. The `LazyGroup` pattern was not implemented, but since CLI submodules themselves defer heavy imports, the practical impact is much smaller than originally described.
+- **017 (Menu reimplements business logic / 404 LOC duplication):** FIXED. The menu was completely rewritten with a `Menu`/`MenuItem` dataclass-based system (`menu_system.py`). Import uses `_import_images()` which delegates to shared `_run_import()`, `show_file_group_table()`, and `build_file_groups()` from `import_cmd.py`. The table-first UI was implemented in the menu, sharing infrastructure with CLI commands.
+- **018 (Redundant error handling in create.py):** FIXED. No inner `try/except ExperimentError` exists in `create.py` anymore.
+- **019 (Type safety issues):** PARTIALLY FIXED. `MenuItem` is now a proper `@dataclass(frozen=True)` in `menu_system.py` (not a raw tuple). `_parse_channel_maps()` now returns `list[ChannelMapping]` (not bare `list`). `_PRESETS` uses a `WorkflowPreset` dataclass. However, `error_handler` still uses `Callable[..., Any]` without `ParamSpec`.
+- **020 (Dead and unreachable code):** FIXED. No `pragma: no cover` markers remain in CLI files. `import json` removed from viewer. Dead imports cleaned up.
+- **021 (Export command missing UX):** FIXED. Export now has `--overwrite` flag with protection, `--channels`/`--metrics` filtering, and `expanduser()` handling.
+
+**P3 Findings:**
+- **022 (Query output format boilerplate):** FIXED. `format_output()` is a shared function in `query.py`, used by workflow list as well.
+- **023 (Workflow list has no --format):** FIXED. `workflow list` now supports `--format table|json|csv`.
+- **024 (Bare percell3 launches menu silently):** FIXED. `_is_interactive()` now checks `sys.stdin.isatty()` and shows help for non-interactive callers.
+- **025 (Unfiltered exception messages):** STILL PRESENT. `error_handler` in `utils.py` still prints raw `str(e)`.
+
 ## Problem Statement
 
 PerCell 3 needed a user-facing CLI (Module 7) to expose the three completed modules (Core, IO, Workflow) for interactive testing. The CLI provides a dual-mode interface: an interactive Rich menu when launched with no arguments, and direct Click subcommands when arguments are provided. After building the module (10 source files, ~1,100 LOC, 48 tests), a 6-agent parallel code review identified 10 findings (6 P2, 4 P3) covering startup performance, logic duplication, type safety, and agent-hostile patterns.
