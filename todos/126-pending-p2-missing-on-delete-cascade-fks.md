@@ -6,47 +6,58 @@ tags: [code-review, schema, data-integrity]
 dependencies: []
 ---
 
-# Missing ON DELETE CASCADE on most foreign keys
+# Missing ON DELETE CASCADE on 5 remaining foreign keys
 
 ## Problem Statement
 
-Only 3 of 15+ foreign key relationships in the schema have `ON DELETE CASCADE`. The rest require manual cascade deletion which is error-prone and has already caused stale data bugs (e.g., stale particles after re-thresholding).
+Most foreign keys now have `ON DELETE CASCADE` or `ON DELETE SET NULL`, but 5 FKs still have no ON DELETE clause. These are reference-type relationships where cascade deletion may not be appropriate, but the lack of explicit policy means SQLite's default RESTRICT behavior applies, which could block legitimate deletions.
 
 ## Findings
 
 - **Found by:** data-integrity-guardian
-- Tables with CASCADE: `fov_conditions`, `fov_status_cache`, `measurements` (on cell_id)
-- Tables WITHOUT CASCADE: `cells.fov_id`, `cells.segmentation_run_id`, `particles.cell_id`, `particles.threshold_run_id`, `threshold_runs.channel_id`, `segmentation_runs.channel_id`, `analysis_runs.channel_id`, `group_tags.cell_id`, etc.
-- Manual cascade deletion in `delete_fov()` and `delete_stale_particles_for_fov_channel()` must be kept in sync with schema changes
-- SQLite requires `PRAGMA foreign_keys = ON` for CASCADE to work (already enabled in ExperimentStore)
+- **Verified:** 2026-03-08 — schema substantially improved since original audit
+
+### FKs WITH explicit ON DELETE (18 total — all good):
+All critical data FKs now have CASCADE or SET NULL, including `cells.fov_id`, `cells.segmentation_id`, `measurements.cell_id`, `particles.fov_id`, `particles.threshold_id`, `cell_tags.cell_id`, `fov_tags.*`, `fov_status_cache.fov_id`, `fov_config.*`, `analysis_config.experiment_id`, `segmentations.source_fov_id` (SET NULL), `thresholds.source_fov_id` (SET NULL).
+
+### FKs WITHOUT ON DELETE (5 remaining):
+1. `fovs.condition_id -> conditions(id)` — no ON DELETE (RESTRICT by default)
+2. `fovs.bio_rep_id -> bio_reps(id)` — no ON DELETE (RESTRICT by default)
+3. `fovs.timepoint_id -> timepoints(id)` — no ON DELETE (RESTRICT by default)
+4. `measurements.channel_id -> channels(id)` — no ON DELETE (RESTRICT by default)
+5. `cell_tags.tag_id -> tags(id)` — no ON DELETE (RESTRICT by default)
+
+**Note:** These 5 are arguably correct as RESTRICT — deleting a condition/bio_rep/timepoint/channel/tag should probably be blocked if data references it. However, the policy should be made explicit.
+
+- `delete_stale_particles_for_fov_channel()` has been removed; replaced with simpler `delete_particles_for_fov()`, `delete_particles_for_threshold()`, `delete_particles_for_fov_threshold()`
+- `delete_cells_for_fov()` still has redundant manual cascade DELETEs (see todo 142)
 
 ## Proposed Solutions
 
-### Solution A: Add CASCADE to critical FKs incrementally (Recommended)
+### Solution A: Make RESTRICT explicit on remaining 5 FKs (Recommended)
 
-Add `ON DELETE CASCADE` to the most important FKs first: `cells.fov_id`, `particles.cell_id`, `particles.threshold_run_id`. This reduces the manual cascade code needed.
+Add explicit `ON DELETE RESTRICT` to the 5 remaining FKs for clarity and self-documentation.
 
-**Pros:** Reduces bug surface, incremental
-**Cons:** Schema migration, need to verify PRAGMA is always on
-**Effort:** Medium
-**Risk:** Low-Medium — need to test CASCADE behavior carefully
+**Pros:** Self-documenting, no behavioral change
+**Cons:** Schema migration (minor)
+**Effort:** Small
+**Risk:** Very Low
 
-### Solution B: Full CASCADE migration
+### Solution B: Add CASCADE to `cell_tags.tag_id`
 
-Add CASCADE to all FKs at once.
+The one FK where CASCADE might be preferable — deleting a tag should remove its associations.
 
-**Pros:** Complete solution
-**Cons:** Large migration, higher risk
-**Effort:** Large
-**Risk:** Medium
+**Pros:** Allows clean tag deletion
+**Cons:** Schema migration
+**Effort:** Small
+**Risk:** Low
 
 ## Acceptance Criteria
 
-- [ ] Critical FKs have ON DELETE CASCADE
-- [ ] Manual cascade code simplified or removed
-- [ ] PRAGMA foreign_keys = ON verified in all connection paths
+- [ ] All 5 remaining FKs have explicit ON DELETE policy
+- [ ] `delete_cells_for_fov()` redundant manual cascade removed (see todo 142)
+- [ ] PRAGMA foreign_keys = ON verified in all connection paths (already done)
 
 ## Technical Details
 
-- **File:** `src/percell3/core/schema.py` — FK definitions
-- **File:** `src/percell3/core/queries.py` — manual cascade functions
+- **File:** `src/percell3/core/schema.py` — FK definitions (lines 56-58, 116, 184)

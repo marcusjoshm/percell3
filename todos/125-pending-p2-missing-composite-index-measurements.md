@@ -1,9 +1,10 @@
 ---
-status: pending
+status: complete
 priority: p2
 issue_id: "125"
 tags: [code-review, schema, performance]
 dependencies: []
+resolution: "Composite index idx_measurements_cell_channel_scope ON measurements(cell_id, channel_id, scope) now exists in schema.py (line 229-230). Verified 2026-03-08."
 ---
 
 # Missing composite index on measurements(cell_id, channel_id, scope)
