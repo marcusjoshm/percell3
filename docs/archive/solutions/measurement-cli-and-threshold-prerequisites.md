@@ -7,6 +7,8 @@ tags: [measurement, thresholding, cli, dependency]
 severity: blocking
 ---
 
+> **Resolved: auto-measurement in layer-based architecture eliminated this gap**
+
 # Measurement CLI Gap Blocks Thresholding Workflow
 
 ## Problem

@@ -19,6 +19,8 @@ components:
 problem_type: merge_conflict_resolution
 ---
 
+> **Historical: merge conflicts resolved, kept for multi-branch strategy reference**
+
 # Merge Conflict Resolution: napari-viewer + data-model-bio-rep-fov
 
 ## Problem Statement
