@@ -8,10 +8,10 @@ status: decided
 
 ## What We're Building
 
-A CLI menu workflow ("Workflows > Decapping Sensor") that orchestrates a 10-step
+A CLI menu workflow ("Workflows > Decapping Sensor") that orchestrates an 11-step
 pipeline for decapping sensor analysis. The workflow automates segmentation
-assignment, FOV matching, threshold assignment, and condensed-phase cleanup
-between interactive thresholding and plugin steps.
+assignment, FOV matching, threshold assignment, condensed-phase cleanup, and
+filtered CSV export between interactive thresholding and plugin steps.
 
 ### The Pipeline
 
@@ -29,6 +29,7 @@ Starting from a fully segmented dataset (FOVs with cellular segmentation):
 | 8 | BG subtraction (step 7 FOVs as histogram, originals as apply) | No | BG-subtracted FOVs |
 | 9 | Assign original segmentation to step 8 FOVs | Auto | Config matrix updated |
 | 10 | Assign thresholds to step 8 FOVs | Auto | Each BG-sub FOV gets step 7 threshold + ALL step 1 groups |
+| 11 | Export filtered CSV | Auto | Drops rows where area_mask_inside == 0, keeps cells with exactly 2 threshold rows (1 P-body + 1 DP) |
 
 ### Step 10 Detail
 

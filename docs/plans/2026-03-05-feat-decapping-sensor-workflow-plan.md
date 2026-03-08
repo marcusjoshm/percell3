@@ -8,18 +8,18 @@ date: 2026-03-05
 
 ## Overview
 
-Add a CLI menu workflow ("Workflows > Decapping sensor") that orchestrates a 10-step
+Add a CLI menu workflow ("Workflows > Decapping sensor") that orchestrates an 11-step
 pipeline for decapping sensor analysis. The workflow automates segmentation/threshold
-assignment, FOV matching, condensed-phase cleanup, and BG subtraction pairing between
-interactive thresholding and plugin steps.
+assignment, FOV matching, condensed-phase cleanup, BG subtraction pairing, and filtered
+CSV export between interactive thresholding and plugin steps.
 
 ## Problem Statement
 
-The decapping sensor analysis requires 10 manual steps with complex FOV matching
+The decapping sensor analysis requires 11 steps with complex FOV matching
 between steps: grouped thresholding, two rounds of split-halo dilute-phase extraction,
-background subtraction, and cross-step threshold assignment. Users currently perform
-each step manually via the CLI menu, manually assigning segmentations and thresholds
-between steps. This is error-prone and time-consuming.
+background subtraction, cross-step threshold assignment, and filtered CSV export.
+Users currently perform each step manually via the CLI menu, manually assigning
+segmentations and thresholds between steps. This is error-prone and time-consuming.
 
 ## Proposed Solution
 
@@ -104,6 +104,11 @@ _decapping_sensor_workflow(state: MenuState) -> None
 ├── STEP 10: Auto-assign thresholds to step 8 FOVs
 │   ├── Each BG-sub FOV gets: matching step 7 threshold
 │   └── + ALL step 1 thresholds for the corresponding original FOV
+│
+├── STEP 11: Export filtered measurements CSV
+│   ├── Build measurement pivot for all BG-subtracted FOVs
+│   ├── Drop rows where {bg_channel}_area_mask_inside == 0
+│   └── Keep only cell_ids with exactly 2 remaining rows (1 P-body + 1 DP)
 │
 └── Summary printout
 ```
@@ -291,8 +296,13 @@ def _assign_original_seg_to_derived(
   - [x] Each BG-sub FOV gets: its matching step 7 threshold (by name match in display_name)
   - [x] Call `on_config_changed()` for each BG-sub FOV
 
-### Phase 5: Summary + Tests
+### Phase 5: Step 11 (Filtered CSV Export) + Summary + Tests
 
+- [x] **Step 11**: Export filtered measurements CSV for BG-subtracted FOVs
+  - [x] Build measurement pivot for all BG-subtracted FOVs
+  - [x] Drop rows where `{bg_channel}_area_mask_inside == 0` (no signal in mask)
+  - [x] Keep only cell_ids with exactly 2 remaining rows (1 P-body + 1 DP)
+  - [x] Write provenance-annotated CSV to `exports/` directory
 - [x] Print final summary (FOVs processed, thresholds created, assignments made)
 - [x] Run existing test suite to verify no regressions
 
@@ -308,6 +318,7 @@ def _assign_original_seg_to_derived(
 - [ ] Segmentation auto-assigned from original FOVs at steps 3, 6, 9
 - [ ] Step 8 auto-pairs histogram and apply FOVs correctly
 - [ ] Step 10 assigns ALL step 1 thresholds + matching step 7 threshold to each BG-sub FOV
+- [ ] Step 11 exports filtered CSV: drops zero-area rows and keeps only paired cells
 - [ ] Final summary shows what was created
 
 ### Non-Functional Requirements
