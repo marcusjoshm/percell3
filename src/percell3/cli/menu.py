@@ -449,6 +449,8 @@ def _make_plugin_runner(registry, plugin_name: str):
             _run_threshold_bg_subtraction(state, registry)
         elif plugin_name == "nan_zero":
             _run_nan_zero(state, registry)
+        elif plugin_name == "condensate_partitioning_ratio":
+            _run_condensate_partitioning_ratio(state, registry)
         else:
             # Generic plugin runner for future plugins
             _run_generic_plugin(state, registry, plugin_name)
@@ -1141,6 +1143,148 @@ def _run_condensate_analysis(state: MenuState, registry) -> None:
     console.print()
 
 
+def _run_condensate_partitioning_ratio(state: MenuState, registry) -> None:
+    """Interactive handler for condensate partitioning ratio plugin."""
+    store = state.require_experiment()
+
+    plugin = registry.get_plugin("condensate_partitioning_ratio")
+    errors = plugin.validate(store)
+    if errors:
+        console.print(f"\n[red]Cannot run condensate partitioning ratio:[/red]")
+        for e in errors:
+            console.print(f"  - {e}")
+        return
+
+    channels = store.get_channels()
+    ch_names = [ch.name for ch in channels]
+
+    # Step 1: Measurement channel
+    console.print("\n[bold]Step 1: Measurement Channel[/bold]")
+    console.print("  [dim]Select the channel to measure intensities from.[/dim]\n")
+    meas_channel = numbered_select_one(ch_names, "Measurement channel")
+
+    # Step 2: Particle mask channel
+    thresholds = store.get_thresholds()
+    particle_channels = sorted({tr.source_channel for tr in thresholds if tr.source_channel})
+    if not particle_channels:
+        console.print("\n[red]No particle masks found.[/red]")
+        console.print("[dim]Run 'Grouped intensity thresholding' first to generate particle masks.[/dim]")
+        return
+
+    console.print("\n[bold]Step 2: Particle Mask[/bold]")
+    console.print("  [dim]Select the thresholded particle mask defining condensates.[/dim]\n")
+    particle_channel = numbered_select_one(particle_channels, "Particle mask")
+
+    # Step 3: Gap pixels
+    console.print("\n[bold]Step 3: Gap Pixels[/bold]")
+    console.print("  [dim]Gap (in pixels) between particle edge and measurement ring.[/dim]")
+    gap_str = menu_prompt("Gap pixels", default="3")
+    try:
+        gap_pixels = int(gap_str)
+    except ValueError:
+        console.print("[yellow]Invalid number, using default of 3.[/yellow]")
+        gap_pixels = 3
+
+    # Step 4: Ring pixels
+    console.print("\n[bold]Step 4: Ring Pixels[/bold]")
+    console.print("  [dim]Width of the dilute-phase measurement ring (in pixels).[/dim]")
+    ring_str = menu_prompt("Ring pixels", default="2")
+    try:
+        ring_pixels = int(ring_str)
+    except ValueError:
+        console.print("[yellow]Invalid number, using default of 2.[/yellow]")
+        ring_pixels = 2
+
+    # Step 5: Min ring pixels
+    console.print("\n[bold]Step 5: Min Ring Pixels[/bold]")
+    console.print("  [dim]Minimum ring area (pixels) required for a valid dilute measurement.[/dim]")
+    min_ring_str = menu_prompt("Min ring pixels", default="10")
+    try:
+        min_ring_pixels = int(min_ring_str)
+    except ValueError:
+        console.print("[yellow]Invalid number, using default of 10.[/yellow]")
+        min_ring_pixels = 10
+
+    # Step 6: FOV selection
+    console.print("\n[bold]Step 6: Select FOVs[/bold]")
+    all_fovs = store.get_fovs()
+    seg_summary = store.get_fov_segmentation_summary()
+    fovs_with_cells = [f for f in all_fovs if seg_summary.get(f.id, (0, None))[0] > 0]
+
+    # Exclude derived FOVs
+    fovs_with_cells = [
+        f for f in fovs_with_cells
+        if not f.display_name.startswith(("condensed_phase_", "dilute_phase_"))
+    ]
+
+    if not fovs_with_cells:
+        console.print("[red]No FOVs with segmented cells.[/red]")
+        return
+
+    _show_fov_status_table(fovs_with_cells, seg_summary)
+    if len(fovs_with_cells) == 1:
+        console.print(f"  [dim](auto-selected: {fovs_with_cells[0].display_name})[/dim]")
+        selected_fovs = fovs_with_cells
+    else:
+        selected_fovs = _select_fovs_from_table(fovs_with_cells)
+
+    cell_ids = []
+    for fov in selected_fovs:
+        cells_df = store.get_cells(fov_id=fov.id)
+        cell_ids.extend(cells_df["id"].tolist())
+
+    # Step 7: Confirmation
+    console.print(f"\n[bold]Partitioning ratio settings:[/bold]")
+    console.print(f"  Measurement:     {meas_channel}")
+    console.print(f"  Particle mask:   {particle_channel}")
+    console.print(f"  Gap pixels:      {gap_pixels}")
+    console.print(f"  Ring pixels:     {ring_pixels}")
+    console.print(f"  Min ring pixels: {min_ring_pixels}")
+    console.print(f"  FOVs:            {len(selected_fovs)} selected")
+
+    if numbered_select_one(["Yes", "No"], "\nProceed?") != "Yes":
+        console.print("[yellow]Partitioning ratio analysis cancelled.[/yellow]")
+        return
+
+    # Step 8: Run with progress
+    parameters = {
+        "measurement_channel": meas_channel,
+        "particle_channel": particle_channel,
+        "gap_pixels": gap_pixels,
+        "ring_pixels": ring_pixels,
+        "min_ring_pixels": min_ring_pixels,
+    }
+
+    with make_progress() as progress:
+        task = progress.add_task("Partitioning ratio...", total=len(selected_fovs))
+
+        def on_progress(current, total, fov_name):
+            progress.update(task, total=total, completed=current,
+                            description=f"Processing {fov_name}")
+
+        result = registry.run_plugin(
+            "condensate_partitioning_ratio", store,
+            cell_ids=cell_ids, parameters=parameters,
+            progress_callback=on_progress,
+        )
+
+    # Step 9: Summary
+    console.print(f"\n[green]Partitioning ratio analysis complete[/green]")
+    console.print(f"  Cells processed:    {result.cells_processed}")
+    console.print(f"  Particles measured: {result.measurements_written}")
+    csv_outputs = {
+        k: v for k, v in result.custom_outputs.items() if k.startswith("csv_")
+    }
+    if csv_outputs:
+        console.print(f"  CSV files:")
+        for key, path in csv_outputs.items():
+            condition = key.removeprefix("csv_partitioning_")
+            console.print(f"    {condition}: {path}")
+    for w in result.warnings:
+        console.print(f"  [yellow]Warning: {w}[/yellow]")
+    console.print()
+
+
 def _make_viz_runner(registry, plugin_name: str):
     """Create a handler function for a visualization plugin."""
     def handler(state: MenuState) -> None:
@@ -1222,7 +1366,7 @@ def _show_header(state: MenuState) -> None:
     console.print()
     if state.experiment_path:
         name = state.store.name if state.store else ""
-        label = f"{name} ({state.experiment_path})" if name else str(state.experiment_path)
+        label = name if name else str(state.experiment_path)
         console.print(f"  Experiment: [cyan]{label}[/cyan]\n")
     else:
         console.print("  Experiment: [dim]None selected[/dim]\n")
