@@ -15,7 +15,7 @@ import uuid
 # Schema version
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION: str = "5.0.0"
+SCHEMA_VERSION: str = "5.1.0"
 
 # ---------------------------------------------------------------------------
 # Table DDL (topological order — parents before children)
@@ -27,7 +27,7 @@ _TABLE_DDL: tuple[str, ...] = (
     CREATE TABLE IF NOT EXISTS experiments (
         id              BLOB(16) PRIMARY KEY CHECK(length(id) = 16),
         name            TEXT NOT NULL,
-        schema_version  TEXT NOT NULL DEFAULT '5.0.0',
+        schema_version  TEXT NOT NULL DEFAULT '5.1.0',
         config_hash     TEXT,
         created_at      TEXT NOT NULL DEFAULT (datetime('now'))
     )
@@ -137,6 +137,7 @@ _TABLE_DDL: tuple[str, ...] = (
         timepoint_id    BLOB(16) REFERENCES timepoints
                             CHECK(timepoint_id IS NULL
                                   OR length(timepoint_id) = 16),
+        pixel_size_um   REAL,
         created_at      TEXT NOT NULL DEFAULT (datetime('now')),
         CHECK(id != parent_fov_id)
     )

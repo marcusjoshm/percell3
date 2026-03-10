@@ -202,6 +202,71 @@ class TestMeasureFovWhole:
         finally:
             store.close()
 
+    def test_area_um2_with_pixel_size(self, tmp_path: Path) -> None:
+        """When FOV has pixel_size_um, area_um2 measurements are emitted."""
+        store, fov_id, seg_set_id, cell_type_id, channel_ids, pr_id = (
+            _create_store_with_fov(tmp_path)
+        )
+        try:
+            # Set pixel_size_um on the FOV
+            store.db.connection.execute(
+                "UPDATE fovs SET pixel_size_um = ? WHERE id = ?",
+                (0.5, fov_id),
+            )
+            store.db.connection.commit()
+
+            measurer = Measurer()
+            count = measurer.measure_fov_whole(
+                store,
+                fov_id=fov_id,
+                channel_id=channel_ids[0],
+                seg_set_id=seg_set_id,
+                roi_type_id=cell_type_id,
+                pipeline_run_id=pr_id,
+            )
+            # 2 ROIs x (7 metrics + 1 area_um2) = 16
+            assert count == 16
+
+            # Verify area_um2 values
+            measurements = store.db.get_active_measurements(fov_id)
+            area_um2_meas = [
+                m for m in measurements if m["metric"] == "area_um2"
+            ]
+            assert len(area_um2_meas) == 2
+
+            # Each ROI has area=100 pixels (10x10), pixel_size=0.5
+            # area_um2 = 100 * 0.5^2 = 25.0
+            for m in area_um2_meas:
+                assert m["value"] == pytest.approx(25.0)
+        finally:
+            store.close()
+
+    def test_no_area_um2_without_pixel_size(self, tmp_path: Path) -> None:
+        """Without pixel_size_um, no area_um2 measurements are emitted."""
+        store, fov_id, seg_set_id, cell_type_id, channel_ids, pr_id = (
+            _create_store_with_fov(tmp_path)
+        )
+        try:
+            measurer = Measurer()
+            count = measurer.measure_fov_whole(
+                store,
+                fov_id=fov_id,
+                channel_id=channel_ids[0],
+                seg_set_id=seg_set_id,
+                roi_type_id=cell_type_id,
+                pipeline_run_id=pr_id,
+            )
+            # 2 ROIs x 7 metrics = 14 (no area_um2)
+            assert count == 14
+
+            measurements = store.db.get_active_measurements(fov_id)
+            area_um2_meas = [
+                m for m in measurements if m["metric"] == "area_um2"
+            ]
+            assert len(area_um2_meas) == 0
+        finally:
+            store.close()
+
     def test_no_rois_returns_zero(self, tmp_path: Path) -> None:
         """If no ROIs exist, returns 0."""
         percell_dir = tmp_path / "empty.percell"

@@ -127,13 +127,19 @@ class LayerStore:
         fov_hex: str,
         channel_arrays: dict[int, np.ndarray],
         chunks: tuple[int, ...] | None = None,
+        pixel_size_um: float | None = None,
     ) -> str:
         """Write image channels to Zarr with OME-NGFF 0.4 metadata.
+
+        When *pixel_size_um* is provided, the multiscales metadata includes
+        physical scale transforms and axis units in micrometers.
 
         Args:
             fov_hex: Hex string identifier for the FOV.
             channel_arrays: Mapping of channel index to 2D numpy array.
             chunks: Chunk shape for storage. Defaults to array shape.
+            pixel_size_um: Optional pixel size in micrometers for
+                OME-NGFF coordinate transforms.
 
         Returns:
             Relative path to the image group (e.g. ``"zarr/images/{fov_hex}"``).
@@ -156,17 +162,33 @@ class LayerStore:
             )
 
         # Write OME-NGFF 0.4 multiscales metadata
+        if pixel_size_um:
+            axes = [
+                {"name": "y", "type": "space", "unit": "micrometer"},
+                {"name": "x", "type": "space", "unit": "micrometer"},
+            ]
+            transforms = [
+                [{"type": "scale", "scale": [pixel_size_um, pixel_size_um]}]
+            ]
+            datasets = [
+                {"path": str(idx), "coordinateTransformations": transforms[0]}
+                for idx in sorted(channel_arrays.keys())
+            ]
+        else:
+            axes = [
+                {"name": "y", "type": "space"},
+                {"name": "x", "type": "space"},
+            ]
+            datasets = [
+                {"path": str(idx)}
+                for idx in sorted(channel_arrays.keys())
+            ]
+
         multiscales = [
             {
                 "version": "0.4",
-                "axes": [
-                    {"name": "y", "type": "space"},
-                    {"name": "x", "type": "space"},
-                ],
-                "datasets": [
-                    {"path": str(idx)}
-                    for idx in sorted(channel_arrays.keys())
-                ],
+                "axes": axes,
+                "datasets": datasets,
                 "name": fov_hex,
             }
         ]

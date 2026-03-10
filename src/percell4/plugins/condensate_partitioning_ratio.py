@@ -32,7 +32,25 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-PARTITION_CSV_COLUMNS = [
+PARTITION_CSV_COLUMNS_BASE = [
+    "particle_id",
+    "roi_id",
+    "roi_label",
+    "fov_id",
+    "fov_name",
+    "condition",
+    "bio_rep",
+    "threshold_name",
+    "condensate_area_pixels",
+    "condensate_mean_intensity",
+    "condensate_integrated_intensity",
+    "dilute_area_pixels",
+    "dilute_mean_intensity",
+    "dilute_integrated_intensity",
+    "partitioning_ratio",
+]
+
+PARTITION_CSV_COLUMNS_UM2 = [
     "particle_id",
     "roi_id",
     "roi_label",
@@ -51,6 +69,9 @@ PARTITION_CSV_COLUMNS = [
     "dilute_integrated_intensity",
     "partitioning_ratio",
 ]
+
+# Default columns list (with um2 for backward compatibility)
+PARTITION_CSV_COLUMNS = PARTITION_CSV_COLUMNS_UM2
 
 
 class CondensatePartitioningRatioPlugin(AnalysisPlugin):
@@ -124,6 +145,13 @@ class CondensatePartitioningRatioPlugin(AnalysisPlugin):
 
             fov_hex = uuid_to_hex(fov_id)
             fov_name = fov["auto_name"] or "unknown"
+
+            # Get pixel_size_um from FOV record
+            fov_pixel_size_um: float | None = None
+            try:
+                fov_pixel_size_um = fov["pixel_size_um"]
+            except (IndexError, KeyError):
+                pass
 
             if on_progress:
                 on_progress(fov_idx, len(fov_ids), fov_name)
@@ -232,7 +260,9 @@ class CondensatePartitioningRatioPlugin(AnalysisPlugin):
                     condensate_area_pixels = int(particle_mask.sum())
                     condensate_mean = float(np.mean(condensate_pixels))
                     condensate_integrated = float(np.sum(condensate_pixels))
-                    condensate_area_um2 = math.nan  # no pixel_size_um yet
+                    condensate_area_um2: float | None = None
+                    if fov_pixel_size_um is not None:
+                        condensate_area_um2 = condensate_area_pixels * (fov_pixel_size_um ** 2)
 
                     # Ring construction
                     all_other_particles = all_particles_in_crop & ~particle_mask
@@ -254,13 +284,11 @@ class CondensatePartitioningRatioPlugin(AnalysisPlugin):
                         dilute_mean = math.nan
                         dilute_integrated = math.nan
                         partitioning_ratio = math.nan
-                        dilute_area_um2 = math.nan
                     else:
                         dilute_pixels_arr = meas_crop[ring].astype(np.float64)
                         dilute_area_pixels = ring_area
                         dilute_mean = float(np.mean(dilute_pixels_arr))
                         dilute_integrated = float(np.sum(dilute_pixels_arr))
-                        dilute_area_um2 = math.nan
 
                         if dilute_mean == 0.0:
                             partitioning_ratio = math.nan
@@ -268,7 +296,11 @@ class CondensatePartitioningRatioPlugin(AnalysisPlugin):
                         else:
                             partitioning_ratio = condensate_mean / dilute_mean
 
-                    rows_by_condition[condition_name].append({
+                    dilute_area_um2: float | None = None
+                    if fov_pixel_size_um is not None:
+                        dilute_area_um2 = dilute_area_pixels * (fov_pixel_size_um ** 2)
+
+                    row_dict: dict[str, Any] = {
                         "particle_id": int(particle_label),
                         "roi_id": uuid_to_str(roi["id"]),
                         "roi_label": label_val,
@@ -278,15 +310,20 @@ class CondensatePartitioningRatioPlugin(AnalysisPlugin):
                         "bio_rep": "",
                         "threshold_name": "",
                         "condensate_area_pixels": condensate_area_pixels,
-                        "condensate_area_um2": condensate_area_um2,
                         "condensate_mean_intensity": condensate_mean,
                         "condensate_integrated_intensity": condensate_integrated,
                         "dilute_area_pixels": dilute_area_pixels,
-                        "dilute_area_um2": dilute_area_um2,
                         "dilute_mean_intensity": dilute_mean,
                         "dilute_integrated_intensity": dilute_integrated,
                         "partitioning_ratio": partitioning_ratio,
-                    })
+                    }
+
+                    # Include _um2 columns only when pixel_size_um is available
+                    if fov_pixel_size_um is not None:
+                        row_dict["condensate_area_um2"] = condensate_area_um2
+                        row_dict["dilute_area_um2"] = dilute_area_um2
+
+                    rows_by_condition[condition_name].append(row_dict)
                     particles_processed += 1
 
         if on_progress:
@@ -333,8 +370,14 @@ class CondensatePartitioningRatioPlugin(AnalysisPlugin):
             )
             csv_path = exports_dir / filename
 
+            # Determine columns: include _um2 only if any row has them
+            has_um2 = any("condensate_area_um2" in r for r in rows)
+            columns = PARTITION_CSV_COLUMNS_UM2 if has_um2 else PARTITION_CSV_COLUMNS_BASE
+
             with open(csv_path, "w", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=PARTITION_CSV_COLUMNS)
+                writer = csv.DictWriter(
+                    f, fieldnames=columns, extrasaction="ignore",
+                )
                 writer.writeheader()
                 writer.writerows(rows)
 

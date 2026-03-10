@@ -5,10 +5,13 @@ from __future__ import annotations
 import sqlite3
 
 MIGRATIONS: dict[str, list[str]] = {
-    # "5.0.0->5.1.0": ["ALTER TABLE ...", "UPDATE experiments SET schema_version = '5.1.0'"],
+    "5.0.0->5.1.0": [
+        "ALTER TABLE fovs ADD COLUMN pixel_size_um REAL",
+        "UPDATE experiments SET schema_version = '5.1.0' WHERE 1=1",
+    ],
 }
 
-SCHEMA_VERSION = "5.0.0"
+SCHEMA_VERSION = "5.1.0"
 
 
 def get_schema_version(conn: sqlite3.Connection) -> str:

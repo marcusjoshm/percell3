@@ -34,6 +34,7 @@ class ImportEngine:
         condition_id: bytes | None = None,
         bio_rep_id: bytes | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
+        pixel_sizes: dict[Path, float | None] | None = None,
     ) -> list[bytes]:
         """Import image files as FOVs.
 
@@ -49,6 +50,8 @@ class ImportEngine:
             condition_id: Optional condition UUID to assign to each FOV.
             bio_rep_id: Optional biological replicate UUID.
             on_progress: Optional callback ``(current, total, fov_name)``.
+            pixel_sizes: Optional mapping from source path to pixel size
+                in micrometers (as extracted from TIFF metadata).
 
         Returns:
             List of created FOV IDs (16-byte UUIDs).
@@ -57,11 +60,12 @@ class ImportEngine:
             FileNotFoundError: If a source path does not exist.
         """
         from percell4.core.experiment_store import ExperimentStore  # local import
-        from percell4.io.tiff import read_tiff
+        from percell4.io.tiff import read_tiff, read_tiff_metadata
 
         fov_ids: list[bytes] = []
         exp = store.db.get_experiment()
         total = len(source_paths)
+        pixel_sizes = pixel_sizes or {}
 
         for i, path in enumerate(source_paths):
             fov_name = path.stem
@@ -85,12 +89,23 @@ class ImportEngine:
                 else:
                     channels = {0: image}
 
+            # Extract pixel_size_um from provided mapping or TIFF metadata
+            pixel_size_um: float | None = pixel_sizes.get(path)
+            if pixel_size_um is None:
+                try:
+                    meta = read_tiff_metadata(path)
+                    pixel_size_um = meta.get("pixel_size_um")
+                except Exception:
+                    pass
+
             # Create a UUID for the new FOV
             fov_id = new_uuid()
             fov_hex = uuid_to_hex(fov_id)
 
             # Write pixel data to LayerStore
-            zarr_path = store.layers.write_image_channels(fov_hex, channels)
+            zarr_path = store.layers.write_image_channels(
+                fov_hex, channels, pixel_size_um=pixel_size_um,
+            )
 
             # Insert FOV record in DB
             with store.db.transaction():
@@ -102,6 +117,7 @@ class ImportEngine:
                     auto_name=fov_name,
                     zarr_path=zarr_path,
                     status="pending",
+                    pixel_size_um=pixel_size_um,
                 )
                 store.db.set_fov_status(
                     fov_id,

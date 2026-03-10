@@ -45,6 +45,7 @@ class FovInfo:
     auto_name: str | None = None
     zarr_path: str | None = None
     timepoint_id: TimepointId | None = None
+    pixel_size_um: float | None = None
     display_name: str
 
 

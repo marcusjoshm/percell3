@@ -300,18 +300,19 @@ class ExperimentDB:
         auto_name: str | None = None,
         zarr_path: str | None = None,
         timepoint_id: bytes | None = None,
+        pixel_size_um: float | None = None,
     ) -> int:
         """Insert an FOV record. Returns rowcount."""
         cur = self.connection.execute(
             "INSERT INTO fovs "
             "(id, experiment_id, condition_id, bio_rep_id, parent_fov_id, "
             " derivation_op, derivation_params, status, auto_name, "
-            " zarr_path, timepoint_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " zarr_path, timepoint_id, pixel_size_um) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 id, experiment_id, condition_id, bio_rep_id, parent_fov_id,
                 derivation_op, derivation_params, status, auto_name,
-                zarr_path, timepoint_id,
+                zarr_path, timepoint_id, pixel_size_um,
             ),
         )
         return cur.rowcount

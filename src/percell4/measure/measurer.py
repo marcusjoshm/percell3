@@ -111,6 +111,14 @@ class Measurer:
         image = store.layers.read_image_channel_numpy(fov_hex, channel_index)
         labels = store.layers.read_labels(seg_hex, fov_hex)
 
+        # Check for pixel_size_um on the FOV for calibrated area
+        pixel_size_um: float | None = None
+        if fov_row is not None:
+            try:
+                pixel_size_um = fov_row["pixel_size_um"]
+            except (IndexError, KeyError):
+                pass
+
         bulk_rows: list[tuple] = []
         for roi in rois:
             label_val = roi["label_id"]
@@ -137,6 +145,19 @@ class Measurer:
                     value,
                     pipeline_run_id,
                 ))
+
+                # Emit calibrated area_um2 alongside the area metric
+                if metric_name == "area" and pixel_size_um is not None:
+                    area_um2 = value * (pixel_size_um ** 2)
+                    bulk_rows.append((
+                        new_uuid(),
+                        roi["id"],
+                        channel_id,
+                        "area_um2",
+                        SCOPE_WHOLE_ROI,
+                        area_um2,
+                        pipeline_run_id,
+                    ))
 
         if bulk_rows:
             store.db.add_measurements_bulk(bulk_rows)

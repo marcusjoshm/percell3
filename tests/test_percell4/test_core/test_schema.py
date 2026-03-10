@@ -241,7 +241,34 @@ class TestSchemaCreation:
         create_schema(conn)  # second call
 
     def test_schema_version_constant(self) -> None:
-        assert SCHEMA_VERSION == "5.0.0"
+        assert SCHEMA_VERSION == "5.1.0"
+
+    def test_fovs_has_pixel_size_um_column(self, conn: sqlite3.Connection) -> None:
+        """The fovs table includes a pixel_size_um REAL column."""
+        eid = _make_experiment(conn)
+        fid = new_uuid()
+        conn.execute(
+            "INSERT INTO fovs (id, experiment_id, pixel_size_um) "
+            "VALUES (?, ?, ?)",
+            (fid, eid, 0.325),
+        )
+        row = conn.execute(
+            "SELECT pixel_size_um FROM fovs WHERE id = ?", (fid,)
+        ).fetchone()
+        assert row["pixel_size_um"] == pytest.approx(0.325)
+
+    def test_fovs_pixel_size_um_nullable(self, conn: sqlite3.Connection) -> None:
+        """pixel_size_um accepts NULL."""
+        eid = _make_experiment(conn)
+        fid = new_uuid()
+        conn.execute(
+            "INSERT INTO fovs (id, experiment_id) VALUES (?, ?)",
+            (fid, eid),
+        )
+        row = conn.execute(
+            "SELECT pixel_size_um FROM fovs WHERE id = ?", (fid,)
+        ).fetchone()
+        assert row["pixel_size_um"] is None
 
 
 # ===================================================================
@@ -795,7 +822,7 @@ class TestDefaults:
         row = conn.execute(
             "SELECT schema_version FROM experiments WHERE id = ?", (eid,)
         ).fetchone()
-        assert row["schema_version"] == "5.0.0"
+        assert row["schema_version"] == "5.1.0"
 
     def test_fov_status_default_pending(
         self, conn: sqlite3.Connection

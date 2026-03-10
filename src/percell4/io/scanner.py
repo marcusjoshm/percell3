@@ -7,8 +7,11 @@ Zarr dependencies.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -26,6 +29,7 @@ class FileInfo:
     format: str  # 'tiff', 'lif', 'czi'
     name: str  # stem of filename
     channel_count: int | None = None
+    pixel_size_um: float | None = None
 
 
 # Mapping from extension to format identifier
@@ -79,11 +83,26 @@ def scan_directory(
             continue
 
         fmt = _EXTENSION_FORMAT.get(suffix, suffix.lstrip("."))
+
+        # Extract pixel size from TIFF metadata
+        pixel_size_um: float | None = None
+        if fmt == "tiff":
+            try:
+                from percell4.io.tiff import read_tiff_metadata
+
+                meta = read_tiff_metadata(child)
+                pixel_size_um = meta.get("pixel_size_um")
+            except Exception:
+                logger.debug(
+                    "Could not extract pixel size from %s", child.name
+                )
+
         results.append(
             FileInfo(
                 path=child.resolve(),
                 format=fmt,
                 name=child.stem,
+                pixel_size_um=pixel_size_um,
             )
         )
 

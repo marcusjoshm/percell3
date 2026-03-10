@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
+import tifffile
 
 from percell4.io.scanner import FileInfo, scan_directory
 
@@ -95,3 +97,36 @@ class TestScanDirectory:
 
         results = scan_directory(tmp_path)
         assert len(results) == 2
+
+    def test_pixel_size_um_extracted_from_tiff(self, tmp_path: Path) -> None:
+        """pixel_size_um is populated from TIFF resolution tags."""
+        arr = np.zeros((16, 16), dtype=np.uint8)
+        path = tmp_path / "calibrated.tif"
+        # 10000 pixels/cm = 1 um/pixel
+        tifffile.imwrite(
+            str(path), arr,
+            resolution=(10000, 10000),
+            resolutionunit=tifffile.RESUNIT.CENTIMETER,
+        )
+
+        results = scan_directory(tmp_path, extensions=(".tif",))
+        assert len(results) == 1
+        assert results[0].pixel_size_um == pytest.approx(1.0)
+
+    def test_pixel_size_um_none_without_metadata(self, tmp_path: Path) -> None:
+        """pixel_size_um is None when TIFF has no calibration metadata."""
+        arr = np.zeros((16, 16), dtype=np.uint8)
+        path = tmp_path / "plain.tif"
+        tifffile.imwrite(str(path), arr)
+
+        results = scan_directory(tmp_path, extensions=(".tif",))
+        assert len(results) == 1
+        assert results[0].pixel_size_um is None
+
+    def test_pixel_size_um_none_for_non_tiff(self, tmp_path: Path) -> None:
+        """Non-TIFF files always have pixel_size_um=None."""
+        (tmp_path / "data.lif").write_bytes(b"\x00")
+
+        results = scan_directory(tmp_path, extensions=(".lif",))
+        assert len(results) == 1
+        assert results[0].pixel_size_um is None
