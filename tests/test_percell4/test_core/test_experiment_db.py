@@ -1,0 +1,1060 @@
+"""Tests for percell4.core.experiment_db — ExperimentDB CRUD + transactions."""
+
+from __future__ import annotations
+
+import ast
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from percell4.core.db_types import new_uuid
+from percell4.core.experiment_db import ExperimentDB
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def db_path(tmp_path: Path) -> Path:
+    """Return a path to a temporary database file."""
+    return tmp_path / "test_experiment.db"
+
+
+@pytest.fixture()
+def db(db_path: Path) -> ExperimentDB:
+    """Return an open ExperimentDB instance (auto-closed after test)."""
+    database = ExperimentDB(db_path)
+    database.open()
+    yield database
+    database.close()
+
+
+def _setup_experiment(db: ExperimentDB) -> bytes:
+    """Insert a minimal experiment and return its ID."""
+    eid = new_uuid()
+    db.insert_experiment(eid, "test_experiment")
+    return eid
+
+
+def _setup_condition(db: ExperimentDB, eid: bytes) -> bytes:
+    """Insert a minimal condition and return its ID."""
+    cid = new_uuid()
+    db.insert_condition(cid, eid, "control")
+    return cid
+
+
+def _setup_channel(db: ExperimentDB, eid: bytes, name: str = "GFP") -> bytes:
+    """Insert a minimal channel and return its ID."""
+    chid = new_uuid()
+    db.insert_channel(chid, eid, name)
+    return chid
+
+
+def _setup_roi_type(
+    db: ExperimentDB,
+    eid: bytes,
+    name: str = "cell",
+    parent_type_id: bytes | None = None,
+) -> bytes:
+    """Insert an ROI type definition and return its ID."""
+    rtid = new_uuid()
+    db.insert_roi_type_definition(rtid, eid, name, parent_type_id)
+    return rtid
+
+
+def _setup_fov(
+    db: ExperimentDB,
+    eid: bytes,
+    *,
+    condition_id: bytes | None = None,
+    status: str = "imported",
+) -> bytes:
+    """Insert a minimal FOV and return its ID."""
+    fid = new_uuid()
+    db.insert_fov(fid, eid, condition_id=condition_id, status=status)
+    return fid
+
+
+def _setup_pipeline_run(db: ExperimentDB) -> bytes:
+    """Insert a minimal pipeline run and return its ID."""
+    prid = new_uuid()
+    db.insert_pipeline_run(prid, "test_op")
+    return prid
+
+
+def _setup_roi(
+    db: ExperimentDB,
+    fov_id: bytes,
+    roi_type_id: bytes,
+    *,
+    cell_identity_id: bytes | None = None,
+    parent_roi_id: bytes | None = None,
+    label_id: int = 1,
+) -> bytes:
+    """Insert a minimal ROI and return its ID."""
+    rid = new_uuid()
+    db.insert_roi(
+        rid, fov_id, roi_type_id, cell_identity_id, parent_roi_id,
+        label_id, 0, 0, 10, 10, 100,
+    )
+    return rid
+
+
+# ===================================================================
+# 1. Connection lifecycle
+# ===================================================================
+
+
+class TestConnectionLifecycle:
+    """Test open/close and context manager."""
+
+    def test_open_and_close(self, db_path: Path) -> None:
+        database = ExperimentDB(db_path)
+        database.open()
+        assert database.connection is not None
+        database.close()
+        assert database._conn is None
+
+    def test_context_manager(self, db_path: Path) -> None:
+        with ExperimentDB(db_path) as database:
+            assert database.connection is not None
+        assert database._conn is None
+
+    def test_connection_raises_when_not_open(self, db_path: Path) -> None:
+        database = ExperimentDB(db_path)
+        with pytest.raises(RuntimeError, match="not open"):
+            _ = database.connection
+
+    def test_close_when_already_closed(self, db_path: Path) -> None:
+        database = ExperimentDB(db_path)
+        database.close()  # should not raise
+
+    def test_schema_created_on_open(self, db: ExperimentDB) -> None:
+        rows = db.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        table_names = {r["name"] for r in rows}
+        assert "experiments" in table_names
+        assert "fovs" in table_names
+        assert "rois" in table_names
+        assert "measurements" in table_names
+
+
+# ===================================================================
+# 2. Transactions
+# ===================================================================
+
+
+class TestTransactions:
+    """Test transaction commit, rollback, and SAVEPOINT nesting."""
+
+    def test_transaction_commits(self, db: ExperimentDB) -> None:
+        eid = new_uuid()
+        with db.transaction():
+            db.insert_experiment(eid, "committed_exp")
+        row = db.get_experiment()
+        assert row is not None
+        assert row["name"] == "committed_exp"
+
+    def test_transaction_rollback_on_exception(
+        self, db: ExperimentDB
+    ) -> None:
+        eid = new_uuid()
+        with pytest.raises(ValueError):
+            with db.transaction():
+                db.insert_experiment(eid, "will_rollback")
+                raise ValueError("force rollback")
+        row = db.get_experiment()
+        assert row is None
+
+    def test_savepoint_nesting_commit(self, db: ExperimentDB) -> None:
+        eid = new_uuid()
+        with db.transaction():
+            db.insert_experiment(eid, "outer")
+            with db.transaction():
+                cid = new_uuid()
+                db.insert_condition(cid, eid, "inner_condition")
+        # Both should be committed
+        row = db.get_experiment()
+        assert row is not None
+        conditions = db.get_conditions(eid)
+        assert len(conditions) == 1
+        assert conditions[0]["name"] == "inner_condition"
+
+    def test_savepoint_inner_rollback_preserves_outer(
+        self, db: ExperimentDB
+    ) -> None:
+        eid = new_uuid()
+        with db.transaction():
+            db.insert_experiment(eid, "outer_preserved")
+            with pytest.raises(ValueError):
+                with db.transaction():
+                    db.insert_condition(new_uuid(), eid, "will_be_rolled_back")
+                    raise ValueError("inner fail")
+            # Outer is still valid, inner was rolled back
+        row = db.get_experiment()
+        assert row is not None
+        assert row["name"] == "outer_preserved"
+        conditions = db.get_conditions(eid)
+        assert len(conditions) == 0
+
+    def test_multiple_savepoint_nesting(self, db: ExperimentDB) -> None:
+        eid = new_uuid()
+        with db.transaction():
+            db.insert_experiment(eid, "deep_nesting")
+            with db.transaction():
+                db.insert_condition(new_uuid(), eid, "level_2")
+                with db.transaction():
+                    db.insert_condition(new_uuid(), eid, "level_3")
+        conditions = db.get_conditions(eid)
+        assert len(conditions) == 2
+
+    def test_in_transaction_flag_reset_after_commit(
+        self, db: ExperimentDB
+    ) -> None:
+        eid = new_uuid()
+        with db.transaction():
+            db.insert_experiment(eid, "test")
+        assert not db._in_transaction
+
+    def test_in_transaction_flag_reset_after_rollback(
+        self, db: ExperimentDB
+    ) -> None:
+        with pytest.raises(ValueError):
+            with db.transaction():
+                raise ValueError("fail")
+        assert not db._in_transaction
+
+
+# ===================================================================
+# 3. Experiment CRUD
+# ===================================================================
+
+
+class TestExperimentCRUD:
+    """Test experiment insert and get."""
+
+    def test_insert_experiment_returns_count(self, db: ExperimentDB) -> None:
+        count = db.insert_experiment(new_uuid(), "exp1")
+        assert count == 1
+
+    def test_get_experiment(self, db: ExperimentDB) -> None:
+        eid = new_uuid()
+        with db.transaction():
+            db.insert_experiment(eid, "my_experiment", config_hash="abc123")
+        row = db.get_experiment()
+        assert row is not None
+        assert row["id"] == eid
+        assert row["name"] == "my_experiment"
+        assert row["schema_version"] == "5.0.0"
+        assert row["config_hash"] == "abc123"
+
+    def test_get_experiment_empty_db(self, db: ExperimentDB) -> None:
+        row = db.get_experiment()
+        assert row is None
+
+
+# ===================================================================
+# 4. Condition CRUD
+# ===================================================================
+
+
+class TestConditionCRUD:
+    """Test condition insert and get."""
+
+    def test_insert_and_get_condition(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            cid = _setup_condition(db, eid)
+        row = db.get_condition(cid)
+        assert row is not None
+        assert row["name"] == "control"
+        assert row["experiment_id"] == eid
+
+    def test_get_conditions(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            db.insert_condition(new_uuid(), eid, "ctrl")
+            db.insert_condition(new_uuid(), eid, "treated")
+        conditions = db.get_conditions(eid)
+        assert len(conditions) == 2
+        names = {c["name"] for c in conditions}
+        assert names == {"ctrl", "treated"}
+
+    def test_get_condition_not_found(self, db: ExperimentDB) -> None:
+        row = db.get_condition(new_uuid())
+        assert row is None
+
+
+# ===================================================================
+# 5. Bio Rep CRUD
+# ===================================================================
+
+
+class TestBioRepCRUD:
+    """Test bio_rep insert and get."""
+
+    def test_insert_and_get_bio_rep(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            cid = _setup_condition(db, eid)
+            brid = new_uuid()
+            db.insert_bio_rep(brid, eid, cid, "rep_1")
+        row = db.get_bio_rep(brid)
+        assert row is not None
+        assert row["name"] == "rep_1"
+        assert row["condition_id"] == cid
+
+    def test_get_bio_reps(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            cid = _setup_condition(db, eid)
+            db.insert_bio_rep(new_uuid(), eid, cid, "rep_1")
+            db.insert_bio_rep(new_uuid(), eid, cid, "rep_2")
+        reps = db.get_bio_reps(eid)
+        assert len(reps) == 2
+
+    def test_get_bio_rep_not_found(self, db: ExperimentDB) -> None:
+        row = db.get_bio_rep(new_uuid())
+        assert row is None
+
+
+# ===================================================================
+# 6. Channel CRUD
+# ===================================================================
+
+
+class TestChannelCRUD:
+    """Test channel insert and get."""
+
+    def test_insert_and_get_channel(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            chid = new_uuid()
+            db.insert_channel(
+                chid, eid, "DAPI", role="nuclear", color="#0000FF",
+                display_order=1,
+            )
+        row = db.get_channel(chid)
+        assert row is not None
+        assert row["name"] == "DAPI"
+        assert row["role"] == "nuclear"
+        assert row["color"] == "#0000FF"
+        assert row["display_order"] == 1
+
+    def test_get_channels_ordered(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            db.insert_channel(new_uuid(), eid, "RFP", display_order=2)
+            db.insert_channel(new_uuid(), eid, "GFP", display_order=1)
+            db.insert_channel(new_uuid(), eid, "DAPI", display_order=0)
+        channels = db.get_channels(eid)
+        assert len(channels) == 3
+        assert channels[0]["name"] == "DAPI"
+        assert channels[1]["name"] == "GFP"
+        assert channels[2]["name"] == "RFP"
+
+    def test_get_channel_not_found(self, db: ExperimentDB) -> None:
+        row = db.get_channel(new_uuid())
+        assert row is None
+
+
+# ===================================================================
+# 7. Timepoint CRUD
+# ===================================================================
+
+
+class TestTimepointCRUD:
+    """Test timepoint insert and get."""
+
+    def test_insert_and_get_timepoints(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            db.insert_timepoint(new_uuid(), eid, "t0", time_seconds=0.0)
+            db.insert_timepoint(
+                new_uuid(), eid, "t1", time_seconds=60.0, display_order=1,
+            )
+        timepoints = db.get_timepoints(eid)
+        assert len(timepoints) == 2
+        assert timepoints[0]["name"] == "t0"
+        assert timepoints[1]["name"] == "t1"
+        assert timepoints[1]["time_seconds"] == 60.0
+
+
+# ===================================================================
+# 8. FOV CRUD
+# ===================================================================
+
+
+class TestFovCRUD:
+    """Test FOV insert and get."""
+
+    def test_insert_and_get_fov(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            fid = new_uuid()
+            db.insert_fov(
+                fid, eid, status="imported", auto_name="FOV_001",
+                zarr_path="images/fov001",
+            )
+        row = db.get_fov(fid)
+        assert row is not None
+        assert row["status"] == "imported"
+        assert row["auto_name"] == "FOV_001"
+        assert row["zarr_path"] == "images/fov001"
+
+    def test_get_fovs(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            _setup_fov(db, eid)
+            _setup_fov(db, eid)
+        fovs = db.get_fovs(eid)
+        assert len(fovs) == 2
+
+    def test_get_fovs_by_status(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            _setup_fov(db, eid, status="imported")
+            _setup_fov(db, eid, status="imported")
+            _setup_fov(db, eid, status="segmented")
+        imported = db.get_fovs_by_status(eid, "imported")
+        assert len(imported) == 2
+        segmented = db.get_fovs_by_status(eid, "segmented")
+        assert len(segmented) == 1
+
+    def test_get_fov_not_found(self, db: ExperimentDB) -> None:
+        row = db.get_fov(new_uuid())
+        assert row is None
+
+    def test_fov_with_derivation_params(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            parent_fov = _setup_fov(db, eid)
+            fid = new_uuid()
+            db.insert_fov(
+                fid, eid,
+                parent_fov_id=parent_fov,
+                derivation_op="bg_subtract",
+                derivation_params='{"method": "gaussian"}',
+                status="imported",
+            )
+        row = db.get_fov(fid)
+        assert row is not None
+        assert row["derivation_op"] == "bg_subtract"
+        assert row["derivation_params"] == '{"method": "gaussian"}'
+        assert row["parent_fov_id"] == parent_fov
+
+
+# ===================================================================
+# 9. ROI Type Definition CRUD
+# ===================================================================
+
+
+class TestRoiTypeDefinitionCRUD:
+    """Test ROI type definition insert and get."""
+
+    def test_insert_and_get(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid, "cell")
+        row = db.get_roi_type_definition(rtid)
+        assert row is not None
+        assert row["name"] == "cell"
+        assert row["parent_type_id"] is None
+
+    def test_hierarchical_types(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            cell_type = _setup_roi_type(db, eid, "cell")
+            particle_type = _setup_roi_type(
+                db, eid, "particle", parent_type_id=cell_type,
+            )
+        row = db.get_roi_type_definition(particle_type)
+        assert row is not None
+        assert row["parent_type_id"] == cell_type
+
+    def test_get_roi_type_definitions(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            _setup_roi_type(db, eid, "cell")
+            _setup_roi_type(db, eid, "particle")
+        types = db.get_roi_type_definitions(eid)
+        assert len(types) == 2
+
+
+# ===================================================================
+# 10. Cell Identity CRUD
+# ===================================================================
+
+
+class TestCellIdentityCRUD:
+    """Test cell identity insert and get."""
+
+    def test_insert_and_get(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            fid = _setup_fov(db, eid)
+            ci_id = new_uuid()
+            db.insert_cell_identity(ci_id, fid, rtid)
+        row = db.get_cell_identity(ci_id)
+        assert row is not None
+        assert row["origin_fov_id"] == fid
+        assert row["roi_type_id"] == rtid
+
+    def test_get_cell_identity_not_found(self, db: ExperimentDB) -> None:
+        row = db.get_cell_identity(new_uuid())
+        assert row is None
+
+
+# ===================================================================
+# 11. ROI CRUD
+# ===================================================================
+
+
+class TestRoiCRUD:
+    """Test ROI insert and get."""
+
+    def test_insert_and_get_rois(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            fid = _setup_fov(db, eid)
+            rid = _setup_roi(db, fid, rtid)
+        rois = db.get_rois(fid)
+        assert len(rois) == 1
+        assert rois[0]["id"] == rid
+        assert rois[0]["label_id"] == 1
+        assert rois[0]["area_px"] == 100
+
+    def test_get_rois_by_fov_and_type(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            cell_type = _setup_roi_type(db, eid, "cell")
+            particle_type = _setup_roi_type(
+                db, eid, "particle", parent_type_id=cell_type,
+            )
+            fid = _setup_fov(db, eid)
+            _setup_roi(db, fid, cell_type, label_id=1)
+            _setup_roi(db, fid, cell_type, label_id=2)
+            _setup_roi(db, fid, particle_type, label_id=3)
+
+        cells = db.get_rois_by_fov_and_type(fid, cell_type)
+        assert len(cells) == 2
+        particles = db.get_rois_by_fov_and_type(fid, particle_type)
+        assert len(particles) == 1
+
+
+# ===================================================================
+# 12. Segmentation Set CRUD
+# ===================================================================
+
+
+class TestSegmentationSetCRUD:
+    """Test segmentation set insert and get."""
+
+    def test_insert_and_get(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            ssid = new_uuid()
+            db.insert_segmentation_set(
+                ssid, eid, rtid, "cellpose",
+                source_channel="GFP",
+                model_name="cyto2",
+                parameters='{"diameter": 30}',
+            )
+        row = db.get_segmentation_set(ssid)
+        assert row is not None
+        assert row["seg_type"] == "cellpose"
+        assert row["source_channel"] == "GFP"
+        assert row["model_name"] == "cyto2"
+        assert row["parameters"] == '{"diameter": 30}'
+
+    def test_get_segmentation_set_not_found(self, db: ExperimentDB) -> None:
+        row = db.get_segmentation_set(new_uuid())
+        assert row is None
+
+
+# ===================================================================
+# 13. Threshold Mask CRUD
+# ===================================================================
+
+
+class TestThresholdMaskCRUD:
+    """Test threshold mask insert and get."""
+
+    def test_insert_and_get(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            fid = _setup_fov(db, eid)
+            tmid = new_uuid()
+            db.insert_threshold_mask(
+                tmid, fid, "GFP",
+                method="otsu", threshold_value=128.5,
+            )
+        masks = db.get_threshold_masks(fid)
+        assert len(masks) == 1
+        assert masks[0]["source_channel"] == "GFP"
+        assert masks[0]["threshold_value"] == 128.5
+        assert masks[0]["status"] == "pending"
+
+    def test_threshold_mask_with_grouping(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            fid = _setup_fov(db, eid)
+            tmid = new_uuid()
+            db.insert_threshold_mask(
+                tmid, fid, "GFP",
+                grouping_channel="RFP",
+                method="manual",
+                threshold_value=200.0,
+                zarr_path="masks/gfp_mask",
+            )
+        masks = db.get_threshold_masks(fid)
+        assert masks[0]["grouping_channel"] == "RFP"
+        assert masks[0]["zarr_path"] == "masks/gfp_mask"
+
+
+# ===================================================================
+# 14. Pipeline Run CRUD
+# ===================================================================
+
+
+class TestPipelineRunCRUD:
+    """Test pipeline run insert and complete."""
+
+    def test_insert_pipeline_run(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            prid = new_uuid()
+            count = db.insert_pipeline_run(prid, "segmentation")
+        assert count == 1
+
+    def test_complete_pipeline_run(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            prid = new_uuid()
+            db.insert_pipeline_run(prid, "segmentation")
+        with db.transaction():
+            count = db.complete_pipeline_run(prid, status="completed")
+        assert count == 1
+        row = db.connection.execute(
+            "SELECT * FROM pipeline_runs WHERE id = ?", (prid,)
+        ).fetchone()
+        assert row["status"] == "completed"
+        assert row["completed_at"] is not None
+
+    def test_complete_pipeline_run_failed(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            prid = new_uuid()
+            db.insert_pipeline_run(prid, "segmentation")
+        with db.transaction():
+            db.complete_pipeline_run(
+                prid, status="failed", error_message="OOM",
+            )
+        row = db.connection.execute(
+            "SELECT * FROM pipeline_runs WHERE id = ?", (prid,)
+        ).fetchone()
+        assert row["status"] == "failed"
+        assert row["error_message"] == "OOM"
+
+    def test_pipeline_run_with_config(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            prid = new_uuid()
+            db.insert_pipeline_run(
+                prid, "segmentation",
+                config_snapshot='{"model": "cyto2"}',
+            )
+        row = db.connection.execute(
+            "SELECT * FROM pipeline_runs WHERE id = ?", (prid,)
+        ).fetchone()
+        assert row["config_snapshot"] == '{"model": "cyto2"}'
+
+
+# ===================================================================
+# 15. Measurement CRUD
+# ===================================================================
+
+
+class TestMeasurementCRUD:
+    """Test measurement insert (single and bulk)."""
+
+    def test_insert_measurement(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            fid = _setup_fov(db, eid)
+            chid = _setup_channel(db, eid)
+            rid = _setup_roi(db, fid, rtid)
+            prid = _setup_pipeline_run(db)
+            mid = new_uuid()
+            count = db.insert_measurement(
+                mid, rid, chid, "mean", "whole_roi", 42.5, prid,
+            )
+        assert count == 1
+
+    def test_bulk_measurement_insert(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            fid = _setup_fov(db, eid)
+            chid = _setup_channel(db, eid)
+            rid = _setup_roi(db, fid, rtid)
+            prid = _setup_pipeline_run(db)
+
+            measurements = [
+                (new_uuid(), rid, chid, "mean", "whole_roi", 42.5, prid),
+                (new_uuid(), rid, chid, "max", "whole_roi", 100.0, prid),
+                (new_uuid(), rid, chid, "min", "whole_roi", 5.0, prid),
+            ]
+            count = db.add_measurements_bulk(measurements)
+        assert count == 3
+
+    def test_bulk_measurement_empty_list(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            count = db.add_measurements_bulk([])
+        assert count == 0
+
+
+# ===================================================================
+# 16. Intensity Group CRUD
+# ===================================================================
+
+
+class TestIntensityGroupCRUD:
+    """Test intensity group insert and get."""
+
+    def test_insert_and_get(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            chid = _setup_channel(db, eid)
+            prid = _setup_pipeline_run(db)
+            igid = new_uuid()
+            db.insert_intensity_group(
+                igid, eid, "high", chid, prid,
+                group_index=0, lower_bound=100.0, upper_bound=255.0,
+                color_hex="#FF0000",
+            )
+        groups = db.get_intensity_groups(eid)
+        assert len(groups) == 1
+        assert groups[0]["name"] == "high"
+        assert groups[0]["lower_bound"] == 100.0
+        assert groups[0]["color_hex"] == "#FF0000"
+
+
+# ===================================================================
+# 17. Cell Group Assignment CRUD
+# ===================================================================
+
+
+class TestCellGroupAssignmentCRUD:
+    """Test cell group assignment insert."""
+
+    def test_insert(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            fid = _setup_fov(db, eid)
+            chid = _setup_channel(db, eid)
+            rid = _setup_roi(db, fid, rtid)
+            prid = _setup_pipeline_run(db)
+            igid = new_uuid()
+            db.insert_intensity_group(igid, eid, "high", chid, prid)
+            cga_id = new_uuid()
+            count = db.insert_cell_group_assignment(
+                cga_id, igid, rid, prid,
+            )
+        assert count == 1
+
+
+# ===================================================================
+# 18. Convenience queries: get_cells, get_rois_by_type
+# ===================================================================
+
+
+class TestConvenienceQueries:
+    """Test get_cells and get_rois_by_type."""
+
+    def test_get_cells_filters_top_level_types(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            cell_type = _setup_roi_type(db, eid, "cell")
+            particle_type = _setup_roi_type(
+                db, eid, "particle", parent_type_id=cell_type,
+            )
+            fid = _setup_fov(db, eid)
+            # Insert 2 cells and 3 particles
+            _setup_roi(db, fid, cell_type, label_id=1)
+            _setup_roi(db, fid, cell_type, label_id=2)
+            _setup_roi(db, fid, particle_type, label_id=3)
+            _setup_roi(db, fid, particle_type, label_id=4)
+            _setup_roi(db, fid, particle_type, label_id=5)
+
+        cells = db.get_cells(fid)
+        assert len(cells) == 2
+        # All returned ROIs should be of the cell type
+        for cell in cells:
+            assert cell["roi_type_id"] == cell_type
+
+    def test_get_rois_by_type_name(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            cell_type = _setup_roi_type(db, eid, "cell")
+            particle_type = _setup_roi_type(
+                db, eid, "particle", parent_type_id=cell_type,
+            )
+            fid = _setup_fov(db, eid)
+            _setup_roi(db, fid, cell_type, label_id=1)
+            _setup_roi(db, fid, particle_type, label_id=2)
+            _setup_roi(db, fid, particle_type, label_id=3)
+
+        cells = db.get_rois_by_type(fid, "cell")
+        assert len(cells) == 1
+        particles = db.get_rois_by_type(fid, "particle")
+        assert len(particles) == 2
+
+    def test_get_cells_empty_fov(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            fid = _setup_fov(db, eid)
+        cells = db.get_cells(fid)
+        assert len(cells) == 0
+
+
+# ===================================================================
+# 19. Batch safety: _batch_in_query
+# ===================================================================
+
+
+class TestBatchSafety:
+    """Test that IN queries are chunked to avoid SQLite's 999-param limit."""
+
+    def test_batch_in_query_small(self, db: ExperimentDB) -> None:
+        """Verify _batch_in_query works for small lists."""
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            fid = _setup_fov(db, eid)
+            roi_ids = []
+            for i in range(5):
+                rid = _setup_roi(db, fid, rtid, label_id=i + 1)
+                roi_ids.append(rid)
+
+        results = db._batch_in_query(
+            "SELECT * FROM rois WHERE id IN ({placeholders})",
+            (),
+            roi_ids,
+        )
+        assert len(results) == 5
+
+    def test_batch_in_query_over_999(self, db: ExperimentDB) -> None:
+        """Insert >999 ROIs and verify batch query returns them all."""
+        n = 1050  # Exceeds SQLite's 999-parameter limit
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            fid = _setup_fov(db, eid)
+            roi_ids = []
+            for i in range(n):
+                rid = new_uuid()
+                db.insert_roi(
+                    rid, fid, rtid, None, None,
+                    i + 1, 0, 0, 10, 10, 100,
+                )
+                roi_ids.append(rid)
+
+        results = db._batch_in_query(
+            "SELECT * FROM rois WHERE id IN ({placeholders})",
+            (),
+            roi_ids,
+        )
+        assert len(results) == n
+
+    def test_batch_in_query_with_params_before(
+        self, db: ExperimentDB
+    ) -> None:
+        """Verify params_before are passed correctly."""
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            fid = _setup_fov(db, eid)
+            roi_ids = []
+            for i in range(3):
+                rid = _setup_roi(db, fid, rtid, label_id=i + 1)
+                roi_ids.append(rid)
+
+        results = db._batch_in_query(
+            "SELECT * FROM rois WHERE fov_id = ? AND id IN ({placeholders})",
+            (fid,),
+            roi_ids,
+        )
+        assert len(results) == 3
+
+
+# ===================================================================
+# 20. Write operation return counts
+# ===================================================================
+
+
+class TestReturnCounts:
+    """Verify all write operations return the correct rowcount."""
+
+    def test_insert_experiment_count(self, db: ExperimentDB) -> None:
+        assert db.insert_experiment(new_uuid(), "e") == 1
+
+    def test_insert_condition_count(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+        assert db.insert_condition(new_uuid(), eid, "c") == 1
+
+    def test_insert_bio_rep_count(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            cid = _setup_condition(db, eid)
+        assert db.insert_bio_rep(new_uuid(), eid, cid, "r") == 1
+
+    def test_insert_channel_count(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+        assert db.insert_channel(new_uuid(), eid, "GFP") == 1
+
+    def test_insert_timepoint_count(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+        assert db.insert_timepoint(new_uuid(), eid, "t0") == 1
+
+    def test_insert_fov_count(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+        assert db.insert_fov(new_uuid(), eid) == 1
+
+    def test_insert_roi_type_definition_count(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+        assert db.insert_roi_type_definition(new_uuid(), eid, "cell") == 1
+
+    def test_insert_cell_identity_count(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            fid = _setup_fov(db, eid)
+        assert db.insert_cell_identity(new_uuid(), fid, rtid) == 1
+
+    def test_insert_roi_count(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            fid = _setup_fov(db, eid)
+        assert db.insert_roi(
+            new_uuid(), fid, rtid, None, None, 1, 0, 0, 10, 10, 100,
+        ) == 1
+
+    def test_insert_segmentation_set_count(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+        assert db.insert_segmentation_set(
+            new_uuid(), eid, rtid, "cellpose",
+        ) == 1
+
+    def test_insert_threshold_mask_count(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            fid = _setup_fov(db, eid)
+        assert db.insert_threshold_mask(new_uuid(), fid, "GFP") == 1
+
+    def test_insert_pipeline_run_count(self, db: ExperimentDB) -> None:
+        assert db.insert_pipeline_run(new_uuid(), "test") == 1
+
+    def test_complete_pipeline_run_count(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            prid = new_uuid()
+            db.insert_pipeline_run(prid, "test")
+        assert db.complete_pipeline_run(prid) == 1
+
+    def test_insert_measurement_count(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            fid = _setup_fov(db, eid)
+            chid = _setup_channel(db, eid)
+            rid = _setup_roi(db, fid, rtid)
+            prid = _setup_pipeline_run(db)
+        assert db.insert_measurement(
+            new_uuid(), rid, chid, "mean", "whole_roi", 1.0, prid,
+        ) == 1
+
+    def test_insert_intensity_group_count(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            chid = _setup_channel(db, eid)
+            prid = _setup_pipeline_run(db)
+        assert db.insert_intensity_group(
+            new_uuid(), eid, "high", chid, prid,
+        ) == 1
+
+    def test_insert_cell_group_assignment_count(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            rtid = _setup_roi_type(db, eid)
+            fid = _setup_fov(db, eid)
+            chid = _setup_channel(db, eid)
+            rid = _setup_roi(db, fid, rtid)
+            prid = _setup_pipeline_run(db)
+            igid = new_uuid()
+            db.insert_intensity_group(igid, eid, "high", chid, prid)
+        assert db.insert_cell_group_assignment(
+            new_uuid(), igid, rid, prid,
+        ) == 1
+
+
+# ===================================================================
+# 21. Hexagonal boundary test
+# ===================================================================
+
+
+class TestHexagonalBoundary:
+    """Verify experiment_db.py does not import zarr, numpy, or dask."""
+
+    def test_no_prohibited_imports(self) -> None:
+        """Parse experiment_db.py AST and check for forbidden imports."""
+        source_path = (
+            Path(__file__).resolve().parent.parent.parent.parent
+            / "src" / "percell4" / "core" / "experiment_db.py"
+        )
+        source = source_path.read_text()
+        tree = ast.parse(source, filename=str(source_path))
+
+        prohibited = {"zarr", "numpy", "dask", "np", "da"}
+        violations: list[str] = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    top_module = alias.name.split(".")[0]
+                    if top_module in prohibited:
+                        violations.append(
+                            f"import {alias.name} (line {node.lineno})"
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    top_module = node.module.split(".")[0]
+                    if top_module in prohibited:
+                        violations.append(
+                            f"from {node.module} import ... "
+                            f"(line {node.lineno})"
+                        )
+
+        assert not violations, (
+            f"Hexagonal boundary violation in experiment_db.py: "
+            f"{violations}"
+        )
