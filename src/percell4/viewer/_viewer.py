@@ -119,6 +119,9 @@ def _launch(
     _load_fov(viewer, store, fov_id, state)
 
     # --- Add dock widgets ---
+    from percell4.viewer.cellpose_widget import CellposeWidget
+    from percell4.viewer.edge_removal_widget import EdgeRemovalWidget
+    from percell4.viewer.edit_widget import EditWidget
     from percell4.viewer.fov_browser_widget import FovBrowserWidget
 
     def _on_fov_selected(new_fov_id: bytes) -> None:
@@ -129,6 +132,26 @@ def _launch(
     browser = FovBrowserWidget(viewer, store, _on_fov_selected)
     viewer.window.add_dock_widget(
         browser.widget, name="FOV Browser", area="right",
+    )
+
+    # Edit ROIs widget
+    edit_widget = EditWidget(viewer, store, fov_id)
+    viewer.window.add_dock_widget(
+        edit_widget.widget, name="Edit ROIs", area="right",
+    )
+
+    # Cellpose re-segmentation widget
+    channels = store.db.get_channels(exp["id"])
+    channel_names = [ch["name"] for ch in channels]
+    cellpose_widget = CellposeWidget(viewer, store, fov_id, channel_names)
+    viewer.window.add_dock_widget(
+        cellpose_widget.widget, name="Cellpose", area="right",
+    )
+
+    # Label cleanup widget
+    edge_removal_widget = EdgeRemovalWidget(viewer, store, fov_id)
+    viewer.window.add_dock_widget(
+        edge_removal_widget.widget, name="Cleanup", area="right",
     )
 
     # --- Block until viewer closes ---
