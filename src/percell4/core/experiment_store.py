@@ -17,9 +17,8 @@ import json
 import logging
 import os
 import time
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable
 
 import numpy as np
 
@@ -32,6 +31,38 @@ from percell4.core.layer_store import LayerStore
 from percell4.core.models import MeasurementNeeded
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Utility: channel-index lookup
+# ---------------------------------------------------------------------------
+
+
+def find_channel_index(
+    channels: list[dict],
+    *,
+    channel_id: bytes | None = None,
+    channel_name: str | None = None,
+) -> int:
+    """Find a channel's positional index by ID or name.
+
+    Args:
+        channels: List of channel dicts (as returned by ``db.get_channels``).
+        channel_id: Match by ``ch["id"]`` (UUID bytes).
+        channel_name: Match by ``ch["name"]`` (string).
+
+    Returns:
+        Zero-based index of the matching channel.
+
+    Raises:
+        ValueError: If no channel matches the given criteria.
+    """
+    for idx, ch in enumerate(channels):
+        if channel_id is not None and ch["id"] == channel_id:
+            return idx
+        if channel_name is not None and ch["name"] == channel_name:
+            return idx
+    raise ValueError(f"Channel not found: id={channel_id}, name={channel_name}")
 
 
 class ExperimentStore:
@@ -306,113 +337,12 @@ class ExperimentStore:
             lock_path.unlink(missing_ok=True)
 
     # ------------------------------------------------------------------
-    # Delegated methods: FOV operations
-    # ------------------------------------------------------------------
-
-    def insert_fov(self, **kwargs: Any) -> int:
-        """Insert an FOV record. See ExperimentDB.insert_fov."""
-        return self._db.insert_fov(**kwargs)
-
-    def get_fov(self, fov_id: bytes) -> Any:
-        """Return a single FOV by ID."""
-        return self._db.get_fov(fov_id)
-
-    def get_fovs(self, experiment_id: bytes) -> list[Any]:
-        """Return all FOVs for an experiment."""
-        return self._db.get_fovs(experiment_id)
-
-    def get_fovs_by_status(
-        self, experiment_id: bytes, status: str
-    ) -> list[Any]:
-        """Return FOVs filtered by status."""
-        return self._db.get_fovs_by_status(experiment_id, status)
-
-    # ------------------------------------------------------------------
-    # Delegated methods: Status
-    # ------------------------------------------------------------------
-
-    def get_fov_status(self, fov_id: bytes) -> str:
-        """Return the current status of an FOV."""
-        return self._db.get_fov_status(fov_id)
-
-    def set_fov_status(
-        self,
-        fov_id: bytes,
-        new_status: str,
-        message: str | None = None,
-    ) -> None:
-        """Transition an FOV to a new status."""
-        return self._db.set_fov_status(fov_id, new_status, message)
-
-    # ------------------------------------------------------------------
-    # Delegated methods: Assignments
-    # ------------------------------------------------------------------
-
-    def assign_segmentation(self, *args: Any, **kwargs: Any) -> Any:
-        """Assign a segmentation set to FOVs."""
-        return self._db.assign_segmentation(*args, **kwargs)
-
-    def assign_mask(self, *args: Any, **kwargs: Any) -> Any:
-        """Assign a threshold mask to FOVs."""
-        return self._db.assign_mask(*args, **kwargs)
-
-    def get_active_assignments(self, fov_id: bytes) -> dict[str, list[Any]]:
-        """Return all active assignments for an FOV."""
-        return self._db.get_active_assignments(fov_id)
-
-    # ------------------------------------------------------------------
-    # Delegated methods: Measurements
-    # ------------------------------------------------------------------
-
-    def get_active_measurements(self, fov_id: bytes) -> list[Any]:
-        """Return measurements filtered through active assignments."""
-        return self._db.get_active_measurements(fov_id)
-
-    # ------------------------------------------------------------------
     # Delegated methods: Merge
     # ------------------------------------------------------------------
 
     def merge_experiment(self, source_path: Path) -> dict[str, Any]:
         """Merge another .percell database into this one."""
         return self._db.merge_experiment(source_path)
-
-    # ------------------------------------------------------------------
-    # Delegated methods: Lineage
-    # ------------------------------------------------------------------
-
-    def get_descendants(self, fov_id: bytes) -> list[Any]:
-        """Return all descendant FOV rows."""
-        return self._db.get_descendants(fov_id)
-
-    def get_ancestors(self, fov_id: bytes) -> list[Any]:
-        """Return all ancestor FOV rows."""
-        return self._db.get_ancestors(fov_id)
-
-    # ------------------------------------------------------------------
-    # Delegated methods: Channels, conditions, experiment
-    # ------------------------------------------------------------------
-
-    def get_channels(self, experiment_id: bytes) -> list[Any]:
-        """Return all channels for an experiment."""
-        return self._db.get_channels(experiment_id)
-
-    def get_conditions(self, experiment_id: bytes) -> list[Any]:
-        """Return all conditions for an experiment."""
-        return self._db.get_conditions(experiment_id)
-
-    def get_experiment(self) -> Any:
-        """Return the first experiment record."""
-        return self._db.get_experiment()
-
-    # ------------------------------------------------------------------
-    # Transaction access for advanced use
-    # ------------------------------------------------------------------
-
-    @contextmanager
-    def transaction(self) -> Iterator[None]:
-        """Transaction context manager, delegating to ExperimentDB."""
-        with self._db.transaction():
-            yield
 
     # ------------------------------------------------------------------
     # Derived FOV creation

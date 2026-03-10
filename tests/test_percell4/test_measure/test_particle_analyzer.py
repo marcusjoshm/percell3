@@ -27,7 +27,7 @@ def _build_experiment_with_mask(tmp_path: Path):
     percell_dir = tmp_path / "test.percell"
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
 
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     experiment_id = exp["id"]
 
     # Get ROI types
@@ -125,7 +125,7 @@ class TestAnalyzeParticles:
             assert result.parent_rois_analyzed == 1
 
             # Verify particle ROIs in DB
-            exp = store.get_experiment()
+            exp = store.db.get_experiment()
             roi_types = store.db.get_roi_type_definitions(exp["id"])
             particle_type_id = [
                 rt for rt in roi_types if rt["name"] == particle_type
@@ -191,7 +191,7 @@ class TestAnalyzeParticles:
         percell_dir = tmp_path / "empty.percell"
         store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
         try:
-            exp = store.get_experiment()
+            exp = store.db.get_experiment()
             experiment_id = exp["id"]
 
             roi_types = store.db.get_roi_type_definitions(experiment_id)
@@ -242,7 +242,7 @@ class TestAnalyzeParticles:
         percell_dir = tmp_path / "toplevel.percell"
         store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
         try:
-            exp = store.get_experiment()
+            exp = store.db.get_experiment()
             fov_id = new_uuid()
             store.db.insert_fov(fov_id, exp["id"], status="imported")
 

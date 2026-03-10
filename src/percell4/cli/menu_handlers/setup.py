@@ -37,7 +37,7 @@ def create_experiment_handler(state: MenuState) -> None:
         state.store = store
         state.experiment_path = out_path
 
-        exp = store.get_experiment()
+        exp = store.db.get_experiment()
         print_success(f"Created experiment '{exp['name']}' at {out_path}")
     except Exception as e:
         print_error(str(e))
@@ -57,7 +57,7 @@ def open_experiment_handler(state: MenuState) -> None:
     try:
         state.set_experiment(path)
         _save_recent(path)
-        exp = state.store.get_experiment()
+        exp = state.store.db.get_experiment()
         print_success(f"Opened experiment '{exp['name']}' at {path}")
     except Exception as e:
         print_error(str(e))

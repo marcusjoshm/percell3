@@ -64,8 +64,8 @@ def import_fov_from_experiment(
         )
 
     # Get source experiment channels
-    source_exp = source.get_experiment()
-    target_exp = target.get_experiment()
+    source_exp = source.db.get_experiment()
+    target_exp = target.db.get_experiment()
     source_channels = source.db.get_channels(source_exp["id"])
 
     # Copy channel images from source to target
@@ -89,7 +89,7 @@ def import_fov_from_experiment(
     source_name = source_fov["auto_name"] or uuid_to_str(source_fov_id)[:8]
 
     # Insert FOV record in target DB
-    with target.transaction():
+    with target.db.transaction():
         target.db.insert_fov(
             id=new_fov_id,
             experiment_id=target_exp["id"],

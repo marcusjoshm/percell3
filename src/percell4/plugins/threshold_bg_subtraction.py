@@ -58,8 +58,8 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
             raise RuntimeError("'pairings' parameter is required.")
 
         # Resolve channel index
-        exp = store.get_experiment()
-        all_channels = store.get_channels(exp["id"])
+        exp = store.db.get_experiment()
+        all_channels = store.db.get_channels(exp["id"])
         channel_index_by_name = {
             ch["name"]: idx for idx, ch in enumerate(all_channels)
         }
@@ -80,8 +80,8 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
             hist_fov_id: bytes = pairing["histogram_fov_id"]
             apply_fov_id: bytes = pairing["apply_fov_id"]
 
-            hist_fov = store.get_fov(hist_fov_id)
-            apply_fov = store.get_fov(apply_fov_id)
+            hist_fov = store.db.get_fov(hist_fov_id)
+            apply_fov = store.db.get_fov(apply_fov_id)
 
             if hist_fov is None or apply_fov is None:
                 errors.append(f"Pairing {pair_idx}: FOV not found")
@@ -100,7 +100,7 @@ class ThresholdBGSubtractionPlugin(AnalysisPlugin):
                 continue
 
             # Get mask assignments from histogram FOV
-            active = store.get_active_assignments(hist_fov_id)
+            active = store.db.get_active_assignments(hist_fov_id)
             mask_assigns = active.get("mask", [])
 
             if not mask_assigns:

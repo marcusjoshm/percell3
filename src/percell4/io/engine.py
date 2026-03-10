@@ -60,7 +60,7 @@ class ImportEngine:
         from percell4.io.tiff import read_tiff
 
         fov_ids: list[bytes] = []
-        exp = store.get_experiment()
+        exp = store.db.get_experiment()
         total = len(source_paths)
 
         for i, path in enumerate(source_paths):
@@ -93,7 +93,7 @@ class ImportEngine:
             zarr_path = store.layers.write_image_channels(fov_hex, channels)
 
             # Insert FOV record in DB
-            with store.transaction():
+            with store.db.transaction():
                 store.db.insert_fov(
                     id=fov_id,
                     experiment_id=exp["id"],

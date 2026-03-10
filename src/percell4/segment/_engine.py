@@ -107,7 +107,7 @@ class SegmentationEngine:
         # 4. Create pipeline_run record
         run_id = new_uuid()
         config_snapshot = json.dumps(params) if params else None
-        with store.transaction():
+        with store.db.transaction():
             db.insert_pipeline_run(
                 run_id, "segmentation", config_snapshot=config_snapshot
             )
@@ -115,7 +115,7 @@ class SegmentationEngine:
         # 5. Create segmentation_set record (shared across all FOVs)
         seg_set_id = new_uuid()
         model_name = params.get("model_name")
-        with store.transaction():
+        with store.db.transaction():
             db.insert_segmentation_set(
                 id=seg_set_id,
                 experiment_id=exp_id,
@@ -164,7 +164,7 @@ class SegmentationEngine:
                 roi_dicts = extract_rois(labels)
 
                 # Create cell identities and insert ROIs
-                with store.transaction():
+                with store.db.transaction():
                     for roi_dict in roi_dicts:
                         # Create cell_identity (new for first segmentation)
                         ci_id = new_uuid()
@@ -189,7 +189,7 @@ class SegmentationEngine:
                         )
 
                 # Assign segmentation to FOV
-                with store.transaction():
+                with store.db.transaction():
                     needed = db.assign_segmentation(
                         [fov_id],
                         seg_set_id,
@@ -219,7 +219,7 @@ class SegmentationEngine:
                 on_progress(idx + 1, total)
 
         # 7. Update segmentation_set counts
-        with store.transaction():
+        with store.db.transaction():
             db.connection.execute(
                 "UPDATE segmentation_sets "
                 "SET fov_count = ?, total_roi_count = ? "
@@ -228,7 +228,7 @@ class SegmentationEngine:
             )
 
         # 8. Complete pipeline_run
-        with store.transaction():
+        with store.db.transaction():
             db.complete_pipeline_run(run_id, status="completed")
 
         return seg_set_id, all_measurement_needed

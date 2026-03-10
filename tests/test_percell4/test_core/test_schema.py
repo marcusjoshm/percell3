@@ -11,6 +11,7 @@ from percell4.core.db_types import new_uuid
 from percell4.core.schema import (
     SCHEMA_VERSION,
     _configure_connection,
+    create_debug_views,
     create_schema,
 )
 
@@ -210,7 +211,16 @@ class TestSchemaCreation:
         }
         assert expected_indexes.issubset(names)
 
-    def test_all_views_exist(self, conn: sqlite3.Connection) -> None:
+    def test_no_views_by_default(self, conn: sqlite3.Connection) -> None:
+        """create_schema does NOT create debug views."""
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='view'"
+        ).fetchall()
+        assert len(rows) == 0
+
+    def test_debug_views_opt_in(self, conn: sqlite3.Connection) -> None:
+        """create_debug_views creates all debug views when called explicitly."""
+        create_debug_views(conn)
         rows = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='view'"
         ).fetchall()
@@ -547,6 +557,11 @@ class TestPartialUniqueIndexes:
 
 class TestDebugViews:
     """Verify debug views return human-readable data."""
+
+    @pytest.fixture(autouse=True)
+    def _create_views(self, conn: sqlite3.Connection) -> None:
+        """Explicitly create debug views for these tests."""
+        create_debug_views(conn)
 
     def test_debug_fovs_returns_uuid_strings(
         self, conn: sqlite3.Connection

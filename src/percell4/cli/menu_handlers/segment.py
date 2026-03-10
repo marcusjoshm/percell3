@@ -12,8 +12,8 @@ def segment_handler(state: MenuState) -> None:
 
     from percell4.core.constants import FovStatus
 
-    exp = store.get_experiment()
-    fovs = store.get_fovs_by_status(exp["id"], FovStatus.imported)
+    exp = store.db.get_experiment()
+    fovs = store.db.get_fovs_by_status(exp["id"], FovStatus.imported)
     if not fovs:
         print_warning("No FOVs in 'imported' status to segment")
         return
@@ -22,7 +22,7 @@ def segment_handler(state: MenuState) -> None:
     console.print(f"  FOVs ready: [cyan]{len(fovs)}[/cyan]\n")
 
     # Channel selection
-    channels = store.get_channels(exp["id"])
+    channels = store.db.get_channels(exp["id"])
     ch_names = [ch["name"] for ch in channels]
     for i, name in enumerate(ch_names, 1):
         console.print(f"  [{i}] {name}")

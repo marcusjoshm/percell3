@@ -81,7 +81,7 @@ def import_label_image(
 
     # Create segmentation_set for this import
     seg_set_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         db.insert_segmentation_set(
             id=seg_set_id,
             experiment_id=exp_id,
@@ -103,7 +103,7 @@ def import_label_image(
     roi_dicts = extract_rois(labels_int32)
 
     # Create cell identities and ROIs
-    with store.transaction():
+    with store.db.transaction():
         for roi_dict in roi_dicts:
             ci_id = new_uuid()
             db.insert_cell_identity(ci_id, fov_id, roi_type_id)
@@ -124,14 +124,14 @@ def import_label_image(
             )
 
     # Update segmentation_set total_roi_count
-    with store.transaction():
+    with store.db.transaction():
         db.connection.execute(
             "UPDATE segmentation_sets SET total_roi_count = ? WHERE id = ?",
             (len(roi_dicts), seg_set_id),
         )
 
     # Assign segmentation to FOV
-    with store.transaction():
+    with store.db.transaction():
         db.assign_segmentation(
             [fov_id],
             seg_set_id,

@@ -14,6 +14,7 @@ import numpy as np
 
 from percell4.core.constants import SCOPE_MASK_INSIDE, SCOPE_MASK_OUTSIDE, SCOPE_WHOLE_ROI
 from percell4.core.db_types import new_uuid
+from percell4.core.experiment_store import find_channel_index
 from percell4.measure.metrics import METRIC_FUNCTIONS, MetricRegistry
 
 if TYPE_CHECKING:
@@ -105,13 +106,7 @@ class Measurer:
         # Find channel index from experiment channels
         fov_row = store.db.get_fov(fov_id)
         channels = store.db.get_channels(fov_row["experiment_id"])
-        channel_index = None
-        for idx, ch in enumerate(channels):
-            if ch["id"] == channel_id:
-                channel_index = idx
-                break
-        if channel_index is None:
-            raise ValueError(f"Channel not found in experiment channels")
+        channel_index = find_channel_index(channels, channel_id=channel_id)
 
         image = store.layers.read_image_channel_numpy(fov_hex, channel_index)
         labels = store.layers.read_labels(seg_hex, fov_hex)
@@ -203,13 +198,7 @@ class Measurer:
         # Find channel index
         fov_row = store.db.get_fov(fov_id)
         channels = store.db.get_channels(fov_row["experiment_id"])
-        channel_index = None
-        for idx, ch in enumerate(channels):
-            if ch["id"] == channel_id:
-                channel_index = idx
-                break
-        if channel_index is None:
-            raise ValueError("Channel not found in experiment channels")
+        channel_index = find_channel_index(channels, channel_id=channel_id)
 
         image = store.layers.read_image_channel_numpy(fov_hex, channel_index)
         labels = store.layers.read_labels(seg_hex, fov_hex)

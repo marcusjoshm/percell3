@@ -53,21 +53,24 @@ class TestStatusHandler:
         """status_handler runs without error against a mock store."""
         from percell4.cli.menu_handlers.status import status_handler
 
-        mock_store = MagicMock()
-        mock_store.root = "/tmp/test.percell"
-        mock_store.get_experiment.return_value = {
+        mock_db = MagicMock()
+        mock_db.get_experiment.return_value = {
             "id": b"\x00" * 16,
             "name": "Test Experiment",
         }
-        mock_store.get_channels.return_value = [
+        mock_db.get_channels.return_value = [
             {"id": b"\x01" * 16, "name": "DAPI"},
             {"id": b"\x02" * 16, "name": "GFP"},
         ]
-        mock_store.get_fovs.return_value = [
+        mock_db.get_fovs.return_value = [
             {"id": b"\x03" * 16, "status": "imported", "auto_name": "FOV_001"},
             {"id": b"\x04" * 16, "status": "imported", "auto_name": "FOV_002"},
             {"id": b"\x05" * 16, "status": "segmented", "auto_name": "FOV_003"},
         ]
+
+        mock_store = MagicMock()
+        mock_store.root = "/tmp/test.percell"
+        mock_store.db = mock_db
 
         state = MenuState()
         state.store = mock_store
@@ -75,24 +78,27 @@ class TestStatusHandler:
         # Should not raise
         status_handler(state)
 
-        mock_store.get_experiment.assert_called_once()
-        mock_store.get_channels.assert_called_once()
-        mock_store.get_fovs.assert_called_once()
+        mock_db.get_experiment.assert_called_once()
+        mock_db.get_channels.assert_called_once()
+        mock_db.get_fovs.assert_called_once()
 
     def test_status_handler_no_fovs(self) -> None:
         """status_handler handles empty FOV list gracefully."""
         from percell4.cli.menu_handlers.status import status_handler
 
-        mock_store = MagicMock()
-        mock_store.root = "/tmp/test.percell"
-        mock_store.get_experiment.return_value = {
+        mock_db = MagicMock()
+        mock_db.get_experiment.return_value = {
             "id": b"\x00" * 16,
             "name": "Empty Experiment",
         }
-        mock_store.get_channels.return_value = [
+        mock_db.get_channels.return_value = [
             {"id": b"\x01" * 16, "name": "DAPI"},
         ]
-        mock_store.get_fovs.return_value = []
+        mock_db.get_fovs.return_value = []
+
+        mock_store = MagicMock()
+        mock_store.root = "/tmp/test.percell"
+        mock_store.db = mock_db
 
         state = MenuState()
         state.store = mock_store
@@ -153,11 +159,3 @@ class TestExportHandlers:
         state = MenuState()
         with pytest.raises(_MenuCancel):
             export_prism_handler(state)
-
-    def test_export_compat_requires_experiment(self) -> None:
-        """export_compat_handler raises _MenuCancel without a store."""
-        from percell4.cli.menu_handlers.export import export_compat_handler
-
-        state = MenuState()
-        with pytest.raises(_MenuCancel):
-            export_compat_handler(state)

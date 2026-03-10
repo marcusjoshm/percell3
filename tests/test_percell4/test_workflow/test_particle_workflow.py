@@ -31,7 +31,7 @@ def store_with_fov(percell_dir: Path):
     """
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
 
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     exp_id = exp["id"]
 
     fov_id = new_uuid()
@@ -49,15 +49,15 @@ def store_with_fov(percell_dir: Path):
         fov_hex, {0: image_dapi, 1: image_gfp}
     )
 
-    with store.transaction():
-        store.insert_fov(
+    with store.db.transaction():
+        store.db.insert_fov(
             id=fov_id,
             experiment_id=exp_id,
             status="pending",
             auto_name="FOV_001",
             zarr_path=zarr_path,
         )
-        store.set_fov_status(fov_id, FovStatus.imported, "test setup")
+        store.db.set_fov_status(fov_id, FovStatus.imported, "test setup")
 
     yield store, fov_id, exp_id
     store.close()

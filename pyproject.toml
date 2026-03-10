@@ -82,6 +82,7 @@ dev = [
 
 [project.scripts]
 percell3 = "percell3.cli.main:cli"
+percell4 = "percell4.cli.main:cli"
 
 [project.entry-points."percell3.plugins"]
 intensity_grouping = "percell3.plugins.builtin.intensity_grouping:IntensityGroupingPlugin"

@@ -1,4 +1,4 @@
-"""Export handlers -- CSV, Prism, and compat export."""
+"""Export handlers -- CSV and Prism export."""
 
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ def export_csv_handler(state: MenuState) -> None:
         print_warning(f"File exists: {out_path} (will be overwritten)")
 
     try:
-        exp = store.get_experiment()
-        fovs = store.get_fovs(exp["id"])
+        exp = store.db.get_experiment()
+        fovs = store.db.get_fovs(exp["id"])
         fov_ids = [
             f["id"] for f in fovs
             if f["status"] not in ("deleted", "deleting", "error")
@@ -51,8 +51,8 @@ def export_prism_handler(state: MenuState) -> None:
         from percell4.core.constants import SCOPE_DISPLAY
 
         out_dir.mkdir(parents=True, exist_ok=True)
-        exp = store.get_experiment()
-        fovs = store.get_fovs(exp["id"])
+        exp = store.db.get_experiment()
+        fovs = store.db.get_fovs(exp["id"])
         fov_ids = [
             f["id"] for f in fovs
             if f["status"] not in ("deleted", "deleting", "error")
@@ -71,7 +71,7 @@ def export_prism_handler(state: MenuState) -> None:
             print_warning("No measurements to export")
             return
 
-        channels = store.get_channels(exp["id"])
+        channels = store.db.get_channels(exp["id"])
         ch_lookup = {ch["id"]: ch["name"] for ch in channels}
 
         groups: dict[tuple, list] = {}
@@ -93,34 +93,5 @@ def export_prism_handler(state: MenuState) -> None:
             file_count += 1
 
         print_success(f"Exported {file_count} Prism CSV files to {out_dir}")
-    except Exception as e:
-        print_error(str(e))
-
-
-def export_compat_handler(state: MenuState) -> None:
-    """Prompt for output path, export in percell3-compatible format."""
-    store = require_experiment(state)
-
-    console.print("\n[bold]Export percell3-Compatible CSV[/bold]\n")
-    out_str = menu_prompt("Output CSV path", default="compat_export.csv")
-    out_path = Path(out_str).expanduser()
-
-    if out_path.exists():
-        print_warning(f"File exists: {out_path} (will be overwritten)")
-
-    try:
-        exp = store.get_experiment()
-        fovs = store.get_fovs(exp["id"])
-        fov_ids = [
-            f["id"] for f in fovs
-            if f["status"] not in ("deleted", "deleting", "error")
-        ]
-
-        if not fov_ids:
-            print_warning("No FOVs with exportable data")
-            return
-
-        count = store.export_measurements_csv(fov_ids, out_path)
-        print_success(f"Exported {count} rows in compat format to {out_path}")
     except Exception as e:
         print_error(str(e))

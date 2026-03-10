@@ -53,8 +53,8 @@ class TestImportSingleTiff:
     def test_import_creates_fov_in_db(self, store: ExperimentStore, tmp_path: Path) -> None:
         """A single TIFF import creates one FOV record in the database."""
         arr = _write_test_tiff(tmp_path / "sample.tif", (64, 64))
-        exp = store.get_experiment()
-        channels = store.get_channels(exp["id"])
+        exp = store.db.get_experiment()
+        channels = store.db.get_channels(exp["id"])
         ch_id = channels[0]["id"]
 
         engine = ImportEngine()
@@ -65,15 +65,15 @@ class TestImportSingleTiff:
         )
 
         assert len(fov_ids) == 1
-        fov = store.get_fov(fov_ids[0])
+        fov = store.db.get_fov(fov_ids[0])
         assert fov is not None
         assert fov["auto_name"] == "sample"
 
     def test_import_writes_zarr_data(self, store: ExperimentStore, tmp_path: Path) -> None:
         """Imported image data is readable from LayerStore."""
         arr = _write_test_tiff(tmp_path / "pixels.tif", (32, 32))
-        exp = store.get_experiment()
-        channels = store.get_channels(exp["id"])
+        exp = store.db.get_experiment()
+        channels = store.db.get_channels(exp["id"])
         ch_id = channels[0]["id"]
 
         engine = ImportEngine()
@@ -90,8 +90,8 @@ class TestImportSingleTiff:
     def test_import_sets_status_imported(self, store: ExperimentStore, tmp_path: Path) -> None:
         """Imported FOV has status 'imported'."""
         _write_test_tiff(tmp_path / "status.tif", (16, 16))
-        exp = store.get_experiment()
-        channels = store.get_channels(exp["id"])
+        exp = store.db.get_experiment()
+        channels = store.db.get_channels(exp["id"])
         ch_id = channels[0]["id"]
 
         engine = ImportEngine()
@@ -101,7 +101,7 @@ class TestImportSingleTiff:
             channel_mapping={0: ch_id},
         )
 
-        status = store.get_fov_status(fov_ids[0])
+        status = store.db.get_fov_status(fov_ids[0])
         assert status == FovStatus.imported
 
 
@@ -115,8 +115,8 @@ class TestImportMultiChannel:
         path = tmp_path / "multi.tif"
         tifffile.imwrite(str(path), arr)
 
-        exp = store.get_experiment()
-        channels = store.get_channels(exp["id"])
+        exp = store.db.get_experiment()
+        channels = store.db.get_channels(exp["id"])
         ch_mapping = {0: channels[0]["id"], 1: channels[1]["id"]}
 
         engine = ImportEngine()
@@ -140,8 +140,8 @@ class TestImportWithCondition:
     def test_condition_id_assigned(self, store: ExperimentStore, tmp_path: Path) -> None:
         """condition_id is recorded on the FOV record."""
         _write_test_tiff(tmp_path / "cond.tif", (16, 16))
-        exp = store.get_experiment()
-        channels = store.get_channels(exp["id"])
+        exp = store.db.get_experiment()
+        channels = store.db.get_channels(exp["id"])
         ch_id = channels[0]["id"]
 
         # Create a condition
@@ -160,7 +160,7 @@ class TestImportWithCondition:
             condition_id=cond_id,
         )
 
-        fov = store.get_fov(fov_ids[0])
+        fov = store.db.get_fov(fov_ids[0])
         assert fov["condition_id"] == cond_id
 
 
@@ -171,8 +171,8 @@ class TestProgressCallback:
         """Progress callback is called once per source file."""
         _write_test_tiff(tmp_path / "a.tif", (8, 8))
         _write_test_tiff(tmp_path / "b.tif", (8, 8))
-        exp = store.get_experiment()
-        channels = store.get_channels(exp["id"])
+        exp = store.db.get_experiment()
+        channels = store.db.get_channels(exp["id"])
         ch_id = channels[0]["id"]
 
         calls: list[tuple[int, int, str]] = []

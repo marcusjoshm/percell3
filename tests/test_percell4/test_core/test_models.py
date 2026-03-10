@@ -9,7 +9,6 @@ import pytest
 from percell4.core.constants import FovStatus
 from percell4.core.db_types import new_uuid
 from percell4.core.models import (
-    AssignmentRecord,
     BioRepInfo,
     CellIdentity,
     ChannelInfo,
@@ -416,38 +415,6 @@ class TestPipelineRun:
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             pr.status = "done"  # type: ignore[misc]
-
-
-# ---------------------------------------------------------------------------
-# AssignmentRecord
-# ---------------------------------------------------------------------------
-
-
-class TestAssignmentRecord:
-    def test_creation(self) -> None:
-        ar = AssignmentRecord(
-            id=_uid(),
-            fov_id=_uid(),
-            target_id=_uid(),
-            is_active=True,
-            pipeline_run_id=_uid(),
-            assigned_at="2026-03-10T10:00:00",
-        )
-        assert ar.is_active is True
-        assert ar.assigned_by is None
-        assert ar.deactivated_at is None
-
-    def test_frozen(self) -> None:
-        ar = AssignmentRecord(
-            id=_uid(),
-            fov_id=_uid(),
-            target_id=_uid(),
-            is_active=True,
-            pipeline_run_id=_uid(),
-            assigned_at="2026-03-10T10:00:00",
-        )
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            ar.is_active = False  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------

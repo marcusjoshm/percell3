@@ -30,7 +30,6 @@ def build_main_menu(state: MenuState) -> Menu:
     from percell4.cli.menu_handlers.export import (
         export_csv_handler,
         export_prism_handler,
-        export_compat_handler,
     )
     from percell4.cli.menu_handlers.plugins import plugin_menu_handler
     from percell4.cli.menu_handlers.merge import merge_handler
@@ -86,8 +85,7 @@ def build_main_menu(state: MenuState) -> Menu:
                 MenuItem("1", "Status", "Experiment dashboard", status_handler),
                 MenuItem("2", "Export CSV", "Export measurements to CSV", export_csv_handler),
                 MenuItem("3", "Export Prism", "Export per-channel CSVs for Prism", export_prism_handler),
-                MenuItem("4", "Export Compat", "Export in percell3-compatible format", export_compat_handler),
-                MenuItem("5", "Merge", "Merge another experiment", merge_handler),
+                MenuItem("4", "Merge", "Merge another experiment", merge_handler),
             ],
             st,
         ).run()

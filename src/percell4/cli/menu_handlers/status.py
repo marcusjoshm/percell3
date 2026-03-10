@@ -12,14 +12,14 @@ def status_handler(state: MenuState) -> None:
 
     from rich.table import Table
 
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     console.print(f"\n[bold]{exp['name']}[/bold]")
     console.print(f"  Path: {store.root}")
 
-    channels = store.get_channels(exp["id"])
+    channels = store.db.get_channels(exp["id"])
     console.print(f"  Channels: {', '.join(ch['name'] for ch in channels)}")
 
-    fovs = store.get_fovs(exp["id"])
+    fovs = store.db.get_fovs(exp["id"])
     if not fovs:
         console.print("  [dim]No FOVs imported yet.[/dim]")
         return

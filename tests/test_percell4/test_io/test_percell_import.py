@@ -30,7 +30,7 @@ def _add_fov_with_image(
     fov_name: str = "test_fov",
 ) -> bytes:
     """Add an FOV with a single-channel image and return the FOV ID."""
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     fov_id = new_uuid()
     fov_hex = uuid_to_hex(fov_id)
 
@@ -39,7 +39,7 @@ def _add_fov_with_image(
     zarr_path = store.layers.write_image_channels(fov_hex, {0: arr})
 
     # Insert FOV record
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_fov(
             id=fov_id,
             experiment_id=exp["id"],
@@ -91,7 +91,7 @@ class TestImportFovCreatesNewUuids:
                 target, source, src_fov_id,
             )
 
-            fov = target.get_fov(new_fov_id)
+            fov = target.db.get_fov(new_fov_id)
             assert fov is not None
             assert fov["auto_name"] == "fov_a_imported"
             assert fov["status"] == FovStatus.imported
@@ -105,7 +105,7 @@ class TestImportFovCreatesNewUuids:
         target = _create_store(tmp_path, "target.percell")
 
         try:
-            exp = source.get_experiment()
+            exp = source.db.get_experiment()
             src_fov_id = new_uuid()
             src_fov_hex = uuid_to_hex(src_fov_id)
 
@@ -115,7 +115,7 @@ class TestImportFovCreatesNewUuids:
                 src_fov_hex, {0: test_arr}
             )
 
-            with source.transaction():
+            with source.db.transaction():
                 source.db.insert_fov(
                     id=src_fov_id,
                     experiment_id=exp["id"],

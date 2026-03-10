@@ -50,8 +50,8 @@ def _step_segment(
         segmenter = CellposeSegmenter()
 
     # Get all imported FOVs
-    exp = store.get_experiment()
-    fovs = store.get_fovs(exp["id"])
+    exp = store.db.get_experiment()
+    fovs = store.db.get_fovs(exp["id"])
     fov_ids = [
         f["id"]
         for f in fovs
@@ -123,8 +123,8 @@ def _step_threshold(
     if not fov_ids:
         return {"masks_created": 0}
 
-    exp = store.get_experiment()
-    channels = store.get_channels(exp["id"])
+    exp = store.db.get_experiment()
+    channels = store.db.get_channels(exp["id"])
 
     masks_created = 0
     threshold_results = []
@@ -180,8 +180,8 @@ def _step_measure_masked(
         return {"measurements_count": 0}
 
     measurer = Measurer()
-    exp = store.get_experiment()
-    channels = store.get_channels(exp["id"])
+    exp = store.db.get_experiment()
+    channels = store.db.get_channels(exp["id"])
 
     # Find roi_type from segmentation_set
     seg_set = store.db.get_segmentation_set(seg_set_id)
@@ -193,7 +193,7 @@ def _step_measure_masked(
     total = 0
     for fov_id in fov_ids:
         # Get active mask assignments for this FOV
-        assignments = store.get_active_assignments(fov_id)
+        assignments = store.db.get_active_assignments(fov_id)
         mask_assignments = assignments.get("mask", [])
 
         for ma in mask_assignments:

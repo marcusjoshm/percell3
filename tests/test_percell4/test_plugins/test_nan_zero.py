@@ -31,16 +31,16 @@ def populated_store(tmp_path: Path):
     percell_dir = tmp_path / "test.percell"
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
 
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     exp_id = exp["id"]
-    channels = store.get_channels(exp_id)
+    channels = store.db.get_channels(exp_id)
     roi_types = store.db.get_roi_type_definitions(exp_id)
     type_map = {rt["name"]: rt for rt in roi_types}
     cell_type = type_map["cell"]
 
     # Create a condition
     cond_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_condition(cond_id, exp_id, "control")
 
     # Create FOV with test data:
@@ -56,8 +56,8 @@ def populated_store(tmp_path: Path):
     channel_arrays = {0: ch0_data, 1: ch1_data}
     zarr_path = store.layers.write_image_channels(fov_hex, channel_arrays)
 
-    with store.transaction():
-        store.insert_fov(
+    with store.db.transaction():
+        store.db.insert_fov(
             id=fov_id,
             experiment_id=exp_id,
             condition_id=cond_id,
@@ -65,23 +65,23 @@ def populated_store(tmp_path: Path):
             auto_name="FOV_001",
             zarr_path=zarr_path,
         )
-        store.set_fov_status(fov_id, FovStatus.imported, "test setup")
+        store.db.set_fov_status(fov_id, FovStatus.imported, "test setup")
 
     # Create pipeline run
     run_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_pipeline_run(run_id, "test_segmentation")
 
     # Create segmentation set
     seg_set_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_segmentation_set(
             seg_set_id, exp_id, cell_type["id"], "cellpose",
             fov_count=1, total_roi_count=2,
         )
 
     # Assign segmentation to FOV
-    with store.transaction():
+    with store.db.transaction():
         store.db.assign_segmentation(
             [fov_id], seg_set_id, cell_type["id"], run_id,
             assigned_by="test",
@@ -92,7 +92,7 @@ def populated_store(tmp_path: Path):
     ci_2 = new_uuid()
     roi_1 = new_uuid()
     roi_2 = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_cell_identity(ci_1, fov_id, cell_type["id"])
         store.db.insert_cell_identity(ci_2, fov_id, cell_type["id"])
         store.db.insert_roi(
@@ -154,7 +154,7 @@ def test_nan_zero_replaces_zeros_with_nan(populated_store) -> None:
 
     # Find the derived FOV
     exp_id = info["exp_id"]
-    all_fovs = store.get_fovs(exp_id)
+    all_fovs = store.db.get_fovs(exp_id)
     derived_fovs = [f for f in all_fovs if f["parent_fov_id"] == info["fov_id"]]
     assert len(derived_fovs) == 1
 
@@ -183,7 +183,7 @@ def test_nan_zero_preserves_non_target_channels(populated_store) -> None:
     )
 
     exp_id = info["exp_id"]
-    all_fovs = store.get_fovs(exp_id)
+    all_fovs = store.db.get_fovs(exp_id)
     derived_fovs = [f for f in all_fovs if f["parent_fov_id"] == info["fov_id"]]
     derived_hex = uuid_to_hex(derived_fovs[0]["id"])
 
@@ -205,7 +205,7 @@ def test_nan_zero_duplicates_rois(populated_store) -> None:
     )
 
     exp_id = info["exp_id"]
-    all_fovs = store.get_fovs(exp_id)
+    all_fovs = store.db.get_fovs(exp_id)
     derived_fovs = [f for f in all_fovs if f["parent_fov_id"] == info["fov_id"]]
     derived_id = derived_fovs[0]["id"]
 
@@ -235,11 +235,11 @@ def test_nan_zero_copies_assignments(populated_store) -> None:
     )
 
     exp_id = info["exp_id"]
-    all_fovs = store.get_fovs(exp_id)
+    all_fovs = store.db.get_fovs(exp_id)
     derived_fovs = [f for f in all_fovs if f["parent_fov_id"] == info["fov_id"]]
     derived_id = derived_fovs[0]["id"]
 
-    active = store.get_active_assignments(derived_id)
+    active = store.db.get_active_assignments(derived_id)
     assert len(active["segmentation"]) >= 1
     seg = active["segmentation"][0]
     assert seg["segmentation_set_id"] == info["seg_set_id"]
@@ -264,9 +264,9 @@ def test_nan_zero_derived_fov_status(populated_store) -> None:
     )
 
     exp_id = info["exp_id"]
-    all_fovs = store.get_fovs(exp_id)
+    all_fovs = store.db.get_fovs(exp_id)
     derived_fovs = [f for f in all_fovs if f["parent_fov_id"] == info["fov_id"]]
     derived_id = derived_fovs[0]["id"]
 
-    status = store.get_fov_status(derived_id)
+    status = store.db.get_fov_status(derived_id)
     assert status == "imported"

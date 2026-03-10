@@ -257,7 +257,7 @@ class Menu:
                 name = ""
                 if self.state.store:
                     try:
-                        exp = self.state.store.get_experiment()
+                        exp = self.state.store.db.get_experiment()
                         name = exp["name"]
                     except Exception:
                         name = str(self.state.experiment_path)
@@ -335,7 +335,7 @@ def _show_header(state: MenuState) -> None:
         name = ""
         if state.store:
             try:
-                exp = state.store.get_experiment()
+                exp = state.store.db.get_experiment()
                 name = exp["name"]
             except Exception:
                 name = str(state.experiment_path)

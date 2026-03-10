@@ -218,25 +218,6 @@ class PipelineRun:
 
 
 # ---------------------------------------------------------------------------
-# Assignment Record
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class AssignmentRecord:
-    """Immutable snapshot of a segmentation or mask assignment to an FOV."""
-
-    id: bytes
-    fov_id: FovId
-    target_id: bytes
-    is_active: bool
-    pipeline_run_id: PipelineRunId
-    assigned_by: str | None = None
-    assigned_at: str
-    deactivated_at: str | None = None
-
-
-# ---------------------------------------------------------------------------
 # Internal helper: measurement work item
 # ---------------------------------------------------------------------------
 

@@ -29,9 +29,9 @@ def _build_experiment(tmp_path: Path):
     percell_dir = tmp_path / "test.percell"
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
 
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     experiment_id = exp["id"]
-    channels = store.get_channels(experiment_id)
+    channels = store.db.get_channels(experiment_id)
     channel_ids = [ch["id"] for ch in channels]
 
     roi_types = store.db.get_roi_type_definitions(experiment_id)

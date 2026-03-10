@@ -49,7 +49,7 @@ def run_measurements(
     for idx, item in enumerate(needed):
         try:
             # Get active segmentation assignment for this FOV + roi_type
-            assignments = store.get_active_assignments(item.fov_id)
+            assignments = store.db.get_active_assignments(item.fov_id)
             seg_assignments = assignments["segmentation"]
 
             # Find assignment matching our roi_type

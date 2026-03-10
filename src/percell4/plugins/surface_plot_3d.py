@@ -35,10 +35,10 @@ class SurfacePlot3DPlugin(VisualizationPlugin):
 
         from percell4.core.db_types import uuid_to_hex, uuid_to_str
 
-        exp = store.get_experiment()
-        channels = store.get_channels(exp["id"])
+        exp = store.db.get_experiment()
+        channels = store.db.get_channels(exp["id"])
         channel_names = [ch["name"] for ch in channels]
-        fov = store.get_fov(fov_id)
+        fov = store.db.get_fov(fov_id)
         fov_name = fov["auto_name"] if fov else uuid_to_str(fov_id)
         fov_hex = uuid_to_hex(fov_id)
 

@@ -30,7 +30,7 @@ def store_with_fov(percell_dir: Path):
     """
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
 
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     exp_id = exp["id"]
 
     fov_id = new_uuid()
@@ -41,19 +41,19 @@ def store_with_fov(percell_dir: Path):
         fov_hex, {0: np.zeros((64, 64), dtype=np.uint16)}
     )
 
-    with store.transaction():
-        store.insert_fov(
+    with store.db.transaction():
+        store.db.insert_fov(
             id=fov_id,
             experiment_id=exp_id,
             status="pending",
             auto_name="FOV_001",
             zarr_path=zarr_path,
         )
-        store.set_fov_status(fov_id, FovStatus.imported, "test setup")
+        store.db.set_fov_status(fov_id, FovStatus.imported, "test setup")
 
     # Create a pipeline run for the import
     run_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_pipeline_run(run_id, "label_import_test")
 
     yield store, fov_id, exp_id, run_id
@@ -98,7 +98,7 @@ class TestImportLabelImage:
             assert ci["roi_type_id"] == cell_type["id"]
 
         # Verify assignment
-        active = store.get_active_assignments(fov_id)
+        active = store.db.get_active_assignments(fov_id)
         assert len(active["segmentation"]) == 1
         assert active["segmentation"][0]["assigned_by"] == "label_image_import"
 

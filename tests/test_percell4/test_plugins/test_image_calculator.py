@@ -22,7 +22,7 @@ def calc_store(tmp_path: Path):
     percell_dir = tmp_path / "calc.percell"
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
 
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     exp_id = exp["id"]
 
     # Create FOV: DAPI=100, GFP=50
@@ -34,15 +34,15 @@ def calc_store(tmp_path: Path):
     }
     zarr_path = store.layers.write_image_channels(fov_hex, channel_arrays)
 
-    with store.transaction():
-        store.insert_fov(
+    with store.db.transaction():
+        store.db.insert_fov(
             id=fov_id,
             experiment_id=exp_id,
             status="pending",
             auto_name="FOV_CALC",
             zarr_path=zarr_path,
         )
-        store.set_fov_status(fov_id, FovStatus.imported, "test")
+        store.db.set_fov_status(fov_id, FovStatus.imported, "test")
 
     yield store, {"fov_id": fov_id, "exp_id": exp_id}
     store.close()
@@ -66,7 +66,7 @@ def test_add_single_channel(calc_store) -> None:
     assert not result.errors
 
     # Find derived FOV
-    all_fovs = store.get_fovs(info["exp_id"])
+    all_fovs = store.db.get_fovs(info["exp_id"])
     derived = [f for f in all_fovs if f["parent_fov_id"] == info["fov_id"]]
     assert len(derived) == 1
 
@@ -92,7 +92,7 @@ def test_subtract_two_channel(calc_store) -> None:
 
     assert result.derived_fovs_created == 1
 
-    all_fovs = store.get_fovs(info["exp_id"])
+    all_fovs = store.db.get_fovs(info["exp_id"])
     derived = [f for f in all_fovs if f["parent_fov_id"] == info["fov_id"]]
     derived_hex = uuid_to_hex(derived[0]["id"])
 

@@ -32,8 +32,8 @@ def import_images_handler(state: MenuState) -> None:
     try:
         from percell4.io.engine import ImportEngine
 
-        exp = store.get_experiment()
-        channels = store.get_channels(exp["id"])
+        exp = store.db.get_experiment()
+        channels = store.db.get_channels(exp["id"])
         ch_mapping = {i: ch["id"] for i, ch in enumerate(channels)}
 
         engine = ImportEngine()

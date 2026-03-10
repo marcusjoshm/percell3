@@ -112,9 +112,9 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
             raise RuntimeError("'particle_channel' parameter is required.")
 
         # Resolve channel indices
-        exp = store.get_experiment()
+        exp = store.db.get_experiment()
         exp_id = exp["id"]
-        all_channels = store.get_channels(exp_id)
+        all_channels = store.db.get_channels(exp_id)
         channel_index_by_name = {
             ch["name"]: idx for idx, ch in enumerate(all_channels)
         }
@@ -141,7 +141,7 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
         errors: list[str] = []
 
         for fov_idx, fov_id in enumerate(fov_ids):
-            fov = store.get_fov(fov_id)
+            fov = store.db.get_fov(fov_id)
             if fov is None:
                 errors.append(f"FOV not found: {uuid_to_str(fov_id)}")
                 continue
@@ -153,7 +153,7 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
                 on_progress(fov_idx, len(fov_ids), fov_name)
 
             # Get active assignments
-            active = store.get_active_assignments(fov_id)
+            active = store.db.get_active_assignments(fov_id)
             seg_assigns = active.get("segmentation", [])
             mask_assigns = active.get("mask", [])
 
@@ -221,7 +221,7 @@ class SplitHaloCondensateAnalysisPlugin(AnalysisPlugin):
             # Resolve condition name
             condition_name = "uncategorized"
             if fov["condition_id"]:
-                conditions = store.get_conditions(exp_id)
+                conditions = store.db.get_conditions(exp_id)
                 for c in conditions:
                     if c["id"] == fov["condition_id"]:
                         condition_name = c["name"]

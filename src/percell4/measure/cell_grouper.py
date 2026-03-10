@@ -14,6 +14,7 @@ import numpy as np
 
 from percell4.core.constants import SCOPE_WHOLE_ROI
 from percell4.core.db_types import new_uuid, uuid_to_hex
+from percell4.core.experiment_store import find_channel_index
 
 if TYPE_CHECKING:
     from percell4.core.experiment_store import ExperimentStore
@@ -67,13 +68,8 @@ def create_intensity_groups(
     fov_row = store.db.get_fov(fov_ids[0])
     experiment_id = fov_row["experiment_id"]
     channels = store.db.get_channels(experiment_id)
-    channel_id = None
-    for ch in channels:
-        if ch["name"] == channel_name:
-            channel_id = ch["id"]
-            break
-    if channel_id is None:
-        raise ValueError(f"Channel {channel_name!r} not found")
+    ch_idx = find_channel_index(channels, channel_name=channel_name)
+    channel_id = channels[ch_idx]["id"]
 
     # Collect all ROI IDs and their mean_intensity measurements
     roi_values: list[tuple[bytes, float]] = []

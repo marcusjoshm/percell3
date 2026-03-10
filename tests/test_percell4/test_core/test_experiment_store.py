@@ -72,8 +72,8 @@ def test_create_experiment(percell_dir: Path) -> None:
 
 def test_create_populates_channels(created_store: ExperimentStore) -> None:
     """Channels from TOML are present in DB."""
-    exp = created_store.get_experiment()
-    channels = created_store.get_channels(exp["id"])
+    exp = created_store.db.get_experiment()
+    channels = created_store.db.get_channels(exp["id"])
     names = {ch["name"] for ch in channels}
     assert names == {"DAPI", "GFP"}
 
@@ -85,7 +85,7 @@ def test_create_populates_channels(created_store: ExperimentStore) -> None:
 
 def test_create_populates_roi_types(created_store: ExperimentStore) -> None:
     """roi_type_definitions from TOML are present in DB."""
-    exp = created_store.get_experiment()
+    exp = created_store.db.get_experiment()
     roi_types = created_store.db.get_roi_type_definitions(exp["id"])
     names = {rt["name"] for rt in roi_types}
     assert names == {"cell", "particle"}
@@ -98,7 +98,7 @@ def test_create_populates_roi_types(created_store: ExperimentStore) -> None:
 
 def test_create_with_hierarchy(created_store: ExperimentStore) -> None:
     """parent_type references resolved (particle -> cell)."""
-    exp = created_store.get_experiment()
+    exp = created_store.db.get_experiment()
     roi_types = created_store.db.get_roi_type_definitions(exp["id"])
 
     type_map = {rt["name"]: rt for rt in roi_types}
@@ -116,7 +116,7 @@ def test_create_with_hierarchy(created_store: ExperimentStore) -> None:
 
 def test_create_config_hash_stored(created_store: ExperimentStore) -> None:
     """Experiment record has config_hash."""
-    exp = created_store.get_experiment()
+    exp = created_store.db.get_experiment()
     assert exp["config_hash"] is not None
     assert len(exp["config_hash"]) == 16  # sha256 hex truncated to 16
 
@@ -143,12 +143,12 @@ def test_create_existing_raises(percell_dir: Path) -> None:
 def test_open_existing(percell_dir: Path) -> None:
     """Open previously created experiment."""
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
-    exp_id = store.get_experiment()["id"]
+    exp_id = store.db.get_experiment()["id"]
     store.close()
 
     store2 = ExperimentStore.open(percell_dir)
     try:
-        exp2 = store2.get_experiment()
+        exp2 = store2.db.get_experiment()
         assert exp2["id"] == exp_id
     finally:
         store2.close()
@@ -176,7 +176,7 @@ def test_context_manager(percell_dir: Path) -> None:
     store.close()
 
     with ExperimentStore.open(percell_dir) as s:
-        exp = s.get_experiment()
+        exp = s.db.get_experiment()
         assert exp is not None
 
     # After context manager exit, DB should be closed
@@ -217,13 +217,13 @@ def test_recovery_cleans_old_pending(percell_dir: Path) -> None:
 def test_recovery_promotes_valid_pending_fov(percell_dir: Path) -> None:
     """Pending FOV with valid zarr becomes imported."""
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
 
     # Create a pending FOV with a valid zarr path
     fov_id = new_uuid()
     zarr_path = "zarr/images/test_fov"
-    with store.transaction():
-        store.insert_fov(
+    with store.db.transaction():
+        store.db.insert_fov(
             id=fov_id,
             experiment_id=exp["id"],
             status="pending",
@@ -241,7 +241,7 @@ def test_recovery_promotes_valid_pending_fov(percell_dir: Path) -> None:
     # Re-open triggers recovery
     store2 = ExperimentStore.open(percell_dir)
     try:
-        status = store2.get_fov_status(fov_id)
+        status = store2.db.get_fov_status(fov_id)
         assert status == "imported"
     finally:
         store2.close()
@@ -255,21 +255,21 @@ def test_recovery_promotes_valid_pending_fov(percell_dir: Path) -> None:
 def test_recovery_handles_deleting_fov(percell_dir: Path) -> None:
     """Deleting FOV gets completed on recovery."""
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
 
     # Create a FOV and advance it to deleting status
     fov_id = new_uuid()
     zarr_path = "zarr/images/to_delete"
-    with store.transaction():
-        store.insert_fov(
+    with store.db.transaction():
+        store.db.insert_fov(
             id=fov_id,
             experiment_id=exp["id"],
             status="pending",
             zarr_path=zarr_path,
         )
         # pending -> imported -> deleting
-        store.set_fov_status(fov_id, FovStatus.imported, "test")
-        store.set_fov_status(fov_id, FovStatus.deleting, "test")
+        store.db.set_fov_status(fov_id, FovStatus.imported, "test")
+        store.db.set_fov_status(fov_id, FovStatus.deleting, "test")
 
     # Create the zarr directory so delete_path can clean it
     full_path = percell_dir / zarr_path
@@ -281,7 +281,7 @@ def test_recovery_handles_deleting_fov(percell_dir: Path) -> None:
     # Re-open triggers recovery
     store2 = ExperimentStore.open(percell_dir)
     try:
-        status = store2.get_fov_status(fov_id)
+        status = store2.db.get_fov_status(fov_id)
         assert status == "deleted"
         # Zarr data should be deleted
         assert not full_path.exists()
@@ -347,7 +347,7 @@ def test_recovery_stale_lock_removed(percell_dir: Path) -> None:
 
     # Open should succeed (stale lock removed)
     with ExperimentStore.open(percell_dir) as s:
-        assert s.get_experiment() is not None
+        assert s.db.get_experiment() is not None
 
     assert not lock_path.exists()
 
@@ -362,43 +362,43 @@ def test_delegated_methods_work(created_store: ExperimentStore) -> None:
     store = created_store
 
     # get_experiment
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     assert exp is not None
     assert exp["name"] == "Test Experiment"
 
     # get_channels
-    channels = store.get_channels(exp["id"])
+    channels = store.db.get_channels(exp["id"])
     assert len(channels) == 2
 
     # get_conditions (empty initially)
-    conditions = store.get_conditions(exp["id"])
+    conditions = store.db.get_conditions(exp["id"])
     assert conditions == []
 
     # get_fovs (empty initially)
-    fovs = store.get_fovs(exp["id"])
+    fovs = store.db.get_fovs(exp["id"])
     assert fovs == []
 
     # transaction context manager
     fov_id = new_uuid()
-    with store.transaction():
-        store.insert_fov(id=fov_id, experiment_id=exp["id"])
+    with store.db.transaction():
+        store.db.insert_fov(id=fov_id, experiment_id=exp["id"])
 
-    fov = store.get_fov(fov_id)
+    fov = store.db.get_fov(fov_id)
     assert fov is not None
     assert fov["status"] == "pending"
 
     # get_fovs_by_status
-    pending = store.get_fovs_by_status(exp["id"], "pending")
+    pending = store.db.get_fovs_by_status(exp["id"], "pending")
     assert len(pending) == 1
 
     # get_fov_status / set_fov_status
-    assert store.get_fov_status(fov_id) == "pending"
-    store.set_fov_status(fov_id, FovStatus.imported, "test")
-    assert store.get_fov_status(fov_id) == "imported"
+    assert store.db.get_fov_status(fov_id) == "pending"
+    store.db.set_fov_status(fov_id, FovStatus.imported, "test")
+    assert store.db.get_fov_status(fov_id) == "imported"
 
     # get_descendants / get_ancestors (empty for single FOV)
-    assert store.get_descendants(fov_id) == []
-    assert store.get_ancestors(fov_id) == []
+    assert store.db.get_descendants(fov_id) == []
+    assert store.db.get_ancestors(fov_id) == []
 
 
 # ---------------------------------------------------------------------------
@@ -445,11 +445,11 @@ def test_recovery_marks_pending_without_zarr_as_error(
 ) -> None:
     """Pending FOV without valid zarr_path is marked as error."""
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
 
     fov_id = new_uuid()
-    with store.transaction():
-        store.insert_fov(
+    with store.db.transaction():
+        store.db.insert_fov(
             id=fov_id,
             experiment_id=exp["id"],
             status="pending",
@@ -459,7 +459,7 @@ def test_recovery_marks_pending_without_zarr_as_error(
 
     store2 = ExperimentStore.open(percell_dir)
     try:
-        status = store2.get_fov_status(fov_id)
+        status = store2.db.get_fov_status(fov_id)
         assert status == "error"
     finally:
         store2.close()
@@ -475,9 +475,9 @@ def _setup_populated_experiment(store: ExperimentStore) -> dict:
 
     Returns a dict with all entity IDs for use in tests.
     """
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     exp_id = exp["id"]
-    channels = store.get_channels(exp_id)
+    channels = store.db.get_channels(exp_id)
     roi_types = store.db.get_roi_type_definitions(exp_id)
 
     type_map = {rt["name"]: rt for rt in roi_types}
@@ -486,7 +486,7 @@ def _setup_populated_experiment(store: ExperimentStore) -> dict:
 
     # Create a condition
     cond_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_condition(cond_id, exp_id, "control")
 
     # Create source FOV with zarr data
@@ -498,8 +498,8 @@ def _setup_populated_experiment(store: ExperimentStore) -> dict:
     }
     zarr_path = store.layers.write_image_channels(fov_hex, channel_arrays)
 
-    with store.transaction():
-        store.insert_fov(
+    with store.db.transaction():
+        store.db.insert_fov(
             id=fov_id,
             experiment_id=exp_id,
             condition_id=cond_id,
@@ -507,16 +507,16 @@ def _setup_populated_experiment(store: ExperimentStore) -> dict:
             auto_name="FOV_001",
             zarr_path=zarr_path,
         )
-        store.set_fov_status(fov_id, FovStatus.imported, "test setup")
+        store.db.set_fov_status(fov_id, FovStatus.imported, "test setup")
 
     # Create pipeline run
     run_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_pipeline_run(run_id, "test_segmentation")
 
     # Create segmentation set
     seg_set_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_segmentation_set(
             seg_set_id,
             exp_id,
@@ -527,7 +527,7 @@ def _setup_populated_experiment(store: ExperimentStore) -> dict:
         )
 
     # Assign segmentation to FOV
-    with store.transaction():
+    with store.db.transaction():
         store.db.assign_segmentation(
             [fov_id],
             seg_set_id,
@@ -541,7 +541,7 @@ def _setup_populated_experiment(store: ExperimentStore) -> dict:
     cell_identity_2 = new_uuid()
     roi_1 = new_uuid()
     roi_2 = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_cell_identity(cell_identity_1, fov_id, cell_type["id"])
         store.db.insert_cell_identity(cell_identity_2, fov_id, cell_type["id"])
         store.db.insert_roi(
@@ -567,7 +567,7 @@ def _setup_populated_experiment(store: ExperimentStore) -> dict:
 
     # Create a particle (sub-cellular ROI) under roi_1
     particle_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_roi(
             id=particle_id,
             fov_id=fov_id,
@@ -580,7 +580,7 @@ def _setup_populated_experiment(store: ExperimentStore) -> dict:
         )
 
     # Insert measurements
-    with store.transaction():
+    with store.db.transaction():
         for roi_id in (roi_1, roi_2):
             for ch in channels:
                 store.db.insert_measurement(
@@ -645,7 +645,7 @@ def test_create_derived_fov(populated_store) -> None:
         transform_fn=identity_transform,
     )
 
-    derived = store.get_fov(derived_id)
+    derived = store.db.get_fov(derived_id)
     assert derived is not None
     assert derived["parent_fov_id"] == info["fov_id"]
     assert derived["derivation_op"] == "nan_zero"
@@ -671,7 +671,7 @@ def test_create_derived_fov_copies_assignments(populated_store) -> None:
         transform_fn=lambda a: a,
     )
 
-    active = store.get_active_assignments(derived_id)
+    active = store.db.get_active_assignments(derived_id)
     assert len(active["segmentation"]) >= 1
     seg = active["segmentation"][0]
     assert seg["segmentation_set_id"] == info["seg_set_id"]
@@ -746,7 +746,7 @@ def test_create_derived_fov_auto_name(populated_store) -> None:
         transform_fn=lambda a: a,
     )
 
-    derived = store.get_fov(derived_id)
+    derived = store.db.get_fov(derived_id)
     assert derived["auto_name"] == "FOV_001_nan_zero"
 
 
@@ -796,7 +796,7 @@ def test_delete_fov_soft_delete(populated_store) -> None:
     # Advance to a deletable status (imported -> deleting -> deleted)
     store.delete_fov(fov_id)
 
-    status = store.get_fov_status(fov_id)
+    status = store.db.get_fov_status(fov_id)
     assert status == "deleted"
 
     # Zarr should be gone
@@ -813,19 +813,19 @@ def test_delete_fov_no_zarr(percell_dir: Path) -> None:
     """Works when zarr_path is None."""
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
     try:
-        exp = store.get_experiment()
+        exp = store.db.get_experiment()
         fov_id = new_uuid()
-        with store.transaction():
-            store.insert_fov(
+        with store.db.transaction():
+            store.db.insert_fov(
                 id=fov_id,
                 experiment_id=exp["id"],
                 status="pending",
                 zarr_path=None,
             )
-            store.set_fov_status(fov_id, FovStatus.imported, "test")
+            store.db.set_fov_status(fov_id, FovStatus.imported, "test")
 
         store.delete_fov(fov_id)
-        assert store.get_fov_status(fov_id) == "deleted"
+        assert store.db.get_fov_status(fov_id) == "deleted"
     finally:
         store.close()
 
@@ -851,12 +851,12 @@ def test_mark_descendants_stale(populated_store) -> None:
         params={},
         transform_fn=lambda a: a,
     )
-    assert store.get_fov_status(derived_id) == "imported"
+    assert store.db.get_fov_status(derived_id) == "imported"
 
     # Mark descendants stale
     count = store.mark_descendants_stale(info["fov_id"])
     assert count == 1
-    assert store.get_fov_status(derived_id) == "stale"
+    assert store.db.get_fov_status(derived_id) == "stale"
 
 
 # ===========================================================================
@@ -948,7 +948,7 @@ def test_insert_roi_checked_valid_top_level(populated_store) -> None:
     store, info = populated_store
 
     new_ci = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_cell_identity(
             new_ci, info["fov_id"], info["cell_type"]["id"]
         )

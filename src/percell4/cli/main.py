@@ -124,7 +124,7 @@ def create(ctx: click.Context, config_toml: str, path: str | None) -> None:
             out_path = Path(path)
         store = ExperimentStore.create(out_path, config_path)
         _save_recent(out_path)
-        exp = store.get_experiment()
+        exp = store.db.get_experiment()
         print_success(f"Created experiment '{exp['name']}' at {out_path}")
         store.close()
     except ExperimentError as e:
@@ -205,14 +205,14 @@ def status(ctx: click.Context) -> None:
         raise SystemExit(1)
 
     try:
-        exp = store.get_experiment()
+        exp = store.db.get_experiment()
         console.print(f"\n[bold]{exp['name']}[/bold]")
         console.print(f"  Path: {store.root}")
 
-        channels = store.get_channels(exp["id"])
+        channels = store.db.get_channels(exp["id"])
         console.print(f"  Channels: {', '.join(ch['name'] for ch in channels)}")
 
-        fovs = store.get_fovs(exp["id"])
+        fovs = store.db.get_fovs(exp["id"])
         if not fovs:
             console.print("  [dim]No FOVs imported yet.[/dim]")
             return
@@ -266,14 +266,14 @@ def import_cmd(ctx: click.Context, source_dir: str, condition: str | None) -> No
             print_warning(f"No image files found in {source}")
             return
 
-        exp = store.get_experiment()
-        channels = store.get_channels(exp["id"])
+        exp = store.db.get_experiment()
+        channels = store.db.get_channels(exp["id"])
         ch_mapping = {i: ch["id"] for i, ch in enumerate(channels)}
 
         # Resolve condition if provided
         condition_id = None
         if condition:
-            conditions = store.get_conditions(exp["id"])
+            conditions = store.db.get_conditions(exp["id"])
             for c in conditions:
                 if c["name"] == condition:
                     condition_id = c["id"]
@@ -302,19 +302,6 @@ def import_cmd(ctx: click.Context, source_dir: str, condition: str | None) -> No
         raise SystemExit(1)
     finally:
         store.close()
-
-
-# ---------------------------------------------------------------------------
-# import-legacy
-# ---------------------------------------------------------------------------
-
-
-@cli.command("import-legacy")
-@click.argument("percell3_path", type=click.Path(exists=True))
-@click.pass_context
-def import_legacy(ctx: click.Context, percell3_path: str) -> None:
-    """Import data from a percell3 experiment."""
-    print_warning("Legacy import is not yet implemented.")
 
 
 # ---------------------------------------------------------------------------
@@ -348,8 +335,8 @@ def segment(
         raise SystemExit(1)
 
     try:
-        exp = store.get_experiment()
-        fovs = store.get_fovs_by_status(exp["id"], FovStatus.imported)
+        exp = store.db.get_experiment()
+        fovs = store.db.get_fovs_by_status(exp["id"], FovStatus.imported)
         if not fovs:
             print_warning("No FOVs in 'imported' status to segment")
             return
@@ -398,8 +385,8 @@ def measure(ctx: click.Context) -> None:
         raise SystemExit(1)
 
     try:
-        exp = store.get_experiment()
-        fovs = store.get_fovs_by_status(exp["id"], FovStatus.segmented)
+        exp = store.db.get_experiment()
+        fovs = store.db.get_fovs_by_status(exp["id"], FovStatus.segmented)
         if not fovs:
             print_warning("No FOVs in 'segmented' status to measure")
             return
@@ -407,12 +394,12 @@ def measure(ctx: click.Context) -> None:
         # Build MeasurementNeeded items from active assignments
         from percell4.core.models import MeasurementNeeded
 
-        channels = store.get_channels(exp["id"])
+        channels = store.db.get_channels(exp["id"])
         channel_ids = [ch["id"] for ch in channels]
         needed = []
 
         for fov in fovs:
-            assignments = store.get_active_assignments(fov["id"])
+            assignments = store.db.get_active_assignments(fov["id"])
             for sa in assignments["segmentation"]:
                 needed.append(
                     MeasurementNeeded(
@@ -490,8 +477,8 @@ def assignments(ctx: click.Context) -> None:
         raise SystemExit(1)
 
     try:
-        exp = store.get_experiment()
-        fovs = store.get_fovs(exp["id"])
+        exp = store.db.get_experiment()
+        fovs = store.db.get_fovs(exp["id"])
 
         if not fovs:
             console.print("[dim]No FOVs to show assignments for.[/dim]")
@@ -504,7 +491,7 @@ def assignments(ctx: click.Context) -> None:
         table.add_column("Assigned By")
 
         for fov in fovs:
-            assignments_data = store.get_active_assignments(fov["id"])
+            assignments_data = store.db.get_active_assignments(fov["id"])
             fov_label = fov["auto_name"] or format_uuid_short(fov["id"])
 
             for sa in assignments_data["segmentation"]:
@@ -553,8 +540,8 @@ def export(ctx: click.Context, output: str, roi_type: str | None, overwrite: boo
             print_error(f"Output file already exists: {out_path}\nUse --overwrite to replace.")
             raise SystemExit(1)
 
-        exp = store.get_experiment()
-        fovs = store.get_fovs(exp["id"])
+        exp = store.db.get_experiment()
+        fovs = store.db.get_fovs(exp["id"])
 
         # Filter by ROI type if requested
         if roi_type:
@@ -575,48 +562,6 @@ def export(ctx: click.Context, output: str, roi_type: str | None, overwrite: boo
 
         count = store.export_measurements_csv(fov_ids, out_path)
         print_success(f"Exported {count} measurement rows to {out_path}")
-    except ExperimentError as e:
-        print_error(str(e))
-        raise SystemExit(1)
-    finally:
-        store.close()
-
-
-# ---------------------------------------------------------------------------
-# export-compat
-# ---------------------------------------------------------------------------
-
-
-@cli.command("export-compat")
-@click.argument("output", type=click.Path())
-@click.option("--overwrite", is_flag=True, help="Overwrite existing file")
-@click.pass_context
-def export_compat(ctx: click.Context, output: str, overwrite: bool) -> None:
-    """Export measurements in percell3-compatible CSV format."""
-    from percell4.core.exceptions import ExperimentError
-
-    try:
-        store = _open_store(ctx)
-    except ExperimentError as e:
-        print_error(str(e))
-        raise SystemExit(1)
-
-    try:
-        out_path = Path(output)
-        if out_path.exists() and not overwrite:
-            print_error(f"Output file already exists: {out_path}\nUse --overwrite to replace.")
-            raise SystemExit(1)
-
-        exp = store.get_experiment()
-        fovs = store.get_fovs(exp["id"])
-        fov_ids = [f["id"] for f in fovs if f["status"] not in ("deleted", "deleting", "error")]
-
-        if not fov_ids:
-            print_warning("No FOVs with exportable data")
-            return
-
-        count = store.export_measurements_csv(fov_ids, out_path)
-        print_success(f"Exported {count} rows in compat format to {out_path}")
     except ExperimentError as e:
         print_error(str(e))
         raise SystemExit(1)
@@ -651,8 +596,8 @@ def export_prism(ctx: click.Context, output_dir: str, overwrite: bool) -> None:
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        exp = store.get_experiment()
-        fovs = store.get_fovs(exp["id"])
+        exp = store.db.get_experiment()
+        fovs = store.db.get_fovs(exp["id"])
         fov_ids = [f["id"] for f in fovs if f["status"] not in ("deleted", "deleting", "error")]
 
         if not fov_ids:
@@ -672,7 +617,7 @@ def export_prism(ctx: click.Context, output_dir: str, overwrite: bool) -> None:
 
         # Group by (channel, metric, scope) and write separate CSVs
         groups: dict[tuple, list] = {}
-        channels = store.get_channels(exp["id"])
+        channels = store.db.get_channels(exp["id"])
         ch_lookup = {ch["id"]: ch["name"] for ch in channels}
 
         for m in all_rows:
@@ -784,8 +729,8 @@ def plugins(ctx: click.Context, run: str | None) -> None:
 
         try:
             plugin = registry.get_plugin(run)
-            exp = store.get_experiment()
-            fovs = store.get_fovs(exp["id"])
+            exp = store.db.get_experiment()
+            fovs = store.db.get_fovs(exp["id"])
             fov_ids = [f["id"] for f in fovs if f["status"] not in ("deleted", "deleting", "error")]
 
             if not fov_ids:
@@ -803,16 +748,3 @@ def plugins(ctx: click.Context, run: str | None) -> None:
             raise SystemExit(1)
         finally:
             store.close()
-
-
-# ---------------------------------------------------------------------------
-# view
-# ---------------------------------------------------------------------------
-
-
-@cli.command()
-@click.option("--fov", default=None, help="FOV name or short UUID to view")
-@click.pass_context
-def view(ctx: click.Context, fov: str | None) -> None:
-    """Open experiment in napari viewer."""
-    print_warning("Napari viewer integration is not yet implemented.")

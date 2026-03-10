@@ -24,7 +24,7 @@ def ratio_store(tmp_path: Path):
     percell_dir = tmp_path / "ratio.percell"
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
 
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     exp_id = exp["id"]
     roi_types = store.db.get_roi_type_definitions(exp_id)
     cell_type = [rt for rt in roi_types if rt["name"] == "cell"][0]
@@ -39,18 +39,18 @@ def ratio_store(tmp_path: Path):
     channel_arrays = {0: ch0, 1: ch1}
     zarr_path = store.layers.write_image_channels(fov_hex, channel_arrays)
 
-    with store.transaction():
-        store.insert_fov(
+    with store.db.transaction():
+        store.db.insert_fov(
             id=fov_id, experiment_id=exp_id,
             status="pending", auto_name="FOV_RATIO",
             zarr_path=zarr_path,
         )
-        store.set_fov_status(fov_id, FovStatus.imported, "test")
+        store.db.set_fov_status(fov_id, FovStatus.imported, "test")
 
     # Segmentation
     run_id = new_uuid()
     seg_set_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_pipeline_run(run_id, "test_seg")
         store.db.insert_segmentation_set(
             seg_set_id, exp_id, cell_type["id"], "cellpose",
@@ -69,7 +69,7 @@ def ratio_store(tmp_path: Path):
     # ROI
     ci = new_uuid()
     roi_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_cell_identity(ci, fov_id, cell_type["id"])
         store.db.insert_roi(
             id=roi_id, fov_id=fov_id, roi_type_id=cell_type["id"],
@@ -86,7 +86,7 @@ def ratio_store(tmp_path: Path):
     store.layers.write_mask(mask_hex, particle_mask)
 
     thr_run_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_pipeline_run(thr_run_id, "test_threshold")
         store.db.insert_threshold_mask(
             id=mask_id, fov_id=fov_id,

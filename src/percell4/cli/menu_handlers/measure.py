@@ -12,8 +12,8 @@ def measure_handler(state: MenuState) -> None:
 
     from percell4.core.constants import FovStatus
 
-    exp = store.get_experiment()
-    fovs = store.get_fovs_by_status(exp["id"], FovStatus.segmented)
+    exp = store.db.get_experiment()
+    fovs = store.db.get_fovs_by_status(exp["id"], FovStatus.segmented)
     if not fovs:
         print_warning("No FOVs in 'segmented' status to measure")
         return
@@ -25,12 +25,12 @@ def measure_handler(state: MenuState) -> None:
         from percell4.core.models import MeasurementNeeded
         from percell4.measure.auto_measure import run_measurements
 
-        channels = store.get_channels(exp["id"])
+        channels = store.db.get_channels(exp["id"])
         channel_ids = [ch["id"] for ch in channels]
         needed: list[MeasurementNeeded] = []
 
         for fov in fovs:
-            assignments = store.get_active_assignments(fov["id"])
+            assignments = store.db.get_active_assignments(fov["id"])
             for sa in assignments["segmentation"]:
                 needed.append(
                     MeasurementNeeded(

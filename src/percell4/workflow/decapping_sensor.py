@@ -49,8 +49,8 @@ def _step_segment(
         from percell4.segment.cellpose_adapter import CellposeSegmenter
         segmenter = CellposeSegmenter()
 
-    exp = store.get_experiment()
-    fovs = store.get_fovs(exp["id"])
+    exp = store.db.get_experiment()
+    fovs = store.db.get_fovs(exp["id"])
     fov_ids = [
         f["id"]
         for f in fovs

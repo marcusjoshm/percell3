@@ -50,8 +50,8 @@ class NanZeroPlugin(AnalysisPlugin):
             raise RuntimeError("'channels' parameter is required for nan_zero.")
 
         # Resolve experiment channels
-        exp = store.get_experiment()
-        all_channels = store.get_channels(exp["id"])
+        exp = store.db.get_experiment()
+        all_channels = store.db.get_channels(exp["id"])
         channel_names = {ch["name"] for ch in all_channels}
         for ch_name in channels:
             if ch_name not in channel_names:
@@ -71,7 +71,7 @@ class NanZeroPlugin(AnalysisPlugin):
 
         for idx, fov_id in enumerate(fov_ids):
             if on_progress:
-                fov = store.get_fov(fov_id)
+                fov = store.db.get_fov(fov_id)
                 name = fov["auto_name"] if fov else "unknown"
                 on_progress(idx, len(fov_ids), name)
 

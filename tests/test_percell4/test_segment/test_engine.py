@@ -31,7 +31,7 @@ def store_with_fov(percell_dir: Path):
     """
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
 
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     exp_id = exp["id"]
 
     # Create a synthetic image: two bright squares on dark background
@@ -48,15 +48,15 @@ def store_with_fov(percell_dir: Path):
         fov_hex, {0: image_dapi, 1: image_gfp}
     )
 
-    with store.transaction():
-        store.insert_fov(
+    with store.db.transaction():
+        store.db.insert_fov(
             id=fov_id,
             experiment_id=exp_id,
             status="pending",
             auto_name="FOV_001",
             zarr_path=zarr_path,
         )
-        store.set_fov_status(fov_id, FovStatus.imported, "test setup")
+        store.db.set_fov_status(fov_id, FovStatus.imported, "test setup")
 
     yield store, fov_id, exp_id
     store.close()
@@ -113,7 +113,7 @@ class TestSegmentationPipeline:
             assert ci["roi_type_id"] == cell_type["id"]
 
         # --- Verify assignment created ---
-        active = store.get_active_assignments(fov_id)
+        active = store.db.get_active_assignments(fov_id)
         assert len(active["segmentation"]) == 1
         seg_assign = active["segmentation"][0]
         assert seg_assign["segmentation_set_id"] == seg_set_id
@@ -195,7 +195,7 @@ class TestSegmentationPipeline:
         """Segmenting multiple FOVs shares a single segmentation_set."""
         store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
         try:
-            exp = store.get_experiment()
+            exp = store.db.get_experiment()
             exp_id = exp["id"]
 
             fov_ids = []
@@ -209,15 +209,15 @@ class TestSegmentationPipeline:
                     fov_hex, {0: image, 1: np.zeros((64, 64), dtype=np.uint16)}
                 )
 
-                with store.transaction():
-                    store.insert_fov(
+                with store.db.transaction():
+                    store.db.insert_fov(
                         id=fov_id,
                         experiment_id=exp_id,
                         status="pending",
                         auto_name=f"FOV_{i:03d}",
                         zarr_path=zarr_path,
                     )
-                    store.set_fov_status(fov_id, FovStatus.imported, "test")
+                    store.db.set_fov_status(fov_id, FovStatus.imported, "test")
                 fov_ids.append(fov_id)
 
             engine = SegmentationEngine()
@@ -254,7 +254,7 @@ class TestSegmentationPipeline:
 
         # Check pipeline_run status
         # Get the assignment to find the pipeline_run_id
-        active = store.get_active_assignments(fov_id)
+        active = store.db.get_active_assignments(fov_id)
         run_id = active["segmentation"][0]["pipeline_run_id"]
         run = store.db.connection.execute(
             "SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)

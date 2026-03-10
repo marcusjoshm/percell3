@@ -71,7 +71,7 @@ class TestCreateThresholdMask:
         percell_dir = tmp_path / "test.percell"
         store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
         try:
-            exp = store.get_experiment()
+            exp = store.db.get_experiment()
             experiment_id = exp["id"]
 
             # Create FOV with a bright/dim image
@@ -122,7 +122,7 @@ class TestCreateThresholdMask:
         percell_dir = tmp_path / "otsu.percell"
         store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
         try:
-            exp = store.get_experiment()
+            exp = store.db.get_experiment()
             fov_id = new_uuid()
             store.db.insert_fov(fov_id, exp["id"], status="imported")
 
@@ -151,7 +151,7 @@ class TestCreateThresholdMask:
         percell_dir = tmp_path / "bad_ch.percell"
         store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
         try:
-            exp = store.get_experiment()
+            exp = store.db.get_experiment()
             fov_id = new_uuid()
             store.db.insert_fov(fov_id, exp["id"], status="imported")
 

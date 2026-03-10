@@ -29,9 +29,9 @@ def _create_store_with_fov(tmp_path: Path):
     percell_dir = tmp_path / "test.percell"
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
 
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     experiment_id = exp["id"]
-    channels = store.get_channels(experiment_id)
+    channels = store.db.get_channels(experiment_id)
     channel_ids = [ch["id"] for ch in channels]
 
     # Get cell ROI type
@@ -207,10 +207,10 @@ class TestMeasureFovWhole:
         percell_dir = tmp_path / "empty.percell"
         store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
         try:
-            exp = store.get_experiment()
+            exp = store.db.get_experiment()
             fov_id = new_uuid()
             store.db.insert_fov(fov_id, exp["id"], status="imported")
-            channels = store.get_channels(exp["id"])
+            channels = store.db.get_channels(exp["id"])
             roi_types = store.db.get_roi_type_definitions(exp["id"])
             cell_type_id = [rt for rt in roi_types if rt["name"] == "cell"][0]["id"]
 

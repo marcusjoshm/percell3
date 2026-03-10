@@ -48,8 +48,8 @@ def _make_plugin_runner(registry, plugin_name: str):
         store = require_experiment(state)
 
         plugin = registry.get_plugin(plugin_name)
-        exp = store.get_experiment()
-        fovs = store.get_fovs(exp["id"])
+        exp = store.db.get_experiment()
+        fovs = store.db.get_fovs(exp["id"])
         fov_ids = [
             f["id"] for f in fovs
             if f["status"] not in ("deleted", "deleting", "error")

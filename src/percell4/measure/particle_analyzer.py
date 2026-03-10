@@ -98,7 +98,7 @@ def analyze_particles(
         )
 
     # Find active segmentation assignment to read labels
-    assignments = store.get_active_assignments(fov_id)
+    assignments = store.db.get_active_assignments(fov_id)
     seg_assignments = assignments["segmentation"]
     seg_set_id = None
     for sa in seg_assignments:

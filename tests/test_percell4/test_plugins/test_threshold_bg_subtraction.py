@@ -22,7 +22,7 @@ def bgsub_store(tmp_path: Path):
     percell_dir = tmp_path / "bgsub.percell"
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
 
-    exp = store.get_experiment()
+    exp = store.db.get_experiment()
     exp_id = exp["id"]
     roi_types = store.db.get_roi_type_definitions(exp_id)
     cell_type = [rt for rt in roi_types if rt["name"] == "cell"][0]
@@ -36,13 +36,13 @@ def bgsub_store(tmp_path: Path):
     hist_arrays = {0: hist_ch0, 1: hist_ch1}
     hist_zarr = store.layers.write_image_channels(hist_hex, hist_arrays)
 
-    with store.transaction():
-        store.insert_fov(
+    with store.db.transaction():
+        store.db.insert_fov(
             id=hist_fov_id, experiment_id=exp_id,
             status="pending", auto_name="HIST_FOV",
             zarr_path=hist_zarr,
         )
-        store.set_fov_status(hist_fov_id, FovStatus.imported, "test")
+        store.db.set_fov_status(hist_fov_id, FovStatus.imported, "test")
 
     # Create apply FOV with uniform data
     apply_fov_id = new_uuid()
@@ -52,17 +52,17 @@ def bgsub_store(tmp_path: Path):
     apply_arrays = {0: apply_ch0, 1: apply_ch1}
     apply_zarr = store.layers.write_image_channels(apply_hex, apply_arrays)
 
-    with store.transaction():
-        store.insert_fov(
+    with store.db.transaction():
+        store.db.insert_fov(
             id=apply_fov_id, experiment_id=exp_id,
             status="pending", auto_name="APPLY_FOV",
             zarr_path=apply_zarr,
         )
-        store.set_fov_status(apply_fov_id, FovStatus.imported, "test")
+        store.db.set_fov_status(apply_fov_id, FovStatus.imported, "test")
 
     # Create mask on histogram FOV (whole image is masked)
     run_id = new_uuid()
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_pipeline_run(run_id, "test_threshold")
 
     mask_id = new_uuid()
@@ -70,7 +70,7 @@ def bgsub_store(tmp_path: Path):
     mask_data = np.ones((64, 64), dtype=np.uint8)
     store.layers.write_mask(mask_hex, mask_data)
 
-    with store.transaction():
+    with store.db.transaction():
         store.db.insert_threshold_mask(
             id=mask_id, fov_id=hist_fov_id,
             source_channel="DAPI", method="manual",
@@ -128,7 +128,7 @@ def test_threshold_bg_subtraction_pixel_values(bgsub_store) -> None:
     )
 
     # Find derived FOV
-    all_fovs = store.get_fovs(info["exp_id"])
+    all_fovs = store.db.get_fovs(info["exp_id"])
     derived = [f for f in all_fovs if f["parent_fov_id"] == info["apply_fov_id"]]
     assert len(derived) == 1
 

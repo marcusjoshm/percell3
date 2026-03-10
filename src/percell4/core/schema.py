@@ -514,9 +514,11 @@ def _configure_connection(conn: sqlite3.Connection) -> None:
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
-    """Execute all CREATE TABLE, CREATE INDEX, and CREATE VIEW statements.
+    """Execute all CREATE TABLE and CREATE INDEX statements.
 
     This is idempotent — all DDL uses ``IF NOT EXISTS``.
+    Debug views are NOT created by default; call
+    :func:`create_debug_views` explicitly when needed.
 
     Args:
         conn: An open SQLite connection, already configured via
@@ -528,6 +530,19 @@ def create_schema(conn: sqlite3.Connection) -> None:
     for ddl in _INDEX_DDL:
         conn.execute(ddl)
 
+    conn.commit()
+
+
+def create_debug_views(conn: sqlite3.Connection) -> None:
+    """Create debug views that display UUIDs as human-readable hex strings.
+
+    These views require the ``uuid_str`` UDF registered by
+    :func:`_configure_connection`.  Call this explicitly when you need
+    debug views — they are NOT created by :func:`create_schema`.
+
+    Args:
+        conn: An open SQLite connection with ``uuid_str`` UDF registered.
+    """
     for ddl in _VIEW_DDL:
         conn.execute(ddl)
 

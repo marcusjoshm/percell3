@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from percell4.core.db_types import new_uuid, uuid_to_hex
+from percell4.core.experiment_store import find_channel_index
 
 if TYPE_CHECKING:
     from percell4.core.experiment_store import ExperimentStore
@@ -112,13 +113,7 @@ def create_threshold_mask(
     # Find channel index
     fov_row = store.db.get_fov(fov_id)
     channels = store.db.get_channels(fov_row["experiment_id"])
-    channel_index = None
-    for idx, ch in enumerate(channels):
-        if ch["name"] == source_channel_name:
-            channel_index = idx
-            break
-    if channel_index is None:
-        raise ValueError(f"Channel {source_channel_name!r} not found")
+    channel_index = find_channel_index(channels, channel_name=source_channel_name)
 
     # Read image
     fov_hex = uuid_to_hex(fov_id)
