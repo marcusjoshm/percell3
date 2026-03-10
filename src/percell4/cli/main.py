@@ -41,8 +41,17 @@ def cli(ctx: click.Context, experiment: str | None) -> None:
     ctx.obj["experiment_path"] = Path(experiment) if experiment else None
     if ctx.invoked_subcommand is None:
         if is_interactive():
-            click.echo("Interactive mode not yet available. Use subcommands.")
-            click.echo("Run 'percell4 --help' for available commands.")
+            from percell4.cli.menu_system import MenuState
+            from percell4.cli.menu_handlers import build_main_menu
+
+            state = MenuState(experiment_path=ctx.obj.get("experiment_path"))
+            menu = build_main_menu(state)
+            try:
+                menu.run()
+            except KeyboardInterrupt:
+                pass
+            finally:
+                state.close()
         else:
             click.echo(ctx.get_help())
 
