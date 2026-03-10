@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from percell4.core.db_types import new_uuid
+from percell4.core.exceptions import InvalidStatusTransition
 from percell4.core.experiment_db import ExperimentDB
 
 
@@ -1058,3 +1059,565 @@ class TestHexagonalBoundary:
             f"Hexagonal boundary violation in experiment_db.py: "
             f"{violations}"
         )
+
+
+# ===================================================================
+# Helper for assignment tests: full experiment scaffolding
+# ===================================================================
+
+
+def _setup_full_experiment(db: ExperimentDB) -> dict[str, bytes]:
+    """Create a complete experiment with condition, channel, ROI type,
+    FOV, segmentation set, pipeline run, and ROI.
+
+    Returns a dict of IDs keyed by entity name.
+    """
+    from percell4.core.db_types import new_uuid
+
+    eid = _setup_experiment(db)
+    cid = _setup_condition(db, eid)
+    ch1 = _setup_channel(db, eid, "GFP")
+    ch2 = _setup_channel(db, eid, "RFP")
+    rtid = _setup_roi_type(db, eid, "cell")
+    fid = _setup_fov(db, eid, condition_id=cid, status="imported")
+    prid = _setup_pipeline_run(db)
+    ssid = new_uuid()
+    db.insert_segmentation_set(ssid, eid, rtid, "cellpose")
+    rid = _setup_roi(db, fid, rtid, label_id=1)
+    return {
+        "experiment_id": eid,
+        "condition_id": cid,
+        "channel_gfp": ch1,
+        "channel_rfp": ch2,
+        "roi_type_id": rtid,
+        "fov_id": fid,
+        "pipeline_run_id": prid,
+        "seg_set_id": ssid,
+        "roi_id": rid,
+    }
+
+
+# ===================================================================
+# 22. Assignment methods
+# ===================================================================
+
+
+class TestAssignSegmentation:
+    """Test assign_segmentation creates/deactivates assignments."""
+
+    def test_new_assignment_returns_new_assignment_reason(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            results = db.assign_segmentation(
+                [ids["fov_id"]],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                ids["pipeline_run_id"],
+            )
+        assert len(results) == 1
+        assert results[0].reason == "new_assignment"
+        assert results[0].fov_id == ids["fov_id"]
+        assert results[0].roi_type_id == ids["roi_type_id"]
+        assert len(results[0].channel_ids) == 2  # GFP + RFP
+
+    def test_reassignment_deactivates_old(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            # First assignment
+            db.assign_segmentation(
+                [ids["fov_id"]],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                ids["pipeline_run_id"],
+            )
+            # Second assignment (reassignment)
+            prid2 = _setup_pipeline_run(db)
+            results = db.assign_segmentation(
+                [ids["fov_id"]],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                prid2,
+            )
+        assert results[0].reason == "reassignment"
+        # Verify only one active assignment remains
+        active = db.get_active_assignments(ids["fov_id"])
+        assert len(active["segmentation"]) == 1
+
+    def test_multiple_fovs(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            fov2 = _setup_fov(db, ids["experiment_id"], status="imported")
+            results = db.assign_segmentation(
+                [ids["fov_id"], fov2],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                ids["pipeline_run_id"],
+            )
+        assert len(results) == 2
+        assert results[0].fov_id == ids["fov_id"]
+        assert results[1].fov_id == fov2
+
+
+class TestAssignMask:
+    """Test assign_mask creates/deactivates mask assignments."""
+
+    def test_new_mask_assignment(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            tmid = new_uuid()
+            db.insert_threshold_mask(tmid, ids["fov_id"], "GFP")
+            # Assign segmentation first (needed for roi_type_id lookup)
+            db.assign_segmentation(
+                [ids["fov_id"]],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                ids["pipeline_run_id"],
+            )
+            results = db.assign_mask(
+                [ids["fov_id"]],
+                tmid,
+                "measurement_scope",
+                ids["pipeline_run_id"],
+            )
+        assert len(results) == 1
+        assert results[0].reason == "new_assignment"
+
+    def test_mask_non_measurement_purpose_returns_empty(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            tmid = new_uuid()
+            db.insert_threshold_mask(tmid, ids["fov_id"], "GFP")
+            results = db.assign_mask(
+                [ids["fov_id"]],
+                tmid,
+                "background_estimation",
+                ids["pipeline_run_id"],
+            )
+        # No MeasurementNeeded for non-measurement_scope
+        assert len(results) == 0
+
+    def test_mask_reassignment(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            tmid = new_uuid()
+            db.insert_threshold_mask(tmid, ids["fov_id"], "GFP")
+            db.assign_segmentation(
+                [ids["fov_id"]],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                ids["pipeline_run_id"],
+            )
+            db.assign_mask(
+                [ids["fov_id"]], tmid, "measurement_scope",
+                ids["pipeline_run_id"],
+            )
+            prid2 = _setup_pipeline_run(db)
+            results = db.assign_mask(
+                [ids["fov_id"]], tmid, "measurement_scope", prid2,
+            )
+        assert results[0].reason == "reassignment"
+
+
+class TestGetActiveAssignments:
+    """Test get_active_assignments returns both seg and mask."""
+
+    def test_returns_both_types(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            db.assign_segmentation(
+                [ids["fov_id"]],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                ids["pipeline_run_id"],
+            )
+            tmid = new_uuid()
+            db.insert_threshold_mask(tmid, ids["fov_id"], "GFP")
+            db.assign_mask(
+                [ids["fov_id"]], tmid, "background_estimation",
+                ids["pipeline_run_id"],
+            )
+        result = db.get_active_assignments(ids["fov_id"])
+        assert "segmentation" in result
+        assert "mask" in result
+        assert len(result["segmentation"]) == 1
+        assert len(result["mask"]) == 1
+
+    def test_empty_for_unassigned_fov(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            fid = _setup_fov(db, eid)
+        result = db.get_active_assignments(fid)
+        assert len(result["segmentation"]) == 0
+        assert len(result["mask"]) == 0
+
+
+class TestDeactivateAssignment:
+    """Test deactivate_assignment for both tables."""
+
+    def test_deactivate_seg_assignment(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            db.assign_segmentation(
+                [ids["fov_id"]],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                ids["pipeline_run_id"],
+            )
+        active = db.get_active_assignments(ids["fov_id"])
+        aid = active["segmentation"][0]["id"]
+        with db.transaction():
+            count = db.deactivate_assignment(
+                "fov_segmentation_assignments", aid,
+            )
+        assert count == 1
+        active = db.get_active_assignments(ids["fov_id"])
+        assert len(active["segmentation"]) == 0
+
+    def test_deactivate_mask_assignment(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            tmid = new_uuid()
+            db.insert_threshold_mask(tmid, ids["fov_id"], "GFP")
+            db.assign_mask(
+                [ids["fov_id"]], tmid, "background_estimation",
+                ids["pipeline_run_id"],
+            )
+        active = db.get_active_assignments(ids["fov_id"])
+        aid = active["mask"][0]["id"]
+        with db.transaction():
+            count = db.deactivate_assignment(
+                "fov_mask_assignments", aid,
+            )
+        assert count == 1
+        active = db.get_active_assignments(ids["fov_id"])
+        assert len(active["mask"]) == 0
+
+    def test_invalid_table_raises(self, db: ExperimentDB) -> None:
+        with pytest.raises(ValueError, match="table must be one of"):
+            db.deactivate_assignment("bad_table", new_uuid())
+
+
+# ===================================================================
+# 23. FOV Status Machine
+# ===================================================================
+
+
+class TestFovStatusMachine:
+    """Test get_fov_status, set_fov_status, and mark_descendants_stale."""
+
+    def test_get_fov_status(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            fid = _setup_fov(db, eid, status="imported")
+        assert db.get_fov_status(fid) == "imported"
+
+    def test_get_fov_status_not_found(self, db: ExperimentDB) -> None:
+        with pytest.raises(ValueError, match="FOV not found"):
+            db.get_fov_status(new_uuid())
+
+    def test_valid_transition_succeeds(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            fid = _setup_fov(db, eid, status="imported")
+        with db.transaction():
+            db.set_fov_status(fid, "segmented", message="cellpose done")
+        assert db.get_fov_status(fid) == "segmented"
+        # Check log entry
+        log = db.connection.execute(
+            "SELECT * FROM fov_status_log WHERE fov_id = ?", (fid,)
+        ).fetchall()
+        assert len(log) == 1
+        assert log[0]["old_status"] == "imported"
+        assert log[0]["new_status"] == "segmented"
+        assert log[0]["message"] == "cellpose done"
+
+    def test_invalid_transition_raises(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            fid = _setup_fov(db, eid, status="imported")
+        with pytest.raises(
+            InvalidStatusTransition,
+            match="Cannot transition from 'imported' to 'measured'",
+        ):
+            with db.transaction():
+                db.set_fov_status(fid, "measured")
+
+    def test_mark_descendants_stale_propagates(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            root = _setup_fov(db, eid, status="imported")
+            child = new_uuid()
+            db.insert_fov(
+                child, eid, parent_fov_id=root, status="segmented",
+            )
+            grandchild = new_uuid()
+            db.insert_fov(
+                grandchild, eid, parent_fov_id=child, status="measured",
+            )
+        with db.transaction():
+            count = db.mark_descendants_stale(root)
+        assert count == 2
+        assert db.get_fov_status(child) == "stale"
+        assert db.get_fov_status(grandchild) == "stale"
+
+    def test_mark_descendants_stale_skips_deleted(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            root = _setup_fov(db, eid, status="imported")
+            child_active = new_uuid()
+            db.insert_fov(
+                child_active, eid, parent_fov_id=root, status="segmented",
+            )
+            child_deleted = new_uuid()
+            db.insert_fov(
+                child_deleted, eid, parent_fov_id=root, status="deleting",
+            )
+            child_pending = new_uuid()
+            db.insert_fov(
+                child_pending, eid, parent_fov_id=root, status="pending",
+            )
+        with db.transaction():
+            count = db.mark_descendants_stale(root)
+        assert count == 1  # Only child_active
+        assert db.get_fov_status(child_active) == "stale"
+        assert db.get_fov_status(child_deleted) == "deleting"
+        assert db.get_fov_status(child_pending) == "pending"
+
+    def test_mark_descendants_stale_returns_count(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            root = _setup_fov(db, eid, status="imported")
+        with db.transaction():
+            count = db.mark_descendants_stale(root)
+        assert count == 0  # No descendants
+
+
+# ===================================================================
+# 24. Lineage Queries
+# ===================================================================
+
+
+class TestLineageQueries:
+    """Test get_descendants, get_ancestors, check_no_cycle."""
+
+    def test_get_descendants_tree(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            root = _setup_fov(db, eid, status="imported")
+            child1 = new_uuid()
+            db.insert_fov(child1, eid, parent_fov_id=root, status="imported")
+            child2 = new_uuid()
+            db.insert_fov(child2, eid, parent_fov_id=root, status="imported")
+            grandchild = new_uuid()
+            db.insert_fov(
+                grandchild, eid, parent_fov_id=child1, status="imported",
+            )
+        descendants = db.get_descendants(root)
+        assert len(descendants) == 3
+        desc_ids = {d["id"] for d in descendants}
+        assert desc_ids == {child1, child2, grandchild}
+        # Check depths
+        depth_map = {d["id"]: d["depth"] for d in descendants}
+        assert depth_map[child1] == 1
+        assert depth_map[child2] == 1
+        assert depth_map[grandchild] == 2
+
+    def test_get_ancestors_chain(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            root = _setup_fov(db, eid, status="imported")
+            child = new_uuid()
+            db.insert_fov(child, eid, parent_fov_id=root, status="imported")
+            grandchild = new_uuid()
+            db.insert_fov(
+                grandchild, eid, parent_fov_id=child, status="imported",
+            )
+        ancestors = db.get_ancestors(grandchild)
+        assert len(ancestors) == 2
+        assert ancestors[0]["id"] == child   # depth 1
+        assert ancestors[1]["id"] == root    # depth 2
+
+    def test_get_ancestors_root_has_none(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            root = _setup_fov(db, eid, status="imported")
+        ancestors = db.get_ancestors(root)
+        assert len(ancestors) == 0
+
+    def test_depth_guard_prevents_deep_recursion(
+        self, db: ExperimentDB
+    ) -> None:
+        """Build a chain longer than MAX_LINEAGE_DEPTH and verify
+        the query stops at the guard depth."""
+        from percell4.core.constants import MAX_LINEAGE_DEPTH
+
+        with db.transaction():
+            eid = _setup_experiment(db)
+            depth = MAX_LINEAGE_DEPTH + 10
+            chain = [_setup_fov(db, eid, status="imported")]
+            for _ in range(depth):
+                fid = new_uuid()
+                db.insert_fov(
+                    fid, eid, parent_fov_id=chain[-1], status="imported",
+                )
+                chain.append(fid)
+        # Descendants of root should be capped
+        descendants = db.get_descendants(chain[0])
+        assert len(descendants) <= MAX_LINEAGE_DEPTH
+
+    def test_check_no_cycle_detects_direct_cycle(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            root = _setup_fov(db, eid, status="imported")
+            child = new_uuid()
+            db.insert_fov(child, eid, parent_fov_id=root, status="imported")
+        # Trying to make root's parent be child would create a cycle
+        assert db.check_no_cycle(root, child) is False
+
+    def test_check_no_cycle_allows_valid_parent(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            fov_a = _setup_fov(db, eid, status="imported")
+            fov_b = _setup_fov(db, eid, status="imported")
+        assert db.check_no_cycle(fov_a, fov_b) is True
+
+    def test_check_no_cycle_self_reference(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            eid = _setup_experiment(db)
+            fov = _setup_fov(db, eid, status="imported")
+        assert db.check_no_cycle(fov, fov) is False
+
+
+# ===================================================================
+# 25. Active Measurements Query
+# ===================================================================
+
+
+class TestActiveMeasurements:
+    """Test get_active_measurements and get_active_measurements_pivot."""
+
+    def test_returns_only_active_pipeline_measurements(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            # Assign segmentation
+            db.assign_segmentation(
+                [ids["fov_id"]],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                ids["pipeline_run_id"],
+            )
+            # Insert measurement from the active pipeline run
+            db.insert_measurement(
+                new_uuid(), ids["roi_id"], ids["channel_gfp"],
+                "mean", "whole_roi", 42.0, ids["pipeline_run_id"],
+            )
+            # Insert measurement from a different (non-active) run
+            other_run = _setup_pipeline_run(db)
+            db.insert_measurement(
+                new_uuid(), ids["roi_id"], ids["channel_gfp"],
+                "max", "whole_roi", 99.0, other_run,
+            )
+
+        results = db.get_active_measurements(ids["fov_id"])
+        assert len(results) == 1
+        assert results[0]["value"] == 42.0
+        assert results[0]["metric"] == "mean"
+
+    def test_after_reassignment_returns_new_measurements(
+        self, db: ExperimentDB
+    ) -> None:
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            # First assignment
+            db.assign_segmentation(
+                [ids["fov_id"]],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                ids["pipeline_run_id"],
+            )
+            db.insert_measurement(
+                new_uuid(), ids["roi_id"], ids["channel_gfp"],
+                "mean", "whole_roi", 42.0, ids["pipeline_run_id"],
+            )
+            # Reassign with a new pipeline run
+            prid2 = _setup_pipeline_run(db)
+            db.assign_segmentation(
+                [ids["fov_id"]],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                prid2,
+            )
+            db.insert_measurement(
+                new_uuid(), ids["roi_id"], ids["channel_gfp"],
+                "mean", "whole_roi", 100.0, prid2,
+            )
+
+        results = db.get_active_measurements(ids["fov_id"])
+        assert len(results) == 1
+        assert results[0]["value"] == 100.0
+
+    def test_mixed_provenance_invariant(self, db: ExperimentDB) -> None:
+        """Verify no two active measurements for the same
+        (roi_id, scope) come from different pipeline_run_ids."""
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            db.assign_segmentation(
+                [ids["fov_id"]],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                ids["pipeline_run_id"],
+            )
+            # Multiple metrics, all from same pipeline run
+            for metric, val in [("mean", 10.0), ("max", 20.0), ("min", 1.0)]:
+                db.insert_measurement(
+                    new_uuid(), ids["roi_id"], ids["channel_gfp"],
+                    metric, "whole_roi", val, ids["pipeline_run_id"],
+                )
+
+        results = db.get_active_measurements(ids["fov_id"])
+        # Group by (roi_id, scope) — all pipeline_run_ids should be identical
+        from collections import defaultdict
+        groups: dict[tuple, set] = defaultdict(set)
+        for r in results:
+            key = (r["roi_id"], r["scope"])
+            groups[key].add(r["pipeline_run_id"])
+        for key, run_ids in groups.items():
+            assert len(run_ids) == 1, (
+                f"Mixed provenance for {key}: {len(run_ids)} pipeline runs"
+            )
+
+    def test_pivot_returns_all_fovs(self, db: ExperimentDB) -> None:
+        with db.transaction():
+            ids = _setup_full_experiment(db)
+            db.assign_segmentation(
+                [ids["fov_id"]],
+                ids["seg_set_id"],
+                ids["roi_type_id"],
+                ids["pipeline_run_id"],
+            )
+            db.insert_measurement(
+                new_uuid(), ids["roi_id"], ids["channel_gfp"],
+                "mean", "whole_roi", 42.0, ids["pipeline_run_id"],
+            )
+        results = db.get_active_measurements_pivot([ids["fov_id"]])
+        assert len(results) == 1
+        assert results[0]["value"] == 42.0
+        assert results[0]["label_id"] == 1

@@ -15,7 +15,15 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from percell4.core.constants import DEFAULT_BATCH_SIZE
+from percell4.core.constants import (
+    DEFAULT_BATCH_SIZE,
+    VALID_TRANSITIONS,
+    FovStatus,
+    MAX_LINEAGE_DEPTH,
+)
+from percell4.core.db_types import new_uuid
+from percell4.core.exceptions import InvalidStatusTransition
+from percell4.core.models import MeasurementNeeded
 from percell4.core.schema import SCHEMA_VERSION, _configure_connection, create_schema
 
 # Type alias for sqlite3.Row (returned from queries)
@@ -690,3 +698,407 @@ class ExperimentDB:
             params = params_before + tuple(batch) + params_after
             results.extend(self.connection.execute(sql, params).fetchall())
         return results
+
+    # ------------------------------------------------------------------
+    # Assignments
+    # ------------------------------------------------------------------
+
+    def assign_segmentation(
+        self,
+        fov_ids: list[bytes],
+        seg_set_id: bytes,
+        roi_type_id: bytes,
+        pipeline_run_id: bytes,
+        assigned_by: str | None = None,
+    ) -> list[MeasurementNeeded]:
+        """Assign a segmentation set to one or more FOVs.
+
+        For each FOV, deactivates any existing active assignment for the
+        same (fov_id, roi_type_id) pair and creates a new active one.
+
+        Returns a list of MeasurementNeeded items indicating what needs
+        to be (re-)measured.
+        """
+        conn = self.connection
+
+        # Get all channel IDs for the experiment once
+        channel_rows = conn.execute(
+            "SELECT id FROM channels WHERE experiment_id = "
+            "(SELECT experiment_id FROM fovs WHERE id = ? LIMIT 1)",
+            (fov_ids[0],),
+        ).fetchall()
+        channel_ids = [r["id"] for r in channel_rows]
+
+        results: list[MeasurementNeeded] = []
+        for fov_id in fov_ids:
+            # Check for existing active assignment
+            existing = conn.execute(
+                "SELECT id FROM fov_segmentation_assignments "
+                "WHERE fov_id = ? AND roi_type_id = ? AND is_active = 1",
+                (fov_id, roi_type_id),
+            ).fetchone()
+
+            if existing is not None:
+                # Deactivate old assignment
+                conn.execute(
+                    "UPDATE fov_segmentation_assignments "
+                    "SET is_active = 0, deactivated_at = datetime('now') "
+                    "WHERE fov_id = ? AND roi_type_id = ? AND is_active = 1",
+                    (fov_id, roi_type_id),
+                )
+                reason: str = "reassignment"
+            else:
+                reason = "new_assignment"
+
+            # Insert new active assignment
+            conn.execute(
+                "INSERT INTO fov_segmentation_assignments "
+                "(id, fov_id, segmentation_set_id, roi_type_id, is_active, "
+                " pipeline_run_id, assigned_by) "
+                "VALUES (?, ?, ?, ?, 1, ?, ?)",
+                (new_uuid(), fov_id, seg_set_id, roi_type_id,
+                 pipeline_run_id, assigned_by),
+            )
+
+            results.append(MeasurementNeeded(
+                fov_id=fov_id,
+                roi_type_id=roi_type_id,
+                channel_ids=channel_ids,
+                reason=reason,
+            ))
+
+        return results
+
+    def assign_mask(
+        self,
+        fov_ids: list[bytes],
+        threshold_mask_id: bytes,
+        purpose: str,
+        pipeline_run_id: bytes,
+        assigned_by: str | None = None,
+    ) -> list[MeasurementNeeded]:
+        """Assign a threshold mask to one or more FOVs.
+
+        For each FOV, deactivates any existing active assignment for the
+        same (fov_id, threshold_mask_id, purpose) triple and creates a
+        new active one.
+
+        Returns MeasurementNeeded items only when purpose is
+        'measurement_scope'.
+        """
+        conn = self.connection
+
+        # Get channel IDs once (needed for MeasurementNeeded if applicable)
+        channel_ids: list[bytes] = []
+        if purpose == "measurement_scope":
+            channel_rows = conn.execute(
+                "SELECT id FROM channels WHERE experiment_id = "
+                "(SELECT experiment_id FROM fovs WHERE id = ? LIMIT 1)",
+                (fov_ids[0],),
+            ).fetchall()
+            channel_ids = [r["id"] for r in channel_rows]
+
+        results: list[MeasurementNeeded] = []
+        for fov_id in fov_ids:
+            # Check for existing active assignment
+            existing = conn.execute(
+                "SELECT id FROM fov_mask_assignments "
+                "WHERE fov_id = ? AND threshold_mask_id = ? "
+                "AND purpose = ? AND is_active = 1",
+                (fov_id, threshold_mask_id, purpose),
+            ).fetchone()
+
+            if existing is not None:
+                conn.execute(
+                    "UPDATE fov_mask_assignments "
+                    "SET is_active = 0, deactivated_at = datetime('now') "
+                    "WHERE fov_id = ? AND threshold_mask_id = ? "
+                    "AND purpose = ? AND is_active = 1",
+                    (fov_id, threshold_mask_id, purpose),
+                )
+                reason: str = "reassignment"
+            else:
+                reason = "new_assignment"
+
+            conn.execute(
+                "INSERT INTO fov_mask_assignments "
+                "(id, fov_id, threshold_mask_id, purpose, is_active, "
+                " pipeline_run_id, assigned_by) "
+                "VALUES (?, ?, ?, ?, 1, ?, ?)",
+                (new_uuid(), fov_id, threshold_mask_id, purpose,
+                 pipeline_run_id, assigned_by),
+            )
+
+            if purpose == "measurement_scope":
+                # Need roi_type_id — get from active segmentation assignment
+                seg_row = conn.execute(
+                    "SELECT roi_type_id FROM fov_segmentation_assignments "
+                    "WHERE fov_id = ? AND is_active = 1 LIMIT 1",
+                    (fov_id,),
+                ).fetchone()
+                roi_type_id = seg_row["roi_type_id"] if seg_row else b"\x00" * 16
+                results.append(MeasurementNeeded(
+                    fov_id=fov_id,
+                    roi_type_id=roi_type_id,
+                    channel_ids=channel_ids,
+                    reason=reason,
+                ))
+
+        return results
+
+    def get_active_assignments(self, fov_id: bytes) -> dict[str, list[Row]]:
+        """Return all active assignments (segmentation and mask) for an FOV.
+
+        Returns:
+            Dict with keys ``"segmentation"`` and ``"mask"``, each
+            containing a list of active assignment rows.
+        """
+        conn = self.connection
+        seg_rows = conn.execute(
+            "SELECT * FROM fov_segmentation_assignments "
+            "WHERE fov_id = ? AND is_active = 1",
+            (fov_id,),
+        ).fetchall()
+        mask_rows = conn.execute(
+            "SELECT * FROM fov_mask_assignments "
+            "WHERE fov_id = ? AND is_active = 1",
+            (fov_id,),
+        ).fetchall()
+        return {"segmentation": seg_rows, "mask": mask_rows}
+
+    def deactivate_assignment(self, table: str, assignment_id: bytes) -> int:
+        """Deactivate a single assignment by ID.
+
+        Args:
+            table: Must be ``'fov_segmentation_assignments'`` or
+                ``'fov_mask_assignments'``.
+            assignment_id: The UUID of the assignment row.
+
+        Returns:
+            Number of rows updated (0 or 1).
+
+        Raises:
+            ValueError: If *table* is not an allowed assignment table.
+        """
+        allowed = ("fov_segmentation_assignments", "fov_mask_assignments")
+        if table not in allowed:
+            raise ValueError(
+                f"table must be one of {allowed}, got {table!r}"
+            )
+        cur = self.connection.execute(
+            f"UPDATE {table} SET is_active = 0, "
+            "deactivated_at = datetime('now') WHERE id = ?",
+            (assignment_id,),
+        )
+        return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # FOV Status Machine
+    # ------------------------------------------------------------------
+
+    def get_fov_status(self, fov_id: bytes) -> str:
+        """Return the current status of an FOV.
+
+        Raises:
+            ValueError: If the FOV does not exist.
+        """
+        row = self.connection.execute(
+            "SELECT status FROM fovs WHERE id = ?", (fov_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"FOV not found: {fov_id!r}")
+        return row["status"]
+
+    def set_fov_status(
+        self,
+        fov_id: bytes,
+        new_status: str,
+        message: str | None = None,
+    ) -> None:
+        """Transition an FOV to a new status, validating the state machine.
+
+        Raises:
+            InvalidStatusTransition: If the transition is not allowed.
+        """
+        conn = self.connection
+        current_status = self.get_fov_status(fov_id)
+
+        # Validate transition
+        allowed = VALID_TRANSITIONS.get(FovStatus(current_status), set())
+        if new_status not in {s.value for s in allowed}:
+            raise InvalidStatusTransition(
+                f"Cannot transition from '{current_status}' to '{new_status}'"
+            )
+
+        conn.execute(
+            "UPDATE fovs SET status = ? WHERE id = ?",
+            (new_status, fov_id),
+        )
+        conn.execute(
+            "INSERT INTO fov_status_log (fov_id, old_status, new_status, message) "
+            "VALUES (?, ?, ?, ?)",
+            (fov_id, current_status, new_status, message),
+        )
+
+    def mark_descendants_stale(self, fov_id: bytes) -> int:
+        """Mark all descendant FOVs as stale using a recursive CTE.
+
+        Skips FOVs with status 'deleted', 'deleting', or 'pending'.
+
+        Returns:
+            Number of FOVs marked stale.
+        """
+        conn = self.connection
+        # First, collect descendant IDs eligible for stale marking
+        rows = conn.execute(
+            """
+            WITH RECURSIVE lineage(id, depth) AS (
+                SELECT id, 1 FROM fovs WHERE parent_fov_id = ?
+                UNION ALL
+                SELECT f.id, l.depth + 1
+                FROM fovs f JOIN lineage l ON f.parent_fov_id = l.id
+                WHERE l.depth < ?
+            )
+            SELECT l.id FROM lineage l
+            JOIN fovs f ON f.id = l.id
+            WHERE f.status NOT IN ('deleted', 'deleting', 'pending')
+            """,
+            (fov_id, MAX_LINEAGE_DEPTH),
+        ).fetchall()
+
+        if not rows:
+            return 0
+
+        ids_to_update = [r["id"] for r in rows]
+        placeholders = ", ".join("?" * len(ids_to_update))
+        cur = conn.execute(
+            f"UPDATE fovs SET status = 'stale' "
+            f"WHERE id IN ({placeholders})",
+            ids_to_update,
+        )
+        return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # Lineage Queries
+    # ------------------------------------------------------------------
+
+    def get_descendants(self, fov_id: bytes) -> list[Row]:
+        """Return all descendant FOV rows with depth via recursive CTE.
+
+        Depth guard: stops at MAX_LINEAGE_DEPTH levels.
+        """
+        return self.connection.execute(
+            """
+            WITH RECURSIVE lineage(id, depth) AS (
+                SELECT id, 1 FROM fovs WHERE parent_fov_id = ?
+                UNION ALL
+                SELECT f.id, l.depth + 1
+                FROM fovs f JOIN lineage l ON f.parent_fov_id = l.id
+                WHERE l.depth < ?
+            )
+            SELECT f.*, l.depth
+            FROM lineage l JOIN fovs f ON f.id = l.id
+            ORDER BY l.depth
+            """,
+            (fov_id, MAX_LINEAGE_DEPTH),
+        ).fetchall()
+
+    def get_ancestors(self, fov_id: bytes) -> list[Row]:
+        """Return all ancestor FOV rows with depth via recursive CTE.
+
+        Walks parent_fov_id upward. Depth guard at MAX_LINEAGE_DEPTH.
+        """
+        return self.connection.execute(
+            """
+            WITH RECURSIVE lineage(id, depth) AS (
+                SELECT parent_fov_id, 1
+                FROM fovs WHERE id = ? AND parent_fov_id IS NOT NULL
+                UNION ALL
+                SELECT f.parent_fov_id, l.depth + 1
+                FROM fovs f JOIN lineage l ON f.id = l.id
+                WHERE f.parent_fov_id IS NOT NULL AND l.depth < ?
+            )
+            SELECT f.*, l.depth
+            FROM lineage l JOIN fovs f ON f.id = l.id
+            ORDER BY l.depth
+            """,
+            (fov_id, MAX_LINEAGE_DEPTH),
+        ).fetchall()
+
+    def check_no_cycle(
+        self, fov_id: bytes, proposed_parent_id: bytes
+    ) -> bool:
+        """Check whether setting fov_id's parent to proposed_parent_id
+        would create a cycle.
+
+        Returns True if the assignment is safe (no cycle), False otherwise.
+        """
+        if fov_id == proposed_parent_id:
+            return False
+
+        # Walk ancestors of proposed_parent_id
+        ancestors = self.get_ancestors(proposed_parent_id)
+        for ancestor in ancestors:
+            if ancestor["id"] == fov_id:
+                return False
+        return True
+
+    # ------------------------------------------------------------------
+    # Canonical Active Measurements Query
+    # ------------------------------------------------------------------
+
+    def get_active_measurements(self, fov_id: bytes) -> list[Row]:
+        """Return measurements filtered through active segmentation assignments.
+
+        This is THE canonical query for exports — it joins measurements to
+        ROIs to active assignments, ensuring only measurements from the
+        currently active pipeline run are returned.
+        """
+        return self.connection.execute(
+            """
+            SELECT m.* FROM measurements m
+            JOIN rois r ON m.roi_id = r.id
+            JOIN fov_segmentation_assignments fsa
+                ON fsa.fov_id = r.fov_id
+                AND fsa.roi_type_id = r.roi_type_id
+                AND fsa.is_active = 1
+            WHERE r.fov_id = ?
+                AND m.pipeline_run_id = fsa.pipeline_run_id
+            """,
+            (fov_id,),
+        ).fetchall()
+
+    def get_active_measurements_pivot(
+        self, fov_ids: list[bytes]
+    ) -> list[Row]:
+        """Return active measurements in pivot form (one row per ROI).
+
+        Uses the same active assignment filter as get_active_measurements,
+        but produces one row per ROI with columns for each
+        channel x metric x scope combination.
+
+        Uses _batch_in_query for safe chunking.
+        """
+        return self._batch_in_query(
+            """
+            SELECT m.roi_id,
+                   r.label_id,
+                   r.fov_id,
+                   m.channel_id,
+                   m.metric,
+                   m.scope,
+                   m.value,
+                   m.pipeline_run_id
+            FROM measurements m
+            JOIN rois r ON m.roi_id = r.id
+            JOIN fov_segmentation_assignments fsa
+                ON fsa.fov_id = r.fov_id
+                AND fsa.roi_type_id = r.roi_type_id
+                AND fsa.is_active = 1
+            WHERE r.fov_id IN ({placeholders})
+                AND m.pipeline_run_id = fsa.pipeline_run_id
+            ORDER BY r.fov_id, r.label_id, m.channel_id, m.metric, m.scope
+            """,
+            (),
+            fov_ids,
+        )
