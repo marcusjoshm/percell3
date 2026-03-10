@@ -686,6 +686,57 @@ def merge(ctx: click.Context, source: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# view
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--fov", default=None, help="FOV name or short UUID to view")
+@click.pass_context
+def view(ctx: click.Context, fov: str | None) -> None:
+    """Open experiment in napari viewer."""
+    from percell4.core.exceptions import ExperimentError
+
+    try:
+        store = _open_store(ctx)
+    except ExperimentError as e:
+        print_error(str(e))
+        raise SystemExit(1)
+
+    try:
+        fov_id: bytes | None = None
+        if fov is not None:
+            # Try to resolve FOV by name or short UUID
+            exp = store.db.get_experiment()
+            fovs = store.db.get_fovs(exp["id"])
+            fov_lower = fov.lower()
+            for f in fovs:
+                auto_name = f["auto_name"] or ""
+                if auto_name.lower() == fov_lower:
+                    fov_id = f["id"]
+                    break
+                from percell4.core.db_types import uuid_to_str
+                if uuid_to_str(f["id"]).startswith(fov_lower):
+                    fov_id = f["id"]
+                    break
+            if fov_id is None:
+                print_error(f"FOV '{fov}' not found")
+                raise SystemExit(1)
+
+        from percell4.viewer import launch_viewer
+
+        launch_viewer(store, fov_id=fov_id)
+    except ImportError as e:
+        print_error(str(e))
+        raise SystemExit(1)
+    except ExperimentError as e:
+        print_error(str(e))
+        raise SystemExit(1)
+    finally:
+        store.close()
+
+
+# ---------------------------------------------------------------------------
 # plugins
 # ---------------------------------------------------------------------------
 

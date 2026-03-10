@@ -13,7 +13,7 @@ PERCELL4_SRC = Path("src/percell4")
 
 # Modules that should ONLY import from core via experiment_store
 # (not experiment_db, layer_store, schema directly)
-EXTERNAL_MODULES = ["measure", "segment", "io", "plugins", "workflow", "cli"]
+EXTERNAL_MODULES = ["measure", "segment", "io", "plugins", "workflow", "cli", "viewer"]
 FORBIDDEN_CORE_IMPORTS = {"experiment_db", "layer_store", "schema"}
 
 

@@ -33,6 +33,7 @@ def build_main_menu(state: MenuState) -> Menu:
     )
     from percell4.cli.menu_handlers.plugins import plugin_menu_handler
     from percell4.cli.menu_handlers.merge import merge_handler
+    from percell4.cli.menu_handlers.viewer import viewer_handler
 
     def _setup_menu(st: MenuState) -> None:
         Menu(
@@ -103,6 +104,7 @@ def build_main_menu(state: MenuState) -> Menu:
             MenuItem("4", "Analyze", "Measure, threshold, and analyze", _analyze_menu),
             MenuItem("5", "Data", "Status, export, and merge", _data_menu),
             MenuItem("6", "Plugins", "Run analysis plugins", _plugins_menu),
+            MenuItem("7", "View", "Open napari viewer", viewer_handler),
         ],
         state,
         show_banner=True,
