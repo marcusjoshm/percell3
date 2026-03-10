@@ -437,11 +437,16 @@ def measure(ctx: click.Context) -> None:
 
 @cli.command()
 @click.option("--channel", "-c", required=True, help="Channel to threshold")
-@click.option("--value", "-v", type=float, required=True, help="Threshold value")
+@click.option("--value", "-v", type=float, default=None, help="Threshold value (omit to open viewer)")
 @click.option("--method", "-m", default="manual", help="Thresholding method")
 @click.pass_context
-def threshold(ctx: click.Context, channel: str, value: float, method: str) -> None:
-    """Apply an intensity threshold to a channel."""
+def threshold(ctx: click.Context, channel: str, value: float | None, method: str) -> None:
+    """Apply an intensity threshold to a channel.
+
+    When --value is omitted and stdin is interactive, opens the napari
+    threshold viewer for live preview. Otherwise applies the threshold
+    to all FOVs in batch mode.
+    """
     from percell4.core.exceptions import ExperimentError
 
     try:
@@ -451,7 +456,56 @@ def threshold(ctx: click.Context, channel: str, value: float, method: str) -> No
         raise SystemExit(1)
 
     try:
-        print_warning("Threshold command is not yet fully implemented.")
+        if value is None and is_interactive():
+            # Launch napari threshold viewer
+            try:
+                from percell4.viewer import NAPARI_AVAILABLE, launch_viewer
+
+                if not NAPARI_AVAILABLE:
+                    print_error(
+                        "napari is required for interactive thresholding. "
+                        "Install with: pip install 'napari[all]'"
+                    )
+                    raise SystemExit(1)
+
+                launch_viewer(store)
+            except ImportError as e:
+                print_error(str(e))
+                raise SystemExit(1)
+        elif value is not None:
+            # Batch mode: apply threshold to all FOVs
+            from percell4.core.constants import FovStatus
+            from percell4.measure.thresholding import create_threshold_mask
+
+            exp = store.db.get_experiment()
+            fovs = store.db.get_fovs(exp["id"])
+            active_fovs = [
+                f for f in fovs
+                if f["status"] not in ("deleted", "deleting", "error")
+            ]
+
+            if not active_fovs:
+                print_warning("No active FOVs to threshold.")
+                return
+
+            count = 0
+            with make_progress() as progress:
+                task = progress.add_task("Thresholding...", total=len(active_fovs))
+                for fov in active_fovs:
+                    create_threshold_mask(
+                        store,
+                        fov["id"],
+                        source_channel_name=channel,
+                        method=method,
+                        manual_value=value,
+                    )
+                    count += 1
+                    progress.update(task, advance=1)
+
+            print_success(f"Applied threshold {value} on {channel} to {count} FOVs")
+        else:
+            print_error("Provide --value for non-interactive mode.")
+            raise SystemExit(1)
     finally:
         store.close()
 

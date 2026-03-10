@@ -123,6 +123,8 @@ def _launch(
     from percell4.viewer.edge_removal_widget import EdgeRemovalWidget
     from percell4.viewer.edit_widget import EditWidget
     from percell4.viewer.fov_browser_widget import FovBrowserWidget
+    from percell4.viewer.group_threshold_widget import GroupThresholdWidget
+    from percell4.viewer.threshold_widget import ThresholdWidget
 
     def _on_fov_selected(new_fov_id: bytes) -> None:
         """Callback when user selects a different FOV in the browser."""
@@ -152,6 +154,21 @@ def _launch(
     edge_removal_widget = EdgeRemovalWidget(viewer, store, fov_id)
     viewer.window.add_dock_widget(
         edge_removal_widget.widget, name="Cleanup", area="right",
+    )
+
+    # Threshold widget
+    threshold_widget = ThresholdWidget(viewer, store, fov_id, channel_names)
+    viewer.window.add_dock_widget(
+        threshold_widget.widget, name="Threshold", area="right",
+    )
+
+    # Group threshold widget
+    group_threshold_widget = GroupThresholdWidget(
+        viewer, store, fov_id, channel_names,
+        threshold_widget=threshold_widget,
+    )
+    viewer.window.add_dock_widget(
+        group_threshold_widget.widget, name="Group Threshold", area="right",
     )
 
     # --- Block until viewer closes ---
