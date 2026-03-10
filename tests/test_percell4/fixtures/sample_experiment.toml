@@ -1,0 +1,23 @@
+[experiment]
+name = "Test Experiment"
+
+[[channels]]
+name = "DAPI"
+role = "nuclear"
+display_order = 0
+
+[[channels]]
+name = "GFP"
+role = "signal"
+display_order = 1
+
+[[roi_types]]
+name = "cell"
+
+[[roi_types]]
+name = "particle"
+parent_type = "cell"
+
+[op_configs.cellpose]
+model_name = "cyto3"
+diameter = 30
