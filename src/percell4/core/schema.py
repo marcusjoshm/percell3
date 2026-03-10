@@ -129,7 +129,8 @@ _TABLE_DDL: tuple[str, ...] = (
                             CHECK(status IN (
                                 'pending', 'imported', 'segmented',
                                 'measured', 'analyzing', 'qc_pending',
-                                'qc_done', 'stale', 'deleting', 'deleted'
+                                'qc_done', 'stale', 'error',
+                                'deleting', 'deleted'
                             )),
         auto_name       TEXT,
         zarr_path       TEXT,

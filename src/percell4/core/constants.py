@@ -62,12 +62,13 @@ class FovStatus(StrEnum):
     qc_pending = "qc_pending"
     qc_done = "qc_done"
     stale = "stale"
+    error = "error"
     deleting = "deleting"
     deleted = "deleted"
 
 
 VALID_TRANSITIONS: dict[FovStatus, set[FovStatus]] = {
-    FovStatus.pending: {FovStatus.imported},
+    FovStatus.pending: {FovStatus.imported, FovStatus.error},
     FovStatus.imported: {FovStatus.segmented, FovStatus.stale, FovStatus.deleting},
     FovStatus.segmented: {FovStatus.measured, FovStatus.stale, FovStatus.deleting},
     FovStatus.measured: {FovStatus.analyzing, FovStatus.stale, FovStatus.deleting},
@@ -75,6 +76,7 @@ VALID_TRANSITIONS: dict[FovStatus, set[FovStatus]] = {
     FovStatus.qc_pending: {FovStatus.qc_done, FovStatus.stale, FovStatus.deleting},
     FovStatus.qc_done: {FovStatus.stale, FovStatus.deleting},
     FovStatus.stale: {FovStatus.imported, FovStatus.deleting},
+    FovStatus.error: {FovStatus.deleting},
     FovStatus.deleting: {FovStatus.deleted},
     FovStatus.deleted: set(),
 }

@@ -32,6 +32,7 @@ class TestFovStatus:
             "qc_pending",
             "qc_done",
             "stale",
+            "error",
             "deleting",
             "deleted",
         }
@@ -44,7 +45,7 @@ class TestFovStatus:
         assert FovStatus.deleted == "deleted"
 
     def test_member_count(self) -> None:
-        assert len(FovStatus) == 10
+        assert len(FovStatus) == 11
 
 
 class TestValidTransitions:
@@ -61,8 +62,11 @@ class TestValidTransitions:
     def test_deleted_is_terminal(self) -> None:
         assert VALID_TRANSITIONS[FovStatus.deleted] == set()
 
-    def test_pending_can_only_go_to_imported(self) -> None:
-        assert VALID_TRANSITIONS[FovStatus.pending] == {FovStatus.imported}
+    def test_pending_can_go_to_imported_or_error(self) -> None:
+        assert VALID_TRANSITIONS[FovStatus.pending] == {
+            FovStatus.imported,
+            FovStatus.error,
+        }
 
     def test_deleting_goes_to_deleted(self) -> None:
         assert FovStatus.deleted in VALID_TRANSITIONS[FovStatus.deleting]
