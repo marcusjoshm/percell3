@@ -156,6 +156,20 @@ class ExperimentStore:
 
         db = ExperimentDB(db_path)
         db.open()
+
+        # Schema version check and migration
+        from percell4.core.migration import (
+            SCHEMA_VERSION,
+            get_schema_version,
+            run_migrations,
+        )
+
+        current = get_schema_version(db.connection)
+        if current != SCHEMA_VERSION:
+            applied = run_migrations(db.connection, current, SCHEMA_VERSION)
+            if applied:
+                db.connection.commit()
+
         layers = LayerStore(path)
         store = cls(db, layers, path)
         store._run_recovery()
