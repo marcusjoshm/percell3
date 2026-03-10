@@ -1,12 +1,16 @@
 """Tests for ExperimentStore — the public facade.
 
 Covers create/open/close, startup recovery, delegated methods,
+derived FOV creation, soft-delete, measurement dispatch,
+ROI cell identity enforcement, CSV export,
 and the boundary constraint (no direct sqlite3/zarr imports).
 """
 
 from __future__ import annotations
 
 import ast
+import csv
+import json
 import os
 import time
 from pathlib import Path
@@ -15,10 +19,11 @@ import numpy as np
 import pytest
 import zarr
 
-from percell4.core.constants import FovStatus
-from percell4.core.db_types import new_uuid, uuid_to_str
+from percell4.core.constants import FovStatus, SCOPE_DISPLAY, SCOPE_WHOLE_ROI
+from percell4.core.db_types import new_uuid, uuid_to_hex, uuid_to_str
 from percell4.core.exceptions import ExperimentError
 from percell4.core.experiment_store import ExperimentStore
+from percell4.core.models import MeasurementNeeded
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -458,3 +463,597 @@ def test_recovery_marks_pending_without_zarr_as_error(
         assert status == "error"
     finally:
         store2.close()
+
+
+# ===========================================================================
+# Helper: create a fully populated experiment for derived FOV tests
+# ===========================================================================
+
+
+def _setup_populated_experiment(store: ExperimentStore) -> dict:
+    """Create an experiment with FOV, channels, segmentation, ROIs, and measurements.
+
+    Returns a dict with all entity IDs for use in tests.
+    """
+    exp = store.get_experiment()
+    exp_id = exp["id"]
+    channels = store.get_channels(exp_id)
+    roi_types = store.db.get_roi_type_definitions(exp_id)
+
+    type_map = {rt["name"]: rt for rt in roi_types}
+    cell_type = type_map["cell"]
+    particle_type = type_map["particle"]
+
+    # Create a condition
+    cond_id = new_uuid()
+    with store.transaction():
+        store.db.insert_condition(cond_id, exp_id, "control")
+
+    # Create source FOV with zarr data
+    fov_id = new_uuid()
+    fov_hex = uuid_to_hex(fov_id)
+    channel_arrays = {
+        0: np.ones((64, 64), dtype=np.uint16) * 100,
+        1: np.ones((64, 64), dtype=np.uint16) * 200,
+    }
+    zarr_path = store.layers.write_image_channels(fov_hex, channel_arrays)
+
+    with store.transaction():
+        store.insert_fov(
+            id=fov_id,
+            experiment_id=exp_id,
+            condition_id=cond_id,
+            status="pending",
+            auto_name="FOV_001",
+            zarr_path=zarr_path,
+        )
+        store.set_fov_status(fov_id, FovStatus.imported, "test setup")
+
+    # Create pipeline run
+    run_id = new_uuid()
+    with store.transaction():
+        store.db.insert_pipeline_run(run_id, "test_segmentation")
+
+    # Create segmentation set
+    seg_set_id = new_uuid()
+    with store.transaction():
+        store.db.insert_segmentation_set(
+            seg_set_id,
+            exp_id,
+            cell_type["id"],
+            "cellpose",
+            fov_count=1,
+            total_roi_count=2,
+        )
+
+    # Assign segmentation to FOV
+    with store.transaction():
+        store.db.assign_segmentation(
+            [fov_id],
+            seg_set_id,
+            cell_type["id"],
+            run_id,
+            assigned_by="test",
+        )
+
+    # Create cell identities and ROIs
+    cell_identity_1 = new_uuid()
+    cell_identity_2 = new_uuid()
+    roi_1 = new_uuid()
+    roi_2 = new_uuid()
+    with store.transaction():
+        store.db.insert_cell_identity(cell_identity_1, fov_id, cell_type["id"])
+        store.db.insert_cell_identity(cell_identity_2, fov_id, cell_type["id"])
+        store.db.insert_roi(
+            id=roi_1,
+            fov_id=fov_id,
+            roi_type_id=cell_type["id"],
+            cell_identity_id=cell_identity_1,
+            parent_roi_id=None,
+            label_id=1,
+            bbox_y=0, bbox_x=0, bbox_h=32, bbox_w=32,
+            area_px=500,
+        )
+        store.db.insert_roi(
+            id=roi_2,
+            fov_id=fov_id,
+            roi_type_id=cell_type["id"],
+            cell_identity_id=cell_identity_2,
+            parent_roi_id=None,
+            label_id=2,
+            bbox_y=32, bbox_x=32, bbox_h=32, bbox_w=32,
+            area_px=300,
+        )
+
+    # Create a particle (sub-cellular ROI) under roi_1
+    particle_id = new_uuid()
+    with store.transaction():
+        store.db.insert_roi(
+            id=particle_id,
+            fov_id=fov_id,
+            roi_type_id=particle_type["id"],
+            cell_identity_id=None,
+            parent_roi_id=roi_1,
+            label_id=100,
+            bbox_y=5, bbox_x=5, bbox_h=10, bbox_w=10,
+            area_px=50,
+        )
+
+    # Insert measurements
+    with store.transaction():
+        for roi_id in (roi_1, roi_2):
+            for ch in channels:
+                store.db.insert_measurement(
+                    id=new_uuid(),
+                    roi_id=roi_id,
+                    channel_id=ch["id"],
+                    metric="mean",
+                    scope=SCOPE_WHOLE_ROI,
+                    value=42.0,
+                    pipeline_run_id=run_id,
+                )
+
+    return {
+        "exp_id": exp_id,
+        "cond_id": cond_id,
+        "fov_id": fov_id,
+        "fov_hex": fov_hex,
+        "zarr_path": zarr_path,
+        "channels": channels,
+        "cell_type": cell_type,
+        "particle_type": particle_type,
+        "seg_set_id": seg_set_id,
+        "run_id": run_id,
+        "roi_1": roi_1,
+        "roi_2": roi_2,
+        "particle_id": particle_id,
+        "cell_identity_1": cell_identity_1,
+        "cell_identity_2": cell_identity_2,
+    }
+
+
+@pytest.fixture()
+def populated_store(percell_dir: Path):
+    """Create an ExperimentStore populated with FOV, ROIs, segmentation, etc."""
+    store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
+    info = _setup_populated_experiment(store)
+    yield store, info
+    store.close()
+
+
+# ===========================================================================
+# Derived FOV Tests
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# 17. test_create_derived_fov
+# ---------------------------------------------------------------------------
+
+
+def test_create_derived_fov(populated_store) -> None:
+    """Creates derived FOV, verify it exists in DB with correct parent, op, params."""
+    store, info = populated_store
+
+    def identity_transform(arrays):
+        return arrays
+
+    derived_id = store.create_derived_fov(
+        source_fov_id=info["fov_id"],
+        derivation_op="nan_zero",
+        params={"threshold": 0},
+        transform_fn=identity_transform,
+    )
+
+    derived = store.get_fov(derived_id)
+    assert derived is not None
+    assert derived["parent_fov_id"] == info["fov_id"]
+    assert derived["derivation_op"] == "nan_zero"
+    assert json.loads(derived["derivation_params"]) == {"threshold": 0}
+    assert derived["experiment_id"] == info["exp_id"]
+    assert derived["condition_id"] == info["cond_id"]
+    assert derived["status"] == "imported"
+
+
+# ---------------------------------------------------------------------------
+# 18. test_create_derived_fov_copies_assignments
+# ---------------------------------------------------------------------------
+
+
+def test_create_derived_fov_copies_assignments(populated_store) -> None:
+    """Active seg assignments are copied to derived FOV."""
+    store, info = populated_store
+
+    derived_id = store.create_derived_fov(
+        source_fov_id=info["fov_id"],
+        derivation_op="bg_sub",
+        params={},
+        transform_fn=lambda a: a,
+    )
+
+    active = store.get_active_assignments(derived_id)
+    assert len(active["segmentation"]) >= 1
+    seg = active["segmentation"][0]
+    assert seg["segmentation_set_id"] == info["seg_set_id"]
+    assert seg["assigned_by"] == "derived_fov"
+
+
+# ---------------------------------------------------------------------------
+# 19. test_create_derived_fov_duplicates_top_level_rois
+# ---------------------------------------------------------------------------
+
+
+def test_create_derived_fov_duplicates_top_level_rois(populated_store) -> None:
+    """Top-level ROIs are duplicated with new UUIDs, same cell_identity_id."""
+    store, info = populated_store
+
+    derived_id = store.create_derived_fov(
+        source_fov_id=info["fov_id"],
+        derivation_op="test_op",
+        params={},
+        transform_fn=lambda a: a,
+    )
+
+    derived_cells = store.db.get_cells(derived_id)
+    assert len(derived_cells) == 2
+
+    # New UUIDs but same cell identities
+    derived_ids = {c["id"] for c in derived_cells}
+    assert info["roi_1"] not in derived_ids
+    assert info["roi_2"] not in derived_ids
+
+    derived_identities = {c["cell_identity_id"] for c in derived_cells}
+    assert info["cell_identity_1"] in derived_identities
+    assert info["cell_identity_2"] in derived_identities
+
+
+# ---------------------------------------------------------------------------
+# 20. test_create_derived_fov_skips_subcellular_rois
+# ---------------------------------------------------------------------------
+
+
+def test_create_derived_fov_skips_subcellular_rois(populated_store) -> None:
+    """Particles (sub-cellular ROIs) are NOT duplicated."""
+    store, info = populated_store
+
+    derived_id = store.create_derived_fov(
+        source_fov_id=info["fov_id"],
+        derivation_op="test_op",
+        params={},
+        transform_fn=lambda a: a,
+    )
+
+    # Get all ROIs for the derived FOV
+    all_rois = store.db.get_rois(derived_id)
+    # Only top-level (cells), no particles
+    for roi in all_rois:
+        assert roi["roi_type_id"] == info["cell_type"]["id"]
+
+
+# ---------------------------------------------------------------------------
+# 21. test_create_derived_fov_auto_name
+# ---------------------------------------------------------------------------
+
+
+def test_create_derived_fov_auto_name(populated_store) -> None:
+    """auto_name is '{source}_{op}'."""
+    store, info = populated_store
+
+    derived_id = store.create_derived_fov(
+        source_fov_id=info["fov_id"],
+        derivation_op="nan_zero",
+        params={},
+        transform_fn=lambda a: a,
+    )
+
+    derived = store.get_fov(derived_id)
+    assert derived["auto_name"] == "FOV_001_nan_zero"
+
+
+# ---------------------------------------------------------------------------
+# 22. test_create_derived_fov_zarr_written
+# ---------------------------------------------------------------------------
+
+
+def test_create_derived_fov_zarr_written(populated_store) -> None:
+    """zarr data is readable from LayerStore after derivation."""
+    store, info = populated_store
+
+    def double_transform(arrays):
+        return {k: v * 2 for k, v in arrays.items()}
+
+    derived_id = store.create_derived_fov(
+        source_fov_id=info["fov_id"],
+        derivation_op="double",
+        params={},
+        transform_fn=double_transform,
+    )
+
+    derived_hex = uuid_to_hex(derived_id)
+    ch0 = store.layers.read_image_channel_numpy(derived_hex, 0)
+    ch1 = store.layers.read_image_channel_numpy(derived_hex, 1)
+
+    # Original was 100 and 200, doubled should be 200 and 400
+    assert ch0[0, 0] == 200
+    assert ch1[0, 0] == 400
+
+
+# ===========================================================================
+# Soft-delete Tests
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# 23. test_delete_fov_soft_delete
+# ---------------------------------------------------------------------------
+
+
+def test_delete_fov_soft_delete(populated_store) -> None:
+    """Status transitions deleting -> deleted, zarr removed."""
+    store, info = populated_store
+    fov_id = info["fov_id"]
+
+    # Advance to a deletable status (imported -> deleting -> deleted)
+    store.delete_fov(fov_id)
+
+    status = store.get_fov_status(fov_id)
+    assert status == "deleted"
+
+    # Zarr should be gone
+    zarr_full = store.root / info["zarr_path"]
+    assert not zarr_full.exists()
+
+
+# ---------------------------------------------------------------------------
+# 24. test_delete_fov_no_zarr
+# ---------------------------------------------------------------------------
+
+
+def test_delete_fov_no_zarr(percell_dir: Path) -> None:
+    """Works when zarr_path is None."""
+    store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
+    try:
+        exp = store.get_experiment()
+        fov_id = new_uuid()
+        with store.transaction():
+            store.insert_fov(
+                id=fov_id,
+                experiment_id=exp["id"],
+                status="pending",
+                zarr_path=None,
+            )
+            store.set_fov_status(fov_id, FovStatus.imported, "test")
+
+        store.delete_fov(fov_id)
+        assert store.get_fov_status(fov_id) == "deleted"
+    finally:
+        store.close()
+
+
+# ===========================================================================
+# Mark descendants stale
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# 25. test_mark_descendants_stale
+# ---------------------------------------------------------------------------
+
+
+def test_mark_descendants_stale(populated_store) -> None:
+    """Derived FOV is marked stale when parent is modified."""
+    store, info = populated_store
+
+    # Create a derived FOV
+    derived_id = store.create_derived_fov(
+        source_fov_id=info["fov_id"],
+        derivation_op="test",
+        params={},
+        transform_fn=lambda a: a,
+    )
+    assert store.get_fov_status(derived_id) == "imported"
+
+    # Mark descendants stale
+    count = store.mark_descendants_stale(info["fov_id"])
+    assert count == 1
+    assert store.get_fov_status(derived_id) == "stale"
+
+
+# ===========================================================================
+# insert_roi_checked Tests
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# 26. test_insert_roi_checked_top_level_requires_identity
+# ---------------------------------------------------------------------------
+
+
+def test_insert_roi_checked_top_level_requires_identity(
+    populated_store,
+) -> None:
+    """Raises without cell_identity_id for top-level ROI."""
+    store, info = populated_store
+
+    with pytest.raises(ExperimentError, match="require a cell_identity_id"):
+        store.insert_roi_checked(
+            id=new_uuid(),
+            fov_id=info["fov_id"],
+            roi_type_id=info["cell_type"]["id"],
+            cell_identity_id=None,
+            parent_roi_id=None,
+            label_id=99,
+            bbox_y=0, bbox_x=0, bbox_h=10, bbox_w=10,
+            area_px=100,
+        )
+
+
+# ---------------------------------------------------------------------------
+# 27. test_insert_roi_checked_subcellular_requires_parent
+# ---------------------------------------------------------------------------
+
+
+def test_insert_roi_checked_subcellular_requires_parent(
+    populated_store,
+) -> None:
+    """Raises without parent_roi_id for sub-cellular ROI."""
+    store, info = populated_store
+
+    with pytest.raises(ExperimentError, match="require a parent_roi_id"):
+        store.insert_roi_checked(
+            id=new_uuid(),
+            fov_id=info["fov_id"],
+            roi_type_id=info["particle_type"]["id"],
+            cell_identity_id=None,
+            parent_roi_id=None,
+            label_id=99,
+            bbox_y=0, bbox_x=0, bbox_h=10, bbox_w=10,
+            area_px=100,
+        )
+
+
+# ---------------------------------------------------------------------------
+# 28. test_insert_roi_checked_subcellular_rejects_identity
+# ---------------------------------------------------------------------------
+
+
+def test_insert_roi_checked_subcellular_rejects_identity(
+    populated_store,
+) -> None:
+    """Raises with cell_identity_id for sub-cellular ROI."""
+    store, info = populated_store
+
+    with pytest.raises(
+        ExperimentError, match="must have NULL cell_identity_id"
+    ):
+        store.insert_roi_checked(
+            id=new_uuid(),
+            fov_id=info["fov_id"],
+            roi_type_id=info["particle_type"]["id"],
+            cell_identity_id=info["cell_identity_1"],
+            parent_roi_id=info["roi_1"],
+            label_id=99,
+            bbox_y=0, bbox_x=0, bbox_h=10, bbox_w=10,
+            area_px=100,
+        )
+
+
+# ---------------------------------------------------------------------------
+# 29. test_insert_roi_checked_valid_top_level
+# ---------------------------------------------------------------------------
+
+
+def test_insert_roi_checked_valid_top_level(populated_store) -> None:
+    """Succeeds with cell_identity_id for top-level ROI."""
+    store, info = populated_store
+
+    new_ci = new_uuid()
+    with store.transaction():
+        store.db.insert_cell_identity(
+            new_ci, info["fov_id"], info["cell_type"]["id"]
+        )
+
+    result = store.insert_roi_checked(
+        id=new_uuid(),
+        fov_id=info["fov_id"],
+        roi_type_id=info["cell_type"]["id"],
+        cell_identity_id=new_ci,
+        parent_roi_id=None,
+        label_id=99,
+        bbox_y=0, bbox_x=0, bbox_h=10, bbox_w=10,
+        area_px=100,
+    )
+    assert result == 1
+
+
+# ---------------------------------------------------------------------------
+# 30. test_insert_roi_checked_valid_subcellular
+# ---------------------------------------------------------------------------
+
+
+def test_insert_roi_checked_valid_subcellular(populated_store) -> None:
+    """Succeeds with parent_roi_id for sub-cellular ROI."""
+    store, info = populated_store
+
+    result = store.insert_roi_checked(
+        id=new_uuid(),
+        fov_id=info["fov_id"],
+        roi_type_id=info["particle_type"]["id"],
+        cell_identity_id=None,
+        parent_roi_id=info["roi_1"],
+        label_id=99,
+        bbox_y=0, bbox_x=0, bbox_h=10, bbox_w=10,
+        area_px=100,
+    )
+    assert result == 1
+
+
+# ===========================================================================
+# dispatch_measurements
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# 31. test_dispatch_measurements_returns_count
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_measurements_returns_count(populated_store) -> None:
+    """Returns correct count of measurement items."""
+    store, info = populated_store
+
+    needed = [
+        MeasurementNeeded(
+            fov_id=info["fov_id"],
+            roi_type_id=info["cell_type"]["id"],
+            channel_ids=[ch["id"] for ch in info["channels"]],
+            reason="new_assignment",
+        ),
+        MeasurementNeeded(
+            fov_id=info["fov_id"],
+            roi_type_id=info["cell_type"]["id"],
+            channel_ids=[ch["id"] for ch in info["channels"]],
+            reason="reassignment",
+        ),
+    ]
+    count = store.dispatch_measurements(needed)
+    assert count == 2
+
+
+# ===========================================================================
+# export_measurements_csv
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# 32. test_export_csv_basic
+# ---------------------------------------------------------------------------
+
+
+def test_export_csv_basic(populated_store, tmp_path: Path) -> None:
+    """Exports measurements to CSV, verify file content."""
+    store, info = populated_store
+
+    output = tmp_path / "export.csv"
+    count = store.export_measurements_csv([info["fov_id"]], output)
+
+    # 2 ROIs x 2 channels x 1 metric = 4 rows
+    assert count == 4
+    assert output.exists()
+
+    with open(output) as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    assert len(rows) == 4
+    # Check header fields
+    assert "fov_id" in rows[0]
+    assert "roi_id" in rows[0]
+    assert "channel_id" in rows[0]
+    assert "metric" in rows[0]
+    assert "scope" in rows[0]
+    assert "value" in rows[0]
+
+    # Check scope is human-readable
+    for row in rows:
+        assert row["scope"] == SCOPE_DISPLAY.get(SCOPE_WHOLE_ROI, SCOPE_WHOLE_ROI)

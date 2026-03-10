@@ -13,19 +13,23 @@ Responsibilities:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
+
+import numpy as np
 
 from percell4.core.config import ExperimentConfigV1
 from percell4.core.constants import FovStatus
-from percell4.core.db_types import new_uuid, uuid_to_str
+from percell4.core.db_types import new_uuid, uuid_to_hex, uuid_to_str
 from percell4.core.exceptions import ExperimentError
 from percell4.core.experiment_db import ExperimentDB
 from percell4.core.layer_store import LayerStore
+from percell4.core.models import MeasurementNeeded
 
 logger = logging.getLogger(__name__)
 
@@ -395,3 +399,314 @@ class ExperimentStore:
         """Transaction context manager, delegating to ExperimentDB."""
         with self._db.transaction():
             yield
+
+    # ------------------------------------------------------------------
+    # Derived FOV creation
+    # ------------------------------------------------------------------
+
+    def create_derived_fov(
+        self,
+        source_fov_id: bytes,
+        derivation_op: str,
+        params: dict,
+        transform_fn: Callable[[dict[int, np.ndarray]], dict[int, np.ndarray]],
+    ) -> bytes:
+        """Create a derived FOV using the four-step contract.
+
+        Args:
+            source_fov_id: ID of the source FOV.
+            derivation_op: Name of the operation (e.g., 'bg_subtraction').
+            params: Operation parameters (serialized to JSON in DB).
+            transform_fn: Pure function that takes channel arrays and returns
+                modified arrays.
+                Signature: dict[channel_index, ndarray] -> dict[channel_index, ndarray]
+
+        Returns:
+            ID of the newly created derived FOV.
+
+        Raises:
+            ExperimentError: If the source FOV does not exist.
+        """
+        # 1. Get source FOV info
+        source = self._db.get_fov(source_fov_id)
+        if source is None:
+            raise ExperimentError(
+                f"Source FOV {uuid_to_str(source_fov_id)} not found"
+            )
+
+        # 2. Read source channel arrays
+        source_hex = uuid_to_hex(source_fov_id)
+        channels = self._db.get_channels(source["experiment_id"])
+        channel_arrays: dict[int, np.ndarray] = {}
+        for idx in range(len(channels)):
+            try:
+                channel_arrays[idx] = self._layers.read_image_channel_numpy(
+                    source_hex, idx
+                )
+            except Exception:
+                pass  # Channel may not exist in zarr
+
+        # 3. Apply transform
+        modified_arrays = transform_fn(channel_arrays)
+
+        # 4. Generate new FOV id and write zarr (OUTSIDE transaction)
+        new_fov_id = new_uuid()
+        new_hex = uuid_to_hex(new_fov_id)
+        zarr_path = self._layers.write_image_channels(new_hex, modified_arrays)
+
+        # 5. DB operations in a transaction
+        with self._db.transaction():
+            # Auto-name
+            source_name = source["auto_name"]
+            auto_name = (
+                f"{source_name}_{derivation_op}"
+                if source_name
+                else derivation_op
+            )
+
+            # Insert new FOV
+            self._db.insert_fov(
+                id=new_fov_id,
+                experiment_id=source["experiment_id"],
+                condition_id=source["condition_id"],
+                bio_rep_id=source["bio_rep_id"],
+                parent_fov_id=source_fov_id,
+                derivation_op=derivation_op,
+                derivation_params=json.dumps(params),
+                status="pending",
+                auto_name=auto_name,
+                zarr_path=zarr_path,
+                timepoint_id=source["timepoint_id"],
+            )
+
+            # Copy active segmentation assignments
+            active = self._db.get_active_assignments(source_fov_id)
+            for seg_assign in active["segmentation"]:
+                self._db.assign_segmentation(
+                    [new_fov_id],
+                    seg_assign["segmentation_set_id"],
+                    seg_assign["roi_type_id"],
+                    seg_assign["pipeline_run_id"],
+                    assigned_by="derived_fov",
+                )
+
+            # Copy active mask assignments
+            for mask_assign in active["mask"]:
+                self._db.assign_mask(
+                    [new_fov_id],
+                    mask_assign["threshold_mask_id"],
+                    mask_assign["purpose"],
+                    mask_assign["pipeline_run_id"],
+                    assigned_by="derived_fov",
+                )
+
+            # Duplicate top-level ROIs (cells, NOT sub-cellular)
+            cells = self._db.get_cells(source_fov_id)
+            for cell in cells:
+                self._db.insert_roi(
+                    id=new_uuid(),
+                    fov_id=new_fov_id,
+                    roi_type_id=cell["roi_type_id"],
+                    cell_identity_id=cell["cell_identity_id"],
+                    parent_roi_id=None,
+                    label_id=cell["label_id"],
+                    bbox_y=cell["bbox_y"],
+                    bbox_x=cell["bbox_x"],
+                    bbox_h=cell["bbox_h"],
+                    bbox_w=cell["bbox_w"],
+                    area_px=cell["area_px"],
+                )
+
+        # 6. Set status to imported
+        self._db.set_fov_status(
+            new_fov_id, FovStatus.imported, "Derived FOV created"
+        )
+
+        return new_fov_id
+
+    # ------------------------------------------------------------------
+    # Soft-delete
+    # ------------------------------------------------------------------
+
+    def delete_fov(self, fov_id: bytes) -> None:
+        """Soft-delete a FOV: mark deleting, remove zarr, mark deleted.
+
+        Args:
+            fov_id: ID of the FOV to delete.
+        """
+        self._db.set_fov_status(
+            fov_id, FovStatus.deleting, "Deletion requested"
+        )
+        fov = self._db.get_fov(fov_id)
+        if fov and fov["zarr_path"]:
+            try:
+                self._layers.delete_path(fov["zarr_path"])
+            except FileNotFoundError:
+                pass  # Already deleted
+        self._db.set_fov_status(
+            fov_id, FovStatus.deleted, "Deletion complete"
+        )
+
+    # ------------------------------------------------------------------
+    # Lineage: mark descendants stale (delegation)
+    # ------------------------------------------------------------------
+
+    def mark_descendants_stale(self, fov_id: bytes) -> int:
+        """Mark all descendant FOVs as stale.
+
+        Args:
+            fov_id: ID of the ancestor FOV.
+
+        Returns:
+            Number of FOVs marked stale.
+        """
+        return self._db.mark_descendants_stale(fov_id)
+
+    # ------------------------------------------------------------------
+    # Measurement dispatch (stub for Gate 2)
+    # ------------------------------------------------------------------
+
+    def dispatch_measurements(self, needed: list[MeasurementNeeded]) -> int:
+        """Record that measurements are needed. Actual measurer is wired in Gate 2.
+
+        For now, logs what's needed and returns count.
+
+        Args:
+            needed: List of MeasurementNeeded items.
+
+        Returns:
+            Number of measurement items dispatched.
+        """
+        for item in needed:
+            logger.info(
+                "Measurement needed: fov=%s, reason=%s",
+                uuid_to_str(item.fov_id),
+                item.reason,
+            )
+        return len(needed)
+
+    # ------------------------------------------------------------------
+    # ROI insertion with cell identity enforcement
+    # ------------------------------------------------------------------
+
+    def insert_roi_checked(
+        self,
+        id: bytes,
+        fov_id: bytes,
+        roi_type_id: bytes,
+        cell_identity_id: bytes | None,
+        parent_roi_id: bytes | None,
+        label_id: int,
+        bbox_y: int,
+        bbox_x: int,
+        bbox_h: int,
+        bbox_w: int,
+        area_px: int,
+    ) -> int:
+        """Insert ROI with cell identity enforcement.
+
+        Top-level ROIs (roi_type with parent_type_id IS NULL):
+            require non-NULL cell_identity_id.
+        Sub-cellular ROIs:
+            require NULL cell_identity_id, require non-NULL parent_roi_id.
+
+        Args:
+            id: UUID for the new ROI.
+            fov_id: FOV the ROI belongs to.
+            roi_type_id: ROI type definition ID.
+            cell_identity_id: Cell identity ID (required for top-level).
+            parent_roi_id: Parent ROI ID (required for sub-cellular).
+            label_id: Label integer in the label image.
+            bbox_y: Bounding box top-left Y.
+            bbox_x: Bounding box top-left X.
+            bbox_h: Bounding box height.
+            bbox_w: Bounding box width.
+            area_px: Area in pixels.
+
+        Returns:
+            Row count (1 on success).
+
+        Raises:
+            ExperimentError: If cell identity enforcement rules are violated.
+        """
+        roi_type = self._db.get_roi_type_definition(roi_type_id)
+        if roi_type is None:
+            raise ExperimentError(
+                f"ROI type {uuid_to_str(roi_type_id)} not found"
+            )
+
+        is_top_level = roi_type["parent_type_id"] is None
+
+        if is_top_level and cell_identity_id is None:
+            raise ExperimentError(
+                "Top-level ROIs require a cell_identity_id"
+            )
+        if not is_top_level and cell_identity_id is not None:
+            raise ExperimentError(
+                "Sub-cellular ROIs must have NULL cell_identity_id"
+            )
+        if not is_top_level and parent_roi_id is None:
+            raise ExperimentError(
+                "Sub-cellular ROIs require a parent_roi_id"
+            )
+
+        return self._db.insert_roi(
+            id=id,
+            fov_id=fov_id,
+            roi_type_id=roi_type_id,
+            cell_identity_id=cell_identity_id,
+            parent_roi_id=parent_roi_id,
+            label_id=label_id,
+            bbox_y=bbox_y,
+            bbox_x=bbox_x,
+            bbox_h=bbox_h,
+            bbox_w=bbox_w,
+            area_px=area_px,
+        )
+
+    # ------------------------------------------------------------------
+    # CSV Export
+    # ------------------------------------------------------------------
+
+    def export_measurements_csv(
+        self, fov_ids: list[bytes], output_path: Path
+    ) -> int:
+        """Basic CSV export using active measurements query.
+
+        Writes CSV with human-readable scope names (SCOPE_DISPLAY mapping).
+
+        Args:
+            fov_ids: List of FOV IDs to export measurements for.
+            output_path: File path for the output CSV.
+
+        Returns:
+            Number of rows written.
+        """
+        import csv
+
+        from percell4.core.constants import SCOPE_DISPLAY
+
+        rows: list[dict[str, Any]] = []
+        for fov_id in fov_ids:
+            measurements = self._db.get_active_measurements(fov_id)
+            for m in measurements:
+                rows.append(
+                    {
+                        "fov_id": uuid_to_str(m["fov_id"])
+                        if "fov_id" in m.keys()
+                        else uuid_to_str(fov_id),
+                        "roi_id": uuid_to_str(m["roi_id"]),
+                        "channel_id": uuid_to_str(m["channel_id"]),
+                        "metric": m["metric"],
+                        "scope": SCOPE_DISPLAY.get(m["scope"], m["scope"]),
+                        "value": m["value"],
+                    }
+                )
+
+        if rows:
+            with open(output_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+                writer.writeheader()
+                writer.writerows(rows)
+
+        return len(rows)

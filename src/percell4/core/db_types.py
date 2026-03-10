@@ -69,6 +69,22 @@ def str_to_uuid(s: str) -> bytes:
     return uuid.UUID(s).bytes
 
 
+def uuid_to_hex(b: bytes) -> str:
+    """Convert UUID bytes to hex string (no hyphens). For Zarr path construction.
+
+    Args:
+        b: A 16-byte UUID value.
+
+    Returns:
+        32-character hex string with no hyphens.
+
+    Raises:
+        ValueError: If *b* is not exactly 16 bytes.
+    """
+    validate_uuid_bytes(b, "uuid_to_hex input")
+    return uuid.UUID(bytes=b).hex
+
+
 def validate_uuid_bytes(b: bytes, name: str = "value") -> None:
     """Validate that *b* is a well-formed 16-byte UUID.
 
