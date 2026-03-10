@@ -118,18 +118,42 @@ def _launch(
     # --- Load initial FOV ---
     _load_fov(viewer, store, fov_id, state)
 
+    # --- Scale bar ---
+    viewer.scale_bar.visible = True
+    # Determine if pixel_size_um is available for unit display
+    initial_fov = store.db.get_fov(fov_id)
+    if initial_fov and initial_fov["pixel_size_um"]:
+        viewer.scale_bar.unit = "um"
+
     # --- Add dock widgets ---
     from percell4.viewer.cellpose_widget import CellposeWidget
     from percell4.viewer.edge_removal_widget import EdgeRemovalWidget
     from percell4.viewer.edit_widget import EditWidget
     from percell4.viewer.fov_browser_widget import FovBrowserWidget
     from percell4.viewer.group_threshold_widget import GroupThresholdWidget
+    from percell4.viewer.measurement_widget import MeasurementWidget
     from percell4.viewer.threshold_widget import ThresholdWidget
+
+    channels = store.db.get_channels(exp["id"])
+    channel_names = [ch["name"] for ch in channels]
 
     def _on_fov_selected(new_fov_id: bytes) -> None:
         """Callback when user selects a different FOV in the browser."""
         _save_if_changed(viewer, store, state)
         _load_fov(viewer, store, new_fov_id, state)
+        # Update widgets with new FOV
+        edit_widget.fov_id = new_fov_id
+        cellpose_widget.fov_id = new_fov_id
+        edge_removal_widget.fov_id = new_fov_id
+        threshold_widget.fov_id = new_fov_id
+        group_threshold_widget.fov_id = new_fov_id
+        measurement_widget.fov_id = new_fov_id
+        # Update scale bar unit
+        new_fov = store.db.get_fov(new_fov_id)
+        if new_fov and new_fov["pixel_size_um"]:
+            viewer.scale_bar.unit = "um"
+        else:
+            viewer.scale_bar.unit = None
 
     browser = FovBrowserWidget(viewer, store, _on_fov_selected)
     viewer.window.add_dock_widget(
@@ -143,8 +167,6 @@ def _launch(
     )
 
     # Cellpose re-segmentation widget
-    channels = store.db.get_channels(exp["id"])
-    channel_names = [ch["name"] for ch in channels]
     cellpose_widget = CellposeWidget(viewer, store, fov_id, channel_names)
     viewer.window.add_dock_widget(
         cellpose_widget.widget, name="Cellpose", area="right",
@@ -169,6 +191,14 @@ def _launch(
     )
     viewer.window.add_dock_widget(
         group_threshold_widget.widget, name="Group Threshold", area="right",
+    )
+
+    # Measurement overlay widget
+    measurement_widget = MeasurementWidget(
+        viewer, store, fov_id, channel_names,
+    )
+    viewer.window.add_dock_widget(
+        measurement_widget.widget, name="Measurements", area="right",
     )
 
     # --- Block until viewer closes ---
@@ -211,10 +241,75 @@ def _load_fov(
     _load_label_layer(viewer, store, fov, state)
     _load_mask_layers(viewer, store, fov)
 
-    # Update title
+    # Update title with detailed status info
     exp = store.db.get_experiment()
     exp_name = exp["name"] if exp else "Experiment"
-    viewer.title = f"PerCell 4 -- {exp_name} -- {fov_name}"
+    _update_viewer_title(viewer, store, fov, exp_name)
+
+
+def build_viewer_title(
+    fov_name: str,
+    status: str,
+    condition_name: str | None,
+    n_rois: int,
+    pixel_size_um: float | None,
+) -> str:
+    """Build the viewer title string for a given FOV.
+
+    Args:
+        fov_name: Display name for the FOV.
+        status: FOV status string (e.g. 'imported', 'measured').
+        condition_name: Condition name, or None if unassigned.
+        n_rois: Number of ROIs in this FOV.
+        pixel_size_um: Pixel size in micrometers, or None.
+
+    Returns:
+        Formatted title string.
+    """
+    parts = [f"PerCell 4 -- {fov_name} [{status}]"]
+
+    if condition_name:
+        parts.append(condition_name)
+
+    parts.append(f"{n_rois} ROIs")
+
+    if pixel_size_um is not None:
+        parts.append(f"{pixel_size_um} um/px")
+
+    return " | ".join(parts)
+
+
+def _update_viewer_title(
+    viewer: "napari.Viewer",
+    store: "ExperimentStore",
+    fov: dict,
+    exp_name: str,
+) -> None:
+    """Update viewer title bar with FOV info."""
+    from percell4.core.db_types import uuid_to_str
+
+    fov_name = fov["auto_name"] or uuid_to_str(fov["id"])[:8]
+    status = fov["status"]
+    pixel_size_um = fov["pixel_size_um"]
+
+    # Get condition name
+    condition_name: str | None = None
+    if fov["condition_id"]:
+        conditions = store.db.get_conditions(
+            store.db.get_experiment()["id"]
+        )
+        for c in conditions:
+            if c["id"] == fov["condition_id"]:
+                condition_name = c["name"]
+                break
+
+    # Count ROIs
+    rois = store.db.get_rois(fov["id"])
+    n_rois = len(rois)
+
+    viewer.title = build_viewer_title(
+        fov_name, status, condition_name, n_rois, pixel_size_um,
+    )
 
 
 def _load_channel_layers(
