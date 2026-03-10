@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 
 from percell4.core.db_types import new_uuid
-from percell4.core.exceptions import InvalidStatusTransition
+from percell4.core.exceptions import InvalidStatusTransition, MergeConflictError
 from percell4.core.experiment_db import ExperimentDB
+from percell4.core.schema import SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -1621,3 +1622,525 @@ class TestActiveMeasurements:
         assert len(results) == 1
         assert results[0]["value"] == 42.0
         assert results[0]["label_id"] == 1
+
+
+# ===================================================================
+# 27. Merge
+# ===================================================================
+
+
+def _create_populated_db(db_path: Path, *, status: str = "imported") -> Path:
+    """Create a fully populated test database at the given path.
+
+    Inserts experiment, condition, channel, roi_type, FOV, pipeline_run,
+    ROI, and measurement. Returns the path for use as a merge source.
+    """
+    database = ExperimentDB(db_path)
+    database.open()
+    try:
+        eid = new_uuid()
+        database.insert_experiment(eid, "source_experiment")
+        cid = new_uuid()
+        database.insert_condition(cid, eid, "control")
+        chid = new_uuid()
+        database.insert_channel(chid, eid, "GFP")
+        rtid = new_uuid()
+        database.insert_roi_type_definition(rtid, eid, "cell")
+        fid = new_uuid()
+        database.insert_fov(fid, eid, condition_id=cid, status=status,
+                            zarr_path=f"data/{fid.hex()}")
+        prid = new_uuid()
+        database.insert_pipeline_run(prid, "import_op")
+        ssid = new_uuid()
+        database.insert_segmentation_set(ssid, eid, rtid, "cellpose")
+        ciid = new_uuid()
+        database.insert_cell_identity(ciid, fid, rtid)
+        rid = new_uuid()
+        database.insert_roi(rid, fid, rtid, ciid, None, 1, 0, 0, 10, 10, 100)
+        mid = new_uuid()
+        database.insert_measurement(
+            mid, rid, chid, "mean", "whole_roi", 42.0, prid
+        )
+
+        # Add a status log entry
+        database.connection.execute(
+            "INSERT INTO fov_status_log (fov_id, old_status, new_status, message) "
+            "VALUES (?, ?, ?, ?)",
+            (fid, None, status, "initial import"),
+        )
+        database.connection.commit()
+    finally:
+        database.close()
+    return db_path
+
+
+class TestMerge:
+    """Test merge_experiment with various scenarios."""
+
+    def test_merge_no_conflicts(self, tmp_path: Path) -> None:
+        """Merge two DBs with completely different UUIDs — all rows inserted."""
+        target_path = tmp_path / "target.db"
+        source_path = tmp_path / "source.db"
+
+        # Create target
+        _create_populated_db(target_path)
+
+        # Create source with different UUIDs
+        _create_populated_db(source_path)
+
+        target = ExperimentDB(target_path)
+        target.open()
+        try:
+            result = target.merge_experiment(source_path)
+
+            # Verify rows were inserted
+            assert result["tables"]["experiments"] >= 0  # OR IGNORE may skip
+            assert result["tables"]["fovs"] >= 1
+            assert result["tables"]["rois"] >= 1
+            assert result["tables"]["measurements"] >= 1
+            assert result["tables"]["fov_status_log"] >= 1
+            assert len(result["conflicts"]) == 0
+
+            # Verify we now have 2 experiments
+            rows = target.connection.execute(
+                "SELECT COUNT(*) as cnt FROM experiments"
+            ).fetchone()
+            assert rows["cnt"] == 2
+
+            # Verify we now have 2 FOVs
+            fov_count = target.connection.execute(
+                "SELECT COUNT(*) as cnt FROM fovs"
+            ).fetchone()
+            assert fov_count["cnt"] == 2
+        finally:
+            target.close()
+
+    def test_merge_duplicate_uuid_same_content(self, tmp_path: Path) -> None:
+        """INSERT OR IGNORE handles duplicate UUIDs with same content gracefully."""
+        target_path = tmp_path / "target.db"
+        source_path = tmp_path / "source.db"
+
+        # Create target
+        _create_populated_db(target_path)
+
+        # Copy target as source (identical content, same UUIDs)
+        import shutil
+        shutil.copy2(target_path, source_path)
+
+        target = ExperimentDB(target_path)
+        target.open()
+        try:
+            result = target.merge_experiment(source_path)
+
+            # All inserts should be ignored (0 new rows)
+            # experiments, conditions, channels, etc. all duplicates
+            for table, count in result["tables"].items():
+                if table == "fov_status_log":
+                    # INTEGER PK — duplicates get new IDs
+                    continue
+                assert count == 0, (
+                    f"Expected 0 new rows for {table}, got {count}"
+                )
+            assert len(result["conflicts"]) == 0
+        finally:
+            target.close()
+
+    def test_merge_schema_version_mismatch(self, tmp_path: Path) -> None:
+        """Raises MergeConflictError when schema versions differ."""
+        target_path = tmp_path / "target.db"
+        source_path = tmp_path / "source.db"
+
+        _create_populated_db(target_path)
+        _create_populated_db(source_path)
+
+        # Manually update source schema version to something different
+        conn = sqlite3.connect(str(source_path))
+        conn.execute(
+            "UPDATE experiments SET schema_version = '99.0.0'"
+        )
+        conn.commit()
+        conn.close()
+
+        target = ExperimentDB(target_path)
+        target.open()
+        try:
+            with pytest.raises(MergeConflictError, match="Schema version mismatch"):
+                target.merge_experiment(source_path)
+        finally:
+            target.close()
+
+    def test_merge_excludes_pending_fovs(self, tmp_path: Path) -> None:
+        """FOVs with status 'pending' are not merged."""
+        target_path = tmp_path / "target.db"
+        source_path = tmp_path / "source.db"
+
+        _create_populated_db(target_path)
+        _create_populated_db(source_path, status="pending")
+
+        target = ExperimentDB(target_path)
+        target.open()
+        try:
+            result = target.merge_experiment(source_path)
+
+            # No FOVs inserted (the source FOV is pending)
+            assert result["tables"]["fovs"] == 0
+
+            # Target should still only have its original FOV
+            fov_count = target.connection.execute(
+                "SELECT COUNT(*) as cnt FROM fovs"
+            ).fetchone()
+            assert fov_count["cnt"] == 1
+        finally:
+            target.close()
+
+    def test_merge_excludes_deleting_fovs(self, tmp_path: Path) -> None:
+        """FOVs with status 'deleting' are not merged."""
+        target_path = tmp_path / "target.db"
+        source_path = tmp_path / "source.db"
+
+        _create_populated_db(target_path)
+
+        # Create source with a deleting FOV
+        # We need to manually create because _create_populated_db
+        # can't insert 'deleting' status directly (CHECK constraint
+        # allows it, but the status machine normally controls flow).
+        source_db = ExperimentDB(source_path)
+        source_db.open()
+        try:
+            eid = new_uuid()
+            source_db.insert_experiment(eid, "source_exp")
+            fid = new_uuid()
+            source_db.insert_fov(
+                fid, eid, status="imported",
+                zarr_path=f"data/{fid.hex()}"
+            )
+            # Transition to deleting: imported -> deleting is valid
+            source_db.set_fov_status(fid, "deleting")
+            source_db.connection.commit()
+        finally:
+            source_db.close()
+
+        target = ExperimentDB(target_path)
+        target.open()
+        try:
+            result = target.merge_experiment(source_path)
+            assert result["tables"]["fovs"] == 0
+        finally:
+            target.close()
+
+    def test_merge_fov_status_log_no_pk_collision(
+        self, tmp_path: Path
+    ) -> None:
+        """INTEGER PKs get new auto-assigned IDs, no collision."""
+        target_path = tmp_path / "target.db"
+        source_path = tmp_path / "source.db"
+
+        _create_populated_db(target_path)
+        _create_populated_db(source_path)
+
+        target = ExperimentDB(target_path)
+        target.open()
+        try:
+            # Count log entries before merge
+            before = target.connection.execute(
+                "SELECT COUNT(*) as cnt FROM fov_status_log"
+            ).fetchone()["cnt"]
+
+            result = target.merge_experiment(source_path)
+
+            after = target.connection.execute(
+                "SELECT COUNT(*) as cnt FROM fov_status_log"
+            ).fetchone()["cnt"]
+
+            # New entries were added
+            assert after > before
+            assert result["tables"]["fov_status_log"] >= 1
+
+            # Verify no duplicate PKs
+            pk_count = target.connection.execute(
+                "SELECT COUNT(DISTINCT id) as cnt FROM fov_status_log"
+            ).fetchone()["cnt"]
+            assert pk_count == after  # all PKs unique
+        finally:
+            target.close()
+
+    def test_merge_post_fk_check_passes(self, tmp_path: Path) -> None:
+        """PRAGMA foreign_key_check is clean after a well-formed merge."""
+        target_path = tmp_path / "target.db"
+        source_path = tmp_path / "source.db"
+
+        _create_populated_db(target_path)
+        _create_populated_db(source_path)
+
+        target = ExperimentDB(target_path)
+        target.open()
+        try:
+            result = target.merge_experiment(source_path)
+            assert len(result["fk_violations"]) == 0
+        finally:
+            target.close()
+
+    def test_merge_zarr_path_uniqueness_warning(
+        self, tmp_path: Path
+    ) -> None:
+        """Duplicate zarr_path detected and reported as a warning."""
+        target_path = tmp_path / "target.db"
+        source_path = tmp_path / "source.db"
+
+        shared_zarr = "data/shared_fov"
+
+        # Create target with a specific zarr_path
+        target_db = ExperimentDB(target_path)
+        target_db.open()
+        try:
+            eid = new_uuid()
+            target_db.insert_experiment(eid, "target_exp")
+            cid = new_uuid()
+            target_db.insert_condition(cid, eid, "control")
+            chid = new_uuid()
+            target_db.insert_channel(chid, eid, "GFP")
+            fid = new_uuid()
+            target_db.insert_fov(
+                fid, eid, condition_id=cid, status="imported",
+                zarr_path=shared_zarr,
+            )
+            target_db.connection.commit()
+        finally:
+            target_db.close()
+
+        # Create source with the same zarr_path
+        source_db = ExperimentDB(source_path)
+        source_db.open()
+        try:
+            eid2 = new_uuid()
+            source_db.insert_experiment(eid2, "source_exp")
+            cid2 = new_uuid()
+            source_db.insert_condition(cid2, eid2, "control")
+            chid2 = new_uuid()
+            source_db.insert_channel(chid2, eid2, "GFP")
+            fid2 = new_uuid()
+            source_db.insert_fov(
+                fid2, eid2, condition_id=cid2, status="imported",
+                zarr_path=shared_zarr,
+            )
+            source_db.connection.commit()
+        finally:
+            source_db.close()
+
+        # Now merge — the unique index on zarr_path will cause OR IGNORE
+        # to skip the duplicate FOV. So we need to drop the unique index
+        # first to allow both in, OR we check the warning path differently.
+        # Actually, the target has idx_fovs_zarr_path as a UNIQUE index
+        # WHERE zarr_path IS NOT NULL AND status NOT IN ('deleted').
+        # INSERT OR IGNORE will skip the conflicting row. So the warning
+        # detection sees only 1 row (the target's). Let's test with
+        # a different approach: insert the source FOV directly.
+
+        # Actually let's test the warning path by disabling the unique index
+        # scenario and instead checking that when 2 FOVs end up with same
+        # zarr_path, the warning fires. We'll do this by giving them different
+        # zarr_paths initially, then updating one after merge.
+        # Simpler: use target DB that already has 2 FOVs with same zarr_path.
+
+        # Better approach: the unique index prevents INSERT OR IGNORE from
+        # adding the dup. The zarr_path check still finds it if we manually
+        # insert. Let's just verify the check works with a manual setup.
+        target_db = ExperimentDB(target_path)
+        target_db.open()
+        try:
+            # Drop the unique partial index so we can insert a duplicate
+            target_db.connection.execute(
+                "DROP INDEX IF EXISTS idx_fovs_zarr_path"
+            )
+            eid_orig = target_db.connection.execute(
+                "SELECT id FROM experiments LIMIT 1"
+            ).fetchone()["id"]
+            fid_dup = new_uuid()
+            target_db.connection.execute(
+                "INSERT INTO fovs (id, experiment_id, status, zarr_path) "
+                "VALUES (?, ?, 'imported', ?)",
+                (fid_dup, eid_orig, shared_zarr),
+            )
+            target_db.connection.commit()
+
+            # Now merge the source — the post-merge zarr_path check should
+            # detect the duplicates already in the target
+            result = target_db.merge_experiment(source_path)
+
+            zarr_warnings = [
+                w for w in result["warnings"] if "zarr_path" in w
+            ]
+            assert len(zarr_warnings) >= 1
+            assert shared_zarr in zarr_warnings[0]
+        finally:
+            target_db.close()
+
+    def test_merge_assignment_conflict_resolution(
+        self, tmp_path: Path
+    ) -> None:
+        """Duplicate active segmentation assignments resolved by deactivating the older one."""
+        target_path = tmp_path / "target.db"
+        source_path = tmp_path / "source.db"
+
+        # Shared IDs for the FOV and ROI type (to create a conflict)
+        shared_fov_id = new_uuid()
+        shared_eid = new_uuid()
+        shared_cid = new_uuid()
+        shared_rtid = new_uuid()
+        shared_chid = new_uuid()
+
+        # Create target with a segmentation assignment
+        target_db = ExperimentDB(target_path)
+        target_db.open()
+        try:
+            target_db.insert_experiment(shared_eid, "shared_exp")
+            target_db.insert_condition(shared_cid, shared_eid, "control")
+            target_db.insert_channel(shared_chid, shared_eid, "GFP")
+            target_db.insert_roi_type_definition(shared_rtid, shared_eid, "cell")
+            target_db.insert_fov(
+                shared_fov_id, shared_eid, condition_id=shared_cid,
+                status="imported", zarr_path="data/fov1",
+            )
+            prid1 = new_uuid()
+            target_db.insert_pipeline_run(prid1, "seg_op")
+            ssid1 = new_uuid()
+            target_db.insert_segmentation_set(ssid1, shared_eid, shared_rtid, "cellpose")
+
+            # Create assignment with an early timestamp
+            assign_id1 = new_uuid()
+            target_db.connection.execute(
+                "INSERT INTO fov_segmentation_assignments "
+                "(id, fov_id, segmentation_set_id, roi_type_id, is_active, "
+                " pipeline_run_id, assigned_at) "
+                "VALUES (?, ?, ?, ?, 1, ?, '2025-01-01 00:00:00')",
+                (assign_id1, shared_fov_id, ssid1, shared_rtid, prid1),
+            )
+            target_db.connection.commit()
+        finally:
+            target_db.close()
+
+        # Create source with same shared entities but a different assignment
+        source_db = ExperimentDB(source_path)
+        source_db.open()
+        try:
+            source_db.insert_experiment(shared_eid, "shared_exp")
+            source_db.insert_condition(shared_cid, shared_eid, "control")
+            source_db.insert_channel(shared_chid, shared_eid, "GFP")
+            source_db.insert_roi_type_definition(shared_rtid, shared_eid, "cell")
+            source_db.insert_fov(
+                shared_fov_id, shared_eid, condition_id=shared_cid,
+                status="imported", zarr_path="data/fov1",
+            )
+            prid2 = new_uuid()
+            source_db.insert_pipeline_run(prid2, "seg_op_v2")
+            ssid2 = new_uuid()
+            source_db.insert_segmentation_set(ssid2, shared_eid, shared_rtid, "cellpose")
+
+            # Create assignment with a later timestamp
+            assign_id2 = new_uuid()
+            source_db.connection.execute(
+                "INSERT INTO fov_segmentation_assignments "
+                "(id, fov_id, segmentation_set_id, roi_type_id, is_active, "
+                " pipeline_run_id, assigned_at) "
+                "VALUES (?, ?, ?, ?, 1, ?, '2025-06-01 00:00:00')",
+                (assign_id2, shared_fov_id, ssid2, shared_rtid, prid2),
+            )
+            source_db.connection.commit()
+        finally:
+            source_db.close()
+
+        # Merge — the unique partial index will prevent the 2nd active
+        # assignment from being inserted via OR IGNORE. We need to drop
+        # the unique index on the target to allow both through.
+        target_db = ExperimentDB(target_path)
+        target_db.open()
+        try:
+            # Drop the partial unique index so both active assignments coexist
+            target_db.connection.execute(
+                "DROP INDEX IF EXISTS idx_fsa_one_active"
+            )
+            target_db.connection.commit()
+
+            result = target_db.merge_experiment(source_path)
+
+            # The older assignment should have been deactivated
+            deactivate_warnings = [
+                w for w in result["warnings"]
+                if "Deactivated duplicate segmentation" in w
+            ]
+            assert len(deactivate_warnings) >= 1
+
+            # Verify only 1 active assignment remains for this (fov, roi_type)
+            active_count = target_db.connection.execute(
+                "SELECT COUNT(*) as cnt FROM fov_segmentation_assignments "
+                "WHERE fov_id = ? AND roi_type_id = ? AND is_active = 1",
+                (shared_fov_id, shared_rtid),
+            ).fetchone()["cnt"]
+            assert active_count == 1
+
+            # The surviving active assignment should be the newer one
+            surviving = target_db.connection.execute(
+                "SELECT id, assigned_at FROM fov_segmentation_assignments "
+                "WHERE fov_id = ? AND roi_type_id = ? AND is_active = 1",
+                (shared_fov_id, shared_rtid),
+            ).fetchone()
+            assert surviving["assigned_at"] == "2025-06-01 00:00:00"
+        finally:
+            target_db.close()
+
+    def test_merge_attach_parameter_binding(self, tmp_path: Path) -> None:
+        """Path with special characters works — no SQL injection via parameter binding."""
+        # Create a path with spaces and special chars
+        special_dir = tmp_path / "path with spaces & 'quotes'"
+        special_dir.mkdir()
+        source_path = special_dir / "source.db"
+        target_path = tmp_path / "target.db"
+
+        _create_populated_db(target_path)
+        _create_populated_db(source_path)
+
+        target = ExperimentDB(target_path)
+        target.open()
+        try:
+            # Should not raise — parameter binding handles special chars
+            result = target.merge_experiment(source_path)
+            assert "tables" in result
+            assert "conflicts" in result
+        finally:
+            target.close()
+
+    def test_merge_detach_on_error(self, tmp_path: Path) -> None:
+        """Source DB is detached even if the merge fails partway through."""
+        target_path = tmp_path / "target.db"
+        source_path = tmp_path / "source.db"
+
+        _create_populated_db(target_path)
+        _create_populated_db(source_path)
+
+        # Corrupt the source by removing a table that merge_experiment
+        # tries to read from
+        conn = sqlite3.connect(str(source_path))
+        conn.execute("DROP TABLE measurements")
+        conn.commit()
+        conn.close()
+
+        target = ExperimentDB(target_path)
+        target.open()
+        try:
+            with pytest.raises(Exception):
+                target.merge_experiment(source_path)
+
+            # Verify source is detached (should be able to ATTACH again)
+            # If not detached, this would raise "database source is already in use"
+            target.connection.execute(
+                "ATTACH ? AS source", (str(source_path),)
+            )
+            target.connection.execute("DETACH source")
+
+            # Verify FK is re-enabled
+            fk_state = target.connection.execute(
+                "PRAGMA foreign_keys"
+            ).fetchone()
+            assert fk_state[0] == 1
+        finally:
+            target.close()

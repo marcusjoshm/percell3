@@ -10,21 +10,26 @@ permitted here.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 from percell4.core.constants import (
     DEFAULT_BATCH_SIZE,
+    ENTITY_TABLES,
+    MERGE_TABLE_ORDER,
     VALID_TRANSITIONS,
     FovStatus,
     MAX_LINEAGE_DEPTH,
 )
 from percell4.core.db_types import new_uuid
-from percell4.core.exceptions import InvalidStatusTransition
+from percell4.core.exceptions import InvalidStatusTransition, MergeConflictError
 from percell4.core.models import MeasurementNeeded
 from percell4.core.schema import SCHEMA_VERSION, _configure_connection, create_schema
+
+logger = logging.getLogger(__name__)
 
 # Type alias for sqlite3.Row (returned from queries)
 Row = sqlite3.Row
@@ -1102,3 +1107,274 @@ class ExperimentDB:
             (),
             fov_ids,
         )
+
+    # ------------------------------------------------------------------
+    # Database Merge
+    # ------------------------------------------------------------------
+
+    # Statuses excluded from merge — FOVs that are incomplete or being removed
+    _EXCLUDED_STATUSES: tuple[str, ...] = (
+        "pending", "deleting", "deleted", "error",
+    )
+
+    def merge_experiment(self, source_path: Path) -> dict[str, Any]:
+        """Merge another .percell database into this one.
+
+        Uses ATTACH DATABASE with parameter binding (no f-string for path),
+        INSERT OR IGNORE for BLOB(16) PK tables, and special handling for
+        the INTEGER PK ``fov_status_log`` table.
+
+        Returns:
+            Dict with merge statistics: table counts, conflicts, warnings,
+            and foreign-key violations.
+        """
+        conn = self.connection
+        counts: dict[str, int] = {}
+        conflicts: list[str] = []
+        warnings: list[str] = []
+        fk_violations: list[tuple] = []
+
+        try:
+            # ---- Step 1: ATTACH and schema version check ---------------
+            conn.execute("ATTACH ? AS source", (str(source_path),))
+
+            target_row = conn.execute(
+                "SELECT schema_version FROM experiments"
+            ).fetchone()
+            source_row = conn.execute(
+                "SELECT schema_version FROM source.experiments"
+            ).fetchone()
+
+            if target_row is None or source_row is None:
+                raise MergeConflictError(
+                    "Cannot merge: one or both databases have no experiment record"
+                )
+
+            target_ver = target_row["schema_version"]
+            source_ver = source_row["schema_version"]
+            if target_ver != source_ver:
+                raise MergeConflictError(
+                    f"Schema version mismatch: target={target_ver}, "
+                    f"source={source_ver}"
+                )
+
+            # ---- Step 2: Disable foreign keys --------------------------
+            conn.execute("PRAGMA foreign_keys = OFF")
+
+            # ---- Step 3: Pre-merge conflict check ----------------------
+            for table in ENTITY_TABLES:
+                assert table.isidentifier(), f"Bad table name: {table!r}"
+                # fov_status_log has INTEGER PK — skip collision check
+                if table == "fov_status_log":
+                    continue
+
+                # Find rows with same UUID PK but different content
+                # Get column names from table info
+                col_info = conn.execute(
+                    f"PRAGMA table_info({table})"
+                ).fetchall()
+                col_names = [c["name"] for c in col_info]
+                non_pk_cols = [c for c in col_names if c != "id"]
+
+                if not non_pk_cols:
+                    continue  # table with only PK has no conflict possible
+
+                # Build comparison conditions for non-PK columns
+                # Use IS NOT to handle NULLs correctly
+                diff_conditions = " OR ".join(
+                    f"main.{table}.{col} IS NOT source.{table}.{col}"
+                    for col in non_pk_cols
+                )
+                sql = (
+                    f"SELECT uuid_str(main.{table}.id) AS conflict_id "
+                    f"FROM main.{table} "
+                    f"JOIN source.{table} "
+                    f"ON main.{table}.id = source.{table}.id "
+                    f"WHERE {diff_conditions}"
+                )
+                conflict_rows = conn.execute(sql).fetchall()
+                for row in conflict_rows:
+                    conflicts.append(
+                        f"{table}: UUID {row['conflict_id']} has "
+                        f"differing content between source and target"
+                    )
+
+            # ---- Step 4: Filter source FOVs (exclude non-committed) ----
+            excluded_placeholders = ", ".join(
+                "?" * len(self._EXCLUDED_STATUSES)
+            )
+            conn.execute(
+                "CREATE TEMP TABLE _merge_eligible_fovs (id BLOB(16))"
+            )
+            conn.execute(
+                f"INSERT INTO _merge_eligible_fovs "
+                f"SELECT id FROM source.fovs "
+                f"WHERE status NOT IN ({excluded_placeholders})",
+                self._EXCLUDED_STATUSES,
+            )
+
+            # ---- Step 5: Insert in MERGE_TABLE_ORDER -------------------
+            for table in MERGE_TABLE_ORDER:
+                assert table.isidentifier(), f"Bad table name: {table!r}"
+
+                if table == "fovs":
+                    sql = (
+                        f"INSERT OR IGNORE INTO main.{table} "
+                        f"SELECT * FROM source.{table} "
+                        f"WHERE status NOT IN ({excluded_placeholders})"
+                    )
+                    cursor = conn.execute(sql, self._EXCLUDED_STATUSES)
+                else:
+                    sql = (
+                        f"INSERT OR IGNORE INTO main.{table} "
+                        f"SELECT * FROM source.{table}"
+                    )
+                    cursor = conn.execute(sql)
+                counts[table] = cursor.rowcount
+
+            # ---- Step 6: Handle fov_status_log (INTEGER PK) -----------
+            cursor = conn.execute(
+                "INSERT INTO main.fov_status_log "
+                "(fov_id, old_status, new_status, message, created_at) "
+                "SELECT fov_id, old_status, new_status, message, created_at "
+                "FROM source.fov_status_log "
+                "WHERE fov_id IN (SELECT id FROM _merge_eligible_fovs)"
+            )
+            counts["fov_status_log"] = cursor.rowcount
+
+            # ---- Step 7: Post-merge assignment conflict detection ------
+            # Check for duplicate active segmentation assignments
+            dup_seg_rows = conn.execute(
+                "SELECT fov_id, roi_type_id, COUNT(*) as cnt "
+                "FROM fov_segmentation_assignments "
+                "WHERE is_active = 1 "
+                "GROUP BY fov_id, roi_type_id "
+                "HAVING cnt > 1"
+            ).fetchall()
+
+            for row in dup_seg_rows:
+                # Find all active assignments for this pair, deactivate older
+                actives = conn.execute(
+                    "SELECT id, assigned_at FROM fov_segmentation_assignments "
+                    "WHERE fov_id = ? AND roi_type_id = ? AND is_active = 1 "
+                    "ORDER BY assigned_at ASC",
+                    (row["fov_id"], row["roi_type_id"]),
+                ).fetchall()
+                # Deactivate all but the most recent (last in ASC order)
+                for a in actives[:-1]:
+                    conn.execute(
+                        "UPDATE fov_segmentation_assignments "
+                        "SET is_active = 0, deactivated_at = datetime('now') "
+                        "WHERE id = ?",
+                        (a["id"],),
+                    )
+                    warnings.append(
+                        f"Deactivated duplicate segmentation assignment "
+                        f"{a['id']!r} for fov_id={row['fov_id']!r}, "
+                        f"roi_type_id={row['roi_type_id']!r}"
+                    )
+
+            # Check for duplicate active mask assignments
+            dup_mask_rows = conn.execute(
+                "SELECT fov_id, threshold_mask_id, purpose, COUNT(*) as cnt "
+                "FROM fov_mask_assignments "
+                "WHERE is_active = 1 "
+                "GROUP BY fov_id, threshold_mask_id, purpose "
+                "HAVING cnt > 1"
+            ).fetchall()
+
+            for row in dup_mask_rows:
+                actives = conn.execute(
+                    "SELECT id, assigned_at FROM fov_mask_assignments "
+                    "WHERE fov_id = ? AND threshold_mask_id = ? "
+                    "AND purpose = ? AND is_active = 1 "
+                    "ORDER BY assigned_at ASC",
+                    (row["fov_id"], row["threshold_mask_id"], row["purpose"]),
+                ).fetchall()
+                for a in actives[:-1]:
+                    conn.execute(
+                        "UPDATE fov_mask_assignments "
+                        "SET is_active = 0, deactivated_at = datetime('now') "
+                        "WHERE id = ?",
+                        (a["id"],),
+                    )
+                    warnings.append(
+                        f"Deactivated duplicate mask assignment "
+                        f"{a['id']!r} for fov_id={row['fov_id']!r}, "
+                        f"threshold_mask_id={row['threshold_mask_id']!r}, "
+                        f"purpose={row['purpose']!r}"
+                    )
+
+            # ---- Step 8: Post-merge validations ------------------------
+
+            # Foreign key check
+            fk_rows = conn.execute("PRAGMA foreign_key_check").fetchall()
+            for fk_row in fk_rows:
+                fk_violations.append(tuple(fk_row))
+                warnings.append(
+                    f"FK violation: table={fk_row['table']}, "
+                    f"rowid={fk_row['rowid']}, "
+                    f"parent={fk_row['parent']}, "
+                    f"fkid={fk_row['fkid']}"
+                )
+
+            # Cycle detection: check FOVs with parent_fov_id set
+            parent_fovs = conn.execute(
+                "SELECT id, parent_fov_id FROM fovs "
+                "WHERE parent_fov_id IS NOT NULL"
+            ).fetchall()
+            for pf in parent_fovs:
+                if not self.check_no_cycle(pf["id"], pf["parent_fov_id"]):
+                    warnings.append(
+                        f"Lineage cycle detected involving FOV {pf['id']!r}"
+                    )
+
+            # zarr_path uniqueness among non-deleted FOVs
+            dup_zarr = conn.execute(
+                "SELECT zarr_path, COUNT(*) as cnt FROM fovs "
+                "WHERE zarr_path IS NOT NULL AND status != 'deleted' "
+                "GROUP BY zarr_path HAVING cnt > 1"
+            ).fetchall()
+            for zr in dup_zarr:
+                warnings.append(
+                    f"Duplicate zarr_path '{zr['zarr_path']}' found "
+                    f"among {zr['cnt']} non-deleted FOVs"
+                )
+
+            # Identity overlap: cell_identities spanning FOVs from
+            # different source experiments (origin_fov_id in different
+            # experiments)
+            identity_overlap = conn.execute(
+                "SELECT ci.id, COUNT(DISTINCT f.experiment_id) as exp_count "
+                "FROM cell_identities ci "
+                "JOIN fovs f ON ci.origin_fov_id = f.id "
+                "GROUP BY ci.id "
+                "HAVING exp_count > 1"
+            ).fetchall()
+            for io in identity_overlap:
+                warnings.append(
+                    f"Cell identity {io['id']!r} spans FOVs from "
+                    f"{io['exp_count']} different experiments"
+                )
+
+            # Drop temp table
+            conn.execute("DROP TABLE IF EXISTS _merge_eligible_fovs")
+
+        finally:
+            # ---- Step 9: Re-enable FK and DETACH -----------------------
+            try:
+                conn.execute("PRAGMA foreign_keys = ON")
+            except Exception:
+                pass  # best-effort re-enable
+            try:
+                conn.execute("DETACH source")
+            except Exception:
+                pass  # best-effort detach (may already be detached)
+
+        # ---- Step 10: Return merge summary -----------------------------
+        return {
+            "tables": counts,
+            "conflicts": conflicts,
+            "warnings": warnings,
+            "fk_violations": fk_violations,
+        }
