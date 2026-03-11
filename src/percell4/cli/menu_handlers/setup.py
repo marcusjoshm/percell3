@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 from percell4.cli.menu_system import MenuState, _MenuCancel, menu_prompt, numbered_select_one
@@ -10,86 +9,38 @@ from percell4.cli.utils import console, print_error, print_success
 
 
 def create_experiment_handler(state: MenuState) -> None:
-    """Interactively create a new experiment with auto-generated config."""
+    """Interactively create a new experiment — path and name only.
+
+    Channels and ROI types are discovered during import, not here.
+    """
     console.print("\n[bold]Create New Experiment[/bold]\n")
 
-    # 1. Get experiment path
     path_str = menu_prompt("Path for new experiment", default=str(Path.cwd() / "experiment.percell"))
     path = Path(path_str).expanduser()
 
-    # Check if directory already exists
+    overwrite = False
     if path.exists() and any(path.iterdir()):
         console.print(f"[yellow]Directory is not empty:[/yellow] {path}")
         if numbered_select_one(["No", "Yes"], "Overwrite existing contents?") != "Yes":
             console.print("[yellow]Creation cancelled.[/yellow]")
             return
+        overwrite = True
 
-    # 2. Get experiment name and description
-    name = menu_prompt("Experiment name", default="My Experiment")
-    description = menu_prompt("Description", default="")
-
-    # 3. Get channel info
-    console.print("\n[bold]Channels[/bold] (enter channel names, empty line to finish)")
-    channels: list[dict[str, str | int]] = []
-    order = 0
-    while True:
-        ch_name = menu_prompt(f"Channel {order + 1} name (empty to finish)", default="")
-        if not ch_name:
-            break
-        role = menu_prompt(f"  Role for '{ch_name}'", default="signal")
-        channels.append({"name": ch_name, "role": role, "display_order": order})
-        order += 1
-
-    if not channels:
-        # Default channels if none provided
-        channels = [
-            {"name": "DAPI", "role": "nuclear", "display_order": 0},
-            {"name": "GFP", "role": "signal", "display_order": 1},
-        ]
-        console.print("[dim]No channels entered, using defaults: DAPI, GFP[/dim]")
-
-    # 4. Generate TOML config and create experiment
-    toml_lines = [
-        "[experiment]",
-        f'name = "{name}"',
-        f'description = "{description}"',
-        "",
-    ]
-    for ch in channels:
-        toml_lines.extend([
-            "[[channels]]",
-            f'name = "{ch["name"]}"',
-            f'role = "{ch["role"]}"',
-            f'display_order = {ch["display_order"]}',
-            "",
-        ])
-    toml_lines.extend([
-        "[[roi_types]]",
-        'name = "cell"',
-    ])
+    name = menu_prompt("Experiment name", default=path.stem)
 
     try:
         from percell4.core.experiment_store import ExperimentStore
 
-        # Write temp TOML and create experiment
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-            f.write("\n".join(toml_lines) + "\n")
-            tmp_toml = Path(f.name)
-
-        try:
-            store = ExperimentStore.create(path, tmp_toml)
-        finally:
-            tmp_toml.unlink(missing_ok=True)
-
+        store = ExperimentStore.create(path, name=name, overwrite=overwrite)
         _save_recent(path)
 
-        # Set as current
         if state.store:
             state.store.close()
         state.store = store
         state.experiment_path = path
 
         print_success(f"Created experiment '{name}' at {path}")
+        console.print("[dim]Import images to add channels.[/dim]")
     except Exception as e:
         print_error(str(e))
 

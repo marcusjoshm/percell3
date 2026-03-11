@@ -116,67 +116,110 @@ class ExperimentStore:
     # ------------------------------------------------------------------
 
     @classmethod
-    def create(cls, path: Path, config_path: Path) -> ExperimentStore:
+    def create(
+        cls,
+        path: Path,
+        config_path: Path | None = None,
+        *,
+        name: str = "",
+        description: str = "",
+        overwrite: bool = False,
+    ) -> ExperimentStore:
         """Create a new experiment in a .percell directory.
+
+        Experiments can be created two ways:
+
+        - **Interactive (default):** Just provide *name*.  Channels and
+          ROI types are added later during import.
+        - **From TOML config:** Provide *config_path* to pre-populate
+          channels and ROI types from a config file (useful for scripting
+          and tests).
 
         Args:
             path: The .percell directory path to create.
-            config_path: Path to the TOML configuration file.
+            config_path: Optional TOML config file for pre-populating
+                channels and ROI types.
+            name: Human-readable experiment name (used when no config).
+            description: Experiment description.
+            overwrite: If True, remove existing non-empty directory first.
 
         Returns:
             An open ExperimentStore ready for use.
 
         Raises:
-            ExperimentError: If *path* already exists and contains files.
+            ExperimentError: If *path* already exists and is non-empty
+                (unless *overwrite* is True).
         """
+        import shutil
+
         path = Path(path)
 
         if path.exists() and any(path.iterdir()):
-            raise ExperimentError("Experiment already exists")
+            if not overwrite:
+                raise ExperimentError(
+                    f"Directory is not empty: {path}  "
+                    "(use overwrite=True to replace)"
+                )
+            shutil.rmtree(path)
+            path.mkdir(parents=True)
+        elif not path.exists():
+            path.mkdir(parents=True)
 
         layers = LayerStore.init_store(path)
         db = ExperimentDB(path / "experiment.db")
         db.open()
 
-        config = ExperimentConfigV1.from_toml(config_path)
-        config_hash = hashlib.sha256(config_path.read_bytes()).hexdigest()[:16]
-
         with db.transaction():
             experiment_id = new_uuid()
-            db.insert_experiment(
-                experiment_id, config.experiment.name, config_hash=config_hash
-            )
 
-            for ch in config.channels:
-                db.insert_channel(
-                    new_uuid(),
+            if config_path is not None:
+                # TOML-based creation: pre-populate channels and ROI types
+                config = ExperimentConfigV1.from_toml(config_path)
+                config_hash = hashlib.sha256(
+                    config_path.read_bytes()
+                ).hexdigest()[:16]
+                db.insert_experiment(
                     experiment_id,
-                    ch.name,
-                    ch.role,
-                    ch.color,
-                    ch.display_order,
+                    config.experiment.name,
+                    config_hash=config_hash,
                 )
 
-            # ROI types: two-pass to resolve parent references
-            # First pass: insert types without a parent
-            name_to_id: dict[str, bytes] = {}
-            for rt in config.roi_types:
-                if rt.parent_type is None:
-                    rt_id = new_uuid()
-                    db.insert_roi_type_definition(
-                        rt_id, experiment_id, rt.name
+                for ch in config.channels:
+                    db.insert_channel(
+                        new_uuid(),
+                        experiment_id,
+                        ch.name,
+                        ch.role,
+                        ch.color,
+                        ch.display_order,
                     )
-                    name_to_id[rt.name] = rt_id
 
-            # Second pass: insert types with a parent
-            for rt in config.roi_types:
-                if rt.parent_type is not None:
-                    parent_id = name_to_id[rt.parent_type]
-                    rt_id = new_uuid()
-                    db.insert_roi_type_definition(
-                        rt_id, experiment_id, rt.name, parent_type_id=parent_id
-                    )
-                    name_to_id[rt.name] = rt_id
+                # ROI types: two-pass to resolve parent references
+                name_to_id: dict[str, bytes] = {}
+                for rt in config.roi_types:
+                    if rt.parent_type is None:
+                        rt_id = new_uuid()
+                        db.insert_roi_type_definition(
+                            rt_id, experiment_id, rt.name
+                        )
+                        name_to_id[rt.name] = rt_id
+                for rt in config.roi_types:
+                    if rt.parent_type is not None:
+                        parent_id = name_to_id[rt.parent_type]
+                        rt_id = new_uuid()
+                        db.insert_roi_type_definition(
+                            rt_id, experiment_id, rt.name,
+                            parent_type_id=parent_id,
+                        )
+                        name_to_id[rt.name] = rt_id
+            else:
+                # Interactive creation: empty experiment, channels added at import
+                db.insert_experiment(experiment_id, name or "Untitled")
+
+                # Always create a default "cell" ROI type
+                db.insert_roi_type_definition(
+                    new_uuid(), experiment_id, "cell"
+                )
 
         return cls(db, layers, path)
 

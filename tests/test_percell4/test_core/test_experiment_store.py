@@ -131,7 +131,7 @@ def test_create_existing_raises(percell_dir: Path) -> None:
     store = ExperimentStore.create(percell_dir, SAMPLE_TOML)
     store.close()
 
-    with pytest.raises(ExperimentError, match="already exists"):
+    with pytest.raises(ExperimentError, match="not empty"):
         ExperimentStore.create(percell_dir, SAMPLE_TOML)
 
 

@@ -107,8 +107,30 @@ def import_images_handler(state: MenuState) -> None:
 
     try:
         from percell4.io.engine import ImportEngine
+        from percell4.io.tiff import read_tiff
 
         channels = store.db.get_channels(exp["id"])
+
+        if not channels:
+            # No channels yet — discover from first image file
+            console.print("\n[bold]Channel Setup[/bold] (discovered from first image)")
+            first_image = read_tiff(files[0].path)
+            if first_image.ndim == 3:
+                n_channels = first_image.shape[0]
+            else:
+                n_channels = 1
+
+            from percell4.core.db_types import new_uuid
+
+            for i in range(n_channels):
+                default_name = f"Ch{i}" if n_channels > 1 else "Ch0"
+                ch_name = menu_prompt(f"  Name for channel {i}", default=default_name)
+                ch_id = new_uuid()
+                store.db.insert_channel(ch_id, exp["id"], ch_name, "signal", display_order=i)
+                console.print(f"    [dim]Added channel '{ch_name}'[/dim]")
+
+            channels = store.db.get_channels(exp["id"])
+
         ch_mapping = {i: ch["id"] for i, ch in enumerate(channels)}
 
         engine = ImportEngine()

@@ -45,7 +45,7 @@ def created_experiment(tmp_path: Path, sample_toml: Path) -> Path:
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["create", str(sample_toml), "--path", str(percell_path)],
+        ["create", str(percell_path), "--config", str(sample_toml)],
     )
     assert result.exit_code == 0, result.output
     return percell_path
@@ -109,24 +109,21 @@ class TestCreateCommand:
         out = tmp_path / "new.percell"
         result = runner.invoke(
             cli,
-            ["create", str(sample_toml), "--path", str(out)],
+            ["create", str(out), "--config", str(sample_toml)],
         )
         assert result.exit_code == 0, result.output
         assert "OK:" in result.output or "Created" in result.output
         assert (out / "experiment.db").exists()
 
-    def test_create_auto_name(self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Create without --path uses config stem as name."""
-        toml_path = tmp_path / "my_project.toml"
-        toml_path.write_text(SAMPLE_TOML.read_text())
-        # Run from tmp_path so auto-generated path goes there
-        monkeypatch.chdir(tmp_path)
+    def test_create_without_config(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Create without --config creates an empty experiment."""
+        out = tmp_path / "my_project.percell"
         result = runner.invoke(
             cli,
-            ["create", str(toml_path)],
+            ["create", str(out), "--name", "My Project"],
         )
         assert result.exit_code == 0, result.output
-        assert (tmp_path / "my_project.percell" / "experiment.db").exists()
+        assert (out / "experiment.db").exists()
 
     def test_create_already_exists_error(
         self, runner: CliRunner, sample_toml: Path, tmp_path: Path
@@ -137,7 +134,7 @@ class TestCreateCommand:
         (out / "dummy.txt").write_text("occupied")
         result = runner.invoke(
             cli,
-            ["create", str(sample_toml), "--path", str(out)],
+            ["create", str(out)],
         )
         assert result.exit_code != 0
 
@@ -302,13 +299,13 @@ class TestMergeCommand:
         # Create two experiments
         result_a = runner.invoke(
             cli,
-            ["create", str(sample_toml), "--path", str(exp_a)],
+            ["create", str(exp_a), "--config", str(sample_toml)],
         )
         assert result_a.exit_code == 0, result_a.output
 
         result_b = runner.invoke(
             cli,
-            ["create", str(sample_toml), "--path", str(exp_b)],
+            ["create", str(exp_b), "--config", str(sample_toml)],
         )
         assert result_b.exit_code == 0, result_b.output
 

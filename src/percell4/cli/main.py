@@ -160,21 +160,31 @@ def _default_toml_lines(include_comments: bool = False) -> list[str]:
 
 
 @cli.command()
-@click.argument("config_toml", type=click.Path(exists=True))
-@click.option("--path", "-p", type=click.Path(), default=None, help="Output .percell path")
+@click.argument("path", type=click.Path())
+@click.option("--name", "-n", default=None, help="Experiment name")
+@click.option("--config", "-c", type=click.Path(exists=True), default=None,
+              help="Optional TOML config to pre-populate channels")
+@click.option("--overwrite", is_flag=True, help="Overwrite if directory exists")
 @click.pass_context
-def create(ctx: click.Context, config_toml: str, path: str | None) -> None:
-    """Create a new experiment from a TOML config file."""
+def create(ctx: click.Context, path: str, name: str | None, config: str | None,
+           overwrite: bool) -> None:
+    """Create a new experiment at PATH.
+
+    Channels are discovered during import. Optionally provide --config
+    to pre-populate channels from a TOML file.
+    """
     from percell4.core.exceptions import ExperimentError
     from percell4.core.experiment_store import ExperimentStore
 
     try:
-        config_path = Path(config_toml)
-        if path is None:
-            out_path = Path.cwd() / f"{config_path.stem}.percell"
-        else:
-            out_path = Path(path)
-        store = ExperimentStore.create(out_path, config_path)
+        out_path = Path(path)
+        config_path = Path(config) if config else None
+        store = ExperimentStore.create(
+            out_path,
+            config_path,
+            name=name or out_path.stem,
+            overwrite=overwrite,
+        )
         _save_recent(out_path)
         exp = store.db.get_experiment()
         print_success(f"Created experiment '{exp['name']}' at {out_path}")
