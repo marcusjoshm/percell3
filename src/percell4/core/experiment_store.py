@@ -70,6 +70,22 @@ class ExperimentStore:
 
     This is the ONLY public interface. External code should never
     import ExperimentDB or LayerStore directly.
+
+    Viewer module scope note (schema 6.0.0):
+        The viewer module has 37 ``store.db.*`` calls across 6 files.
+        The following may need updating for lineage/derived FOV features:
+
+        - ``_viewer.py``: get_fovs (may need lineage_depth display),
+          get_fov (may need display_name fallback),
+          insert_segmentation_set / assign_segmentation (no changes needed)
+        - ``fov_browser_widget.py``: get_fovs (may want to show lineage tree,
+          display_name, filter by lineage_depth)
+        - ``measurement_widget.py``: get_active_measurements (no changes needed,
+          measurements.value is already nullable for NaN)
+        - ``group_threshold_widget.py``: get_intensity_groups (no changes needed)
+
+        These are cosmetic/UX updates, NOT functional breakage.
+        No viewer changes are required for correctness.
     """
 
     def __init__(self, db: ExperimentDB, layers: LayerStore, root: Path):
@@ -354,8 +370,15 @@ class ExperimentStore:
         derivation_op: str,
         params: dict,
         transform_fn: Callable[[dict[int, np.ndarray]], dict[int, np.ndarray]],
+        *,
+        display_name: str | None = None,
+        channel_metadata: str | None = None,
+        pipeline_run_id: bytes | None = None,
     ) -> bytes:
         """Create a derived FOV using the four-step contract.
+
+        The entire DB operation (insert FOV, copy assignments, duplicate
+        ROIs, set status) is wrapped in a single transaction for atomicity.
 
         Args:
             source_fov_id: ID of the source FOV.
@@ -364,6 +387,9 @@ class ExperimentStore:
             transform_fn: Pure function that takes channel arrays and returns
                 modified arrays.
                 Signature: dict[channel_index, ndarray] -> dict[channel_index, ndarray]
+            display_name: Optional user-facing name for the derived FOV.
+            channel_metadata: Optional JSON string of per-channel metadata.
+            pipeline_run_id: Optional pipeline run ID that created this FOV.
 
         Returns:
             ID of the newly created derived FOV.
@@ -398,7 +424,20 @@ class ExperimentStore:
         new_hex = uuid_to_hex(new_fov_id)
         zarr_path = self._layers.write_image_channels(new_hex, modified_arrays)
 
-        # 5. DB operations in a transaction
+        # 5. Compute lineage fields
+        source_depth = source["lineage_depth"] if source["lineage_depth"] else 0
+        new_depth = source_depth + 1
+
+        # Build lineage_path: append this FOV's hex to parent's path
+        parent_path = source["lineage_path"]
+        if parent_path:
+            new_lineage_path = f"{parent_path.rstrip('/')}/{new_hex}"
+        else:
+            # Parent has no path yet — construct from root
+            source_hex_id = uuid_to_hex(source_fov_id)
+            new_lineage_path = f"/{source_hex_id}/{new_hex}"
+
+        # 6. All DB operations in a single atomic transaction
         with self._db.transaction():
             # Auto-name
             source_name = source["auto_name"]
@@ -408,7 +447,7 @@ class ExperimentStore:
                 else derivation_op
             )
 
-            # Insert new FOV
+            # Insert new FOV with lineage fields and pixel_size_um
             self._db.insert_fov(
                 id=new_fov_id,
                 experiment_id=source["experiment_id"],
@@ -419,8 +458,14 @@ class ExperimentStore:
                 derivation_params=json.dumps(params),
                 status="pending",
                 auto_name=auto_name,
+                display_name=display_name,
                 zarr_path=zarr_path,
                 timepoint_id=source["timepoint_id"],
+                pixel_size_um=source["pixel_size_um"],
+                pipeline_run_id=pipeline_run_id,
+                lineage_depth=new_depth,
+                lineage_path=new_lineage_path,
+                channel_metadata=channel_metadata,
             )
 
             # Copy active segmentation assignments
@@ -444,29 +489,132 @@ class ExperimentStore:
                     assigned_by="derived_fov",
                 )
 
-            # Duplicate top-level ROIs (cells, NOT sub-cellular)
+            # Duplicate top-level ROIs (cells, NOT sub-cellular) using bulk insert
+            # CRITICAL: Preserve existing cell_identity_id references — do NOT
+            # create new cell_identities. Cell identities are created ONCE at
+            # segmentation and REUSED across derived FOVs.
             cells = self._db.get_cells(source_fov_id)
-            for cell in cells:
-                self._db.insert_roi(
-                    id=new_uuid(),
-                    fov_id=new_fov_id,
-                    roi_type_id=cell["roi_type_id"],
-                    cell_identity_id=cell["cell_identity_id"],
-                    parent_roi_id=None,
-                    label_id=cell["label_id"],
-                    bbox_y=cell["bbox_y"],
-                    bbox_x=cell["bbox_x"],
-                    bbox_h=cell["bbox_h"],
-                    bbox_w=cell["bbox_w"],
-                    area_px=cell["area_px"],
-                )
+            if cells:
+                roi_tuples = [
+                    (
+                        new_uuid(),
+                        new_fov_id,
+                        cell["roi_type_id"],
+                        cell["cell_identity_id"],
+                        None,  # parent_roi_id
+                        cell["label_id"],
+                        cell["bbox_y"],
+                        cell["bbox_x"],
+                        cell["bbox_h"],
+                        cell["bbox_w"],
+                        cell["area_px"],
+                    )
+                    for cell in cells
+                ]
+                self._db.insert_rois_bulk(roi_tuples)
 
-        # 6. Set status to imported
-        self._db.set_fov_status(
-            new_fov_id, FovStatus.imported, "Derived FOV created"
-        )
+            # Set status to imported (inside transaction for atomicity)
+            self._db.set_fov_status(
+                new_fov_id, FovStatus.imported, "Derived FOV created"
+            )
 
         return new_fov_id
+
+    # ------------------------------------------------------------------
+    # derive_fov: public alias for create_derived_fov
+    # ------------------------------------------------------------------
+
+    def derive_fov(
+        self,
+        source_fov_id: bytes,
+        derivation_op: str,
+        params: dict,
+        transform_fn: Callable[[dict[int, np.ndarray]], dict[int, np.ndarray]],
+        *,
+        display_name: str | None = None,
+        channel_metadata: str | None = None,
+        pipeline_run_id: bytes | None = None,
+    ) -> bytes:
+        """Create a derived FOV (public API).
+
+        Orchestrates the full derived FOV creation: DB insert, Zarr write,
+        assignment copy, ROI duplication, and status transition.
+
+        This is the preferred entry point for plugins. It delegates to
+        ``create_derived_fov`` which implements the four-step contract.
+
+        Args:
+            source_fov_id: ID of the source FOV.
+            derivation_op: Name of the operation.
+            params: Operation parameters.
+            transform_fn: Channel array transform function.
+            display_name: Optional user-facing name.
+            channel_metadata: Optional JSON channel metadata.
+            pipeline_run_id: Optional pipeline run ID.
+
+        Returns:
+            ID of the newly created derived FOV.
+        """
+        return self.create_derived_fov(
+            source_fov_id=source_fov_id,
+            derivation_op=derivation_op,
+            params=params,
+            transform_fn=transform_fn,
+            display_name=display_name,
+            channel_metadata=channel_metadata,
+            pipeline_run_id=pipeline_run_id,
+        )
+
+    # ------------------------------------------------------------------
+    # Lineage tree queries
+    # ------------------------------------------------------------------
+
+    def get_fov_tree(self, fov_id: bytes) -> dict:
+        """Return the full lineage tree for an FOV.
+
+        Queries both ancestors and descendants to build a complete
+        lineage picture.
+
+        Args:
+            fov_id: Any FOV in the lineage.
+
+        Returns:
+            Dict with ``'fov'`` (the queried FOV row), ``'ancestors'``
+            (list of ancestor rows), and ``'descendants'`` (list of
+            descendant rows).
+        """
+        fov = self._db.get_fov(fov_id)
+        if fov is None:
+            raise ExperimentError(
+                f"FOV {uuid_to_str(fov_id)} not found"
+            )
+
+        lineage = self._db.get_fov_lineage(fov_id, direction="both")
+        return {
+            "fov": fov,
+            "ancestors": lineage.get("ancestors", []),
+            "descendants": lineage.get("descendants", []),
+        }
+
+    # ------------------------------------------------------------------
+    # Cross-lineage measurement queries
+    # ------------------------------------------------------------------
+
+    def get_measurements_across_lineage(
+        self, cell_identity_id: bytes
+    ) -> list:
+        """Return measurements for a cell identity across all derived FOVs.
+
+        Joins measurements -> rois -> cell_identities to find all
+        measurements for a single biological entity across the lineage.
+
+        Args:
+            cell_identity_id: The cell identity UUID.
+
+        Returns:
+            List of measurement rows with fov_id and derivation info.
+        """
+        return self._db.get_cross_lineage_measurements(cell_identity_id)
 
     # ------------------------------------------------------------------
     # Soft-delete
@@ -511,9 +659,16 @@ class ExperimentStore:
     # ------------------------------------------------------------------
 
     def dispatch_measurements(self, needed: list[MeasurementNeeded]) -> int:
-        """Record that measurements are needed. Actual measurer is wired in Gate 2.
+        """Record that measurements are needed.
 
-        For now, logs what's needed and returns count.
+        Currently a stub: logs what's needed and returns count.
+        Plugins must manually call ``measure_fov()`` (from the measure
+        module) after creating derived FOVs. Full dispatch wiring is
+        planned for Gate 2.
+
+        TODO(gate2): Wire to MeasurementEngine.measure_fov() for
+        automatic measurement dispatch on config changes and derived
+        FOV creation.
 
         Args:
             needed: List of MeasurementNeeded items.

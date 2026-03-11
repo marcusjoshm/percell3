@@ -298,21 +298,51 @@ class ExperimentDB:
         derivation_params: str | None = None,
         status: str = "pending",
         auto_name: str | None = None,
+        display_name: str | None = None,
         zarr_path: str | None = None,
         timepoint_id: bytes | None = None,
         pixel_size_um: float | None = None,
+        pipeline_run_id: bytes | None = None,
+        lineage_depth: int = 0,
+        lineage_path: str | None = None,
+        channel_metadata: str | None = None,
     ) -> int:
-        """Insert an FOV record. Returns rowcount."""
+        """Insert an FOV record.
+
+        Args:
+            id: UUID for the new FOV.
+            experiment_id: Parent experiment UUID.
+            condition_id: Optional condition UUID.
+            bio_rep_id: Optional biological replicate UUID.
+            parent_fov_id: Optional parent FOV UUID (for derived FOVs).
+            derivation_op: Operation name that produced this derived FOV.
+            derivation_params: JSON string of operation parameters.
+            status: Initial status (default 'pending').
+            auto_name: Auto-generated name.
+            display_name: User-facing display name.
+            zarr_path: Relative path to zarr data.
+            timepoint_id: Optional timepoint UUID.
+            pixel_size_um: Physical pixel size in micrometers.
+            pipeline_run_id: Pipeline run that created this FOV.
+            lineage_depth: Derivation depth (0 = root FOV).
+            lineage_path: Cached materialized path for lineage queries.
+            channel_metadata: JSON string of per-channel metadata.
+
+        Returns:
+            Row count (1 on success).
+        """
         cur = self.connection.execute(
             "INSERT INTO fovs "
             "(id, experiment_id, condition_id, bio_rep_id, parent_fov_id, "
             " derivation_op, derivation_params, status, auto_name, "
-            " zarr_path, timepoint_id, pixel_size_um) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " display_name, zarr_path, timepoint_id, pixel_size_um, "
+            " pipeline_run_id, lineage_depth, lineage_path, channel_metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 id, experiment_id, condition_id, bio_rep_id, parent_fov_id,
                 derivation_op, derivation_params, status, auto_name,
-                zarr_path, timepoint_id, pixel_size_um,
+                display_name, zarr_path, timepoint_id, pixel_size_um,
+                pipeline_run_id, lineage_depth, lineage_path, channel_metadata,
             ),
         )
         return cur.rowcount
@@ -421,6 +451,28 @@ class ExperimentDB:
                 id, fov_id, roi_type_id, cell_identity_id, parent_roi_id,
                 label_id, bbox_y, bbox_x, bbox_h, bbox_w, area_px,
             ),
+        )
+        return cur.rowcount
+
+    def insert_rois_bulk(self, roi_tuples: list[tuple]) -> int:
+        """Insert multiple ROIs via executemany for efficient bulk operations.
+
+        Each tuple must contain:
+            (id, fov_id, roi_type_id, cell_identity_id, parent_roi_id,
+             label_id, bbox_y, bbox_x, bbox_h, bbox_w, area_px)
+
+        Args:
+            roi_tuples: List of ROI tuples to insert.
+
+        Returns:
+            Number of rows inserted.
+        """
+        cur = self.connection.executemany(
+            "INSERT INTO rois "
+            "(id, fov_id, roi_type_id, cell_identity_id, parent_roi_id, "
+            " label_id, bbox_y, bbox_x, bbox_h, bbox_w, area_px) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            roi_tuples,
         )
         return cur.rowcount
 
@@ -1029,6 +1081,147 @@ class ExperimentDB:
             ORDER BY l.depth
             """,
             (fov_id, MAX_LINEAGE_DEPTH),
+        ).fetchall()
+
+    def get_fov_lineage(
+        self,
+        fov_id: bytes,
+        direction: str = "both",
+    ) -> dict[str, list[Row]]:
+        """Return FOV lineage using lineage_path for fast lookups.
+
+        Falls back to recursive CTE if lineage_path is not set.
+
+        Args:
+            fov_id: The FOV to query lineage for.
+            direction: One of ``'ancestors'``, ``'descendants'``, or
+                ``'both'`` (default).
+
+        Returns:
+            Dict with keys ``'ancestors'`` and/or ``'descendants'``,
+            each containing a list of FOV rows.
+        """
+        from percell4.core.db_types import uuid_to_hex
+
+        result: dict[str, list[Row]] = {}
+
+        if direction in ("ancestors", "both"):
+            # Try lineage_path first for ancestors
+            fov = self.get_fov(fov_id)
+            if fov and fov["lineage_path"]:
+                path = fov["lineage_path"]
+                # Parse hex IDs from path: /hex1/hex2/.../hexN
+                parts = [p for p in path.strip("/").split("/") if p]
+                # Exclude the FOV itself (last element)
+                ancestor_hexes = parts[:-1] if parts else []
+                if ancestor_hexes:
+                    from percell4.core.db_types import str_to_uuid
+                    ancestor_ids = []
+                    for h in ancestor_hexes:
+                        try:
+                            ancestor_ids.append(
+                                bytes.fromhex(h)
+                            )
+                        except ValueError:
+                            pass
+                    if ancestor_ids:
+                        result["ancestors"] = self._batch_in_query(
+                            "SELECT * FROM fovs WHERE id IN ({placeholders})",
+                            (),
+                            ancestor_ids,
+                        )
+                    else:
+                        result["ancestors"] = []
+                else:
+                    result["ancestors"] = []
+            else:
+                result["ancestors"] = self.get_ancestors(fov_id)
+
+        if direction in ("descendants", "both"):
+            # Try lineage_path LIKE for descendants
+            fov = fov if direction == "both" else self.get_fov(fov_id)
+            fov_hex = uuid_to_hex(fov_id)
+            # Find FOVs whose lineage_path contains this FOV's hex
+            desc_rows = self.connection.execute(
+                "SELECT * FROM fovs "
+                "WHERE lineage_path LIKE ? AND id != ? "
+                "ORDER BY lineage_depth",
+                (f"%/{fov_hex}/%", fov_id),
+            ).fetchall()
+            if desc_rows:
+                result["descendants"] = desc_rows
+            else:
+                # Fall back to recursive CTE
+                result["descendants"] = self.get_descendants(fov_id)
+
+        return result
+
+    def log_fov_status(
+        self,
+        fov_id: bytes,
+        old_status: str | None,
+        new_status: str,
+        message: str | None = None,
+        pipeline_run_id: bytes | None = None,
+    ) -> int:
+        """Insert a status log entry with optional pipeline_run_id.
+
+        This is a lower-level logging method than ``set_fov_status``.
+        It does NOT validate transitions or update the fovs table.
+
+        Args:
+            fov_id: The FOV ID.
+            old_status: Previous status (may be None for initial entry).
+            new_status: New status.
+            message: Optional log message.
+            pipeline_run_id: Optional pipeline run that triggered the change.
+
+        Returns:
+            Row count (1 on success).
+        """
+        # Note: fov_status_log does not have a pipeline_run_id column yet.
+        # We embed it in the message for now as a forward-compatible approach.
+        if pipeline_run_id is not None:
+            from percell4.core.db_types import uuid_to_hex
+            run_hex = uuid_to_hex(pipeline_run_id)
+            msg = f"[run:{run_hex}] {message}" if message else f"[run:{run_hex}]"
+        else:
+            msg = message
+
+        cur = self.connection.execute(
+            "INSERT INTO fov_status_log "
+            "(fov_id, old_status, new_status, message) "
+            "VALUES (?, ?, ?, ?)",
+            (fov_id, old_status, new_status, msg),
+        )
+        return cur.rowcount
+
+    def get_cross_lineage_measurements(
+        self,
+        cell_identity_id: bytes,
+    ) -> list[Row]:
+        """Return measurements across all FOVs for a given cell identity.
+
+        Joins measurements -> rois -> cell_identities to find all
+        measurements for a biological entity across derived FOVs.
+
+        Args:
+            cell_identity_id: The cell identity to query.
+
+        Returns:
+            List of measurement rows with fov_id included.
+        """
+        return self.connection.execute(
+            """
+            SELECT m.*, r.fov_id, r.label_id, r.cell_identity_id,
+                   f.auto_name AS fov_name, f.derivation_op
+            FROM measurements m
+            JOIN rois r ON m.roi_id = r.id
+            JOIN fovs f ON r.fov_id = f.id
+            WHERE r.cell_identity_id = ?
+            ORDER BY f.lineage_depth, f.created_at
+            """,
+            (cell_identity_id,),
         ).fetchall()
 
     def check_no_cycle(
