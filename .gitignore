@@ -44,3 +44,7 @@ compound-engineering.local.md
 .cursorrules
 .cursor/
 .aider*
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db

@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "percell3",
+  "project_id": "ce1d7bbf-28c6-4273-ad7c-2d9996b9d84b"
+}
