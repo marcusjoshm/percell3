@@ -116,6 +116,7 @@ MERGE_TABLE_ORDER: tuple[str, ...] = (
     "intensity_groups",
     "cell_group_assignments",
     "fov_status_log",
+    "workflow_configs",
 )
 
 ENTITY_TABLES: frozenset[str] = frozenset(MERGE_TABLE_ORDER)

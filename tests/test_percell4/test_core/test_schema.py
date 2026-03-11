@@ -179,6 +179,7 @@ class TestSchemaCreation:
         "intensity_groups",
         "cell_group_assignments",
         "fov_status_log",
+        "workflow_configs",
     })
 
     def test_all_tables_exist(self, conn: sqlite3.Connection) -> None:

@@ -255,7 +255,20 @@ def _migrate_5_1_0_to_6_0_0(conn: sqlite3.Connection) -> None:
         if updated == 0:
             break
 
-    # -- 8. Update schema version --
+    # -- 8. Create workflow_configs table if not exists --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS workflow_configs (
+            id              BLOB(16) PRIMARY KEY CHECK(length(id) = 16),
+            workflow_name   TEXT NOT NULL,
+            config_name     TEXT NOT NULL,
+            config_json     TEXT NOT NULL CHECK(json_valid(config_json)),
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(workflow_name, config_name)
+        )
+    """)
+
+    # -- 9. Update schema version --
     conn.execute("UPDATE experiments SET schema_version = '6.0.0' WHERE 1=1")
 
 

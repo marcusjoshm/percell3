@@ -332,6 +332,18 @@ _TABLE_DDL: tuple[str, ...] = (
         created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     )
     """,
+    # -- workflow_configs --
+    """
+    CREATE TABLE IF NOT EXISTS workflow_configs (
+        id              BLOB(16) PRIMARY KEY CHECK(length(id) = 16),
+        workflow_name   TEXT NOT NULL,
+        config_name     TEXT NOT NULL,
+        config_json     TEXT NOT NULL CHECK(json_valid(config_json)),
+        created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(workflow_name, config_name)
+    )
+    """,
 )
 
 # ---------------------------------------------------------------------------

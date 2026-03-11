@@ -101,11 +101,15 @@ def build_main_menu(state: MenuState) -> Menu:
 
     # ----- 7. Workflows -----
     def _workflows_menu(st: MenuState) -> None:
+        from percell4.cli.menu_handlers.workflow import (
+            particle_analysis_handler,
+            decapping_sensor_handler,
+        )
         Menu(
             "WORKFLOWS",
             [
-                MenuItem("1", "Particle analysis", "Standard particle pipeline", None, enabled=False),
-                MenuItem("2", "Decapping sensor", "BiFC split-Halo decapping assay", None, enabled=False),
+                MenuItem("1", "Particle analysis", "Standard particle pipeline", particle_analysis_handler),
+                MenuItem("2", "Decapping sensor", "BiFC split-Halo decapping assay", decapping_sensor_handler),
             ],
             st,
         ).run()

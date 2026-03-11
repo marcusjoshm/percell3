@@ -248,6 +248,27 @@ class MeasurementNeeded:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class WorkflowConfig:
+    """A named workflow configuration stored in the database.
+
+    config_json is stored as a JSON string; callers should parse it
+    with ``json.loads()`` when needed.
+    """
+
+    id: bytes
+    workflow_name: str
+    config_name: str
+    config_json: str
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Threshold Mask
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ThresholdMaskInfo:
     """Immutable snapshot of a threshold mask record."""
 

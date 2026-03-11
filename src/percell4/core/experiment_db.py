@@ -1364,6 +1364,99 @@ class ExperimentDB:
         )
 
     # ------------------------------------------------------------------
+    # Workflow Configs
+    # ------------------------------------------------------------------
+
+    def insert_workflow_config(
+        self,
+        id: bytes,
+        workflow_name: str,
+        config_name: str,
+        config_json: str,
+    ) -> int:
+        """Insert a workflow configuration. Returns rowcount.
+
+        Args:
+            id: UUID for the config record.
+            workflow_name: Workflow identifier (e.g. 'particle_analysis').
+            config_name: Human-readable config name (e.g. 'default').
+            config_json: JSON string of configuration parameters.
+        """
+        import json
+
+        # Validate JSON before insert
+        try:
+            json.loads(config_json)
+        except (json.JSONDecodeError, TypeError) as e:
+            from percell4.core.exceptions import WorkflowConfigError
+            raise WorkflowConfigError(f"Invalid JSON: {e}")
+
+        cur = self.connection.execute(
+            "INSERT INTO workflow_configs "
+            "(id, workflow_name, config_name, config_json) "
+            "VALUES (?, ?, ?, ?)",
+            (id, workflow_name, config_name, config_json),
+        )
+        return cur.rowcount
+
+    def get_workflow_config(
+        self, workflow_name: str, config_name: str
+    ) -> Row | None:
+        """Return a workflow config by workflow_name + config_name."""
+        return self.connection.execute(
+            "SELECT * FROM workflow_configs "
+            "WHERE workflow_name = ? AND config_name = ?",
+            (workflow_name, config_name),
+        ).fetchone()
+
+    def get_workflow_config_by_id(self, id: bytes) -> Row | None:
+        """Return a workflow config by its UUID."""
+        return self.connection.execute(
+            "SELECT * FROM workflow_configs WHERE id = ?", (id,)
+        ).fetchone()
+
+    def list_workflow_configs(
+        self, workflow_name: str | None = None
+    ) -> list[Row]:
+        """List workflow configs, optionally filtered by workflow_name."""
+        if workflow_name is not None:
+            return self.connection.execute(
+                "SELECT * FROM workflow_configs "
+                "WHERE workflow_name = ? ORDER BY config_name",
+                (workflow_name,),
+            ).fetchall()
+        return self.connection.execute(
+            "SELECT * FROM workflow_configs ORDER BY workflow_name, config_name"
+        ).fetchall()
+
+    def update_workflow_config(
+        self, id: bytes, config_json: str
+    ) -> int:
+        """Update config_json and updated_at for a workflow config. Returns rowcount."""
+        import json
+
+        try:
+            json.loads(config_json)
+        except (json.JSONDecodeError, TypeError) as e:
+            from percell4.core.exceptions import WorkflowConfigError
+            raise WorkflowConfigError(f"Invalid JSON: {e}")
+
+        cur = self.connection.execute(
+            "UPDATE workflow_configs "
+            "SET config_json = ?, updated_at = datetime('now') "
+            "WHERE id = ?",
+            (config_json, id),
+        )
+        return cur.rowcount
+
+    def delete_workflow_config(self, id: bytes) -> int:
+        """Delete a workflow config by ID. Returns rowcount."""
+        cur = self.connection.execute(
+            "DELETE FROM workflow_configs WHERE id = ?", (id,)
+        )
+        return cur.rowcount
+
+    # ------------------------------------------------------------------
     # Database Merge
     # ------------------------------------------------------------------
 

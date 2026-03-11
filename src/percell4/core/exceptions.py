@@ -45,3 +45,10 @@ class LineageError(ExperimentError):
 
     def __init__(self, message: str = "Lineage error") -> None:
         super().__init__(message)
+
+
+class WorkflowConfigError(ExperimentError):
+    """Raised when a workflow configuration operation fails."""
+
+    def __init__(self, message: str = "Workflow config error") -> None:
+        super().__init__(message)

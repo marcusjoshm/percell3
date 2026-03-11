@@ -8,6 +8,7 @@ from percell4.cli.menu_system import (
     MenuState,
     _MenuCancel,
     menu_prompt,
+    numbered_select_many,
     numbered_select_one,
     require_experiment,
 )
@@ -35,7 +36,7 @@ def config_menu_handler(state: MenuState) -> None:
             MenuItem("3", "Bio replicates", "List / create / rename / delete bio reps", _bio_rep_menu_handler),
             MenuItem("4", "FOV metadata", "View FOV details and lineage", _fov_metadata_handler),
             MenuItem("5", "Delete FOV", "Remove a FOV with confirmation", _fov_delete_handler),
-            MenuItem("6", "Workflow config", "Workflow parameters (coming soon)", None, enabled=False),
+            MenuItem("6", "Workflow config", "Manage workflow configurations", _workflow_config_handler),
         ],
         state,
     ).run()
@@ -463,5 +464,230 @@ def _fov_delete_handler(state: MenuState) -> None:
     try:
         store.delete_fov(fov["id"])
         print_success(f"Deleted FOV '{selected}'")
+    except Exception as e:
+        print_error(str(e))
+
+
+# ---------------------------------------------------------------------------
+# Workflow Config CRUD
+# ---------------------------------------------------------------------------
+
+
+def _workflow_config_handler(state: MenuState) -> None:
+    """Submenu for workflow configuration management."""
+    Menu(
+        "WORKFLOW CONFIG",
+        [
+            MenuItem("1", "List configs", "Show saved workflow configs", _list_workflow_configs),
+            MenuItem("2", "Create config", "Save a new workflow config", _create_workflow_config),
+            MenuItem("3", "Edit config", "Modify an existing config", _edit_workflow_config),
+            MenuItem("4", "Delete config", "Remove a saved config", _delete_workflow_config),
+        ],
+        state,
+    ).run()
+    raise _MenuCancel()
+
+
+def _list_workflow_configs(state: MenuState) -> None:
+    """List all saved workflow configurations."""
+    import json
+
+    from rich.table import Table
+
+    store = require_experiment(state)
+    configs = store.db.list_workflow_configs()
+
+    if not configs:
+        print_warning("No workflow configurations saved.")
+        return
+
+    table = Table(title="Workflow Configurations")
+    table.add_column("Workflow", style="cyan")
+    table.add_column("Config Name", style="green")
+    table.add_column("Parameters", style="dim")
+    table.add_column("Updated", style="dim")
+
+    for cfg in configs:
+        try:
+            params = json.loads(cfg["config_json"])
+            param_str = ", ".join(f"{k}={v}" for k, v in params.items())
+        except (json.JSONDecodeError, TypeError):
+            param_str = cfg["config_json"]
+
+        # Truncate long param strings
+        if len(param_str) > 60:
+            param_str = param_str[:57] + "..."
+
+        table.add_row(
+            cfg["workflow_name"],
+            cfg["config_name"],
+            param_str,
+            cfg.get("updated_at", ""),
+        )
+
+    console.print(table)
+
+
+def _create_workflow_config(state: MenuState) -> None:
+    """Create a new workflow configuration."""
+    import json
+
+    from percell4.core.db_types import new_uuid
+
+    store = require_experiment(state)
+
+    workflow_name = numbered_select_one(
+        ["particle_analysis", "decapping_sensor"],
+        "Select workflow",
+    )
+
+    config_name = menu_prompt("Config name (e.g. 'default', 'large_cells')")
+    if not config_name.strip():
+        print_error("Name cannot be empty.")
+        return
+
+    # Prompt for parameters based on workflow type
+    params: dict = {}
+
+    if workflow_name == "particle_analysis":
+        exp = store.db.get_experiment()
+        channels = store.db.get_channels(exp["id"])
+        ch_names = [ch["name"] for ch in channels]
+
+        if ch_names:
+            params["channel_name"] = numbered_select_one(
+                ch_names, "Segmentation channel"
+            )
+        else:
+            params["channel_name"] = menu_prompt("Channel name")
+
+        params["model_name"] = menu_prompt("Cellpose model", default="cyto3")
+        diameter_str = menu_prompt("Cell diameter", default="30")
+        try:
+            params["diameter"] = float(diameter_str)
+        except ValueError:
+            params["diameter"] = 30.0
+        params["threshold_method"] = numbered_select_one(
+            ["otsu", "triangle", "li"], "Threshold method"
+        )
+
+    elif workflow_name == "decapping_sensor":
+        exp = store.db.get_experiment()
+        channels = store.db.get_channels(exp["id"])
+        ch_names = [ch["name"] for ch in channels]
+
+        if ch_names:
+            params["signal_channels"] = numbered_select_many(
+                ch_names, "Signal channels"
+            )
+            params["halo_channel"] = numbered_select_one(
+                ch_names, "Halo channel"
+            )
+            bg_options = ["(none)"] + ch_names
+            bg_sel = numbered_select_one(bg_options, "Background channel")
+            params["bg_channel"] = bg_sel if bg_sel != "(none)" else None
+        else:
+            params["signal_channels"] = []
+            params["halo_channel"] = menu_prompt("Halo channel")
+            params["bg_channel"] = None
+
+        rounds_str = menu_prompt("Thresholding rounds", default="3")
+        try:
+            params["rounds"] = int(rounds_str)
+        except ValueError:
+            params["rounds"] = 3
+
+    config_json = json.dumps(params)
+
+    try:
+        cfg_id = new_uuid()
+        store.db.insert_workflow_config(
+            cfg_id, workflow_name, config_name.strip(), config_json
+        )
+        print_success(f"Created config '{config_name.strip()}' for {workflow_name}")
+    except Exception as e:
+        print_error(str(e))
+
+
+def _edit_workflow_config(state: MenuState) -> None:
+    """Edit an existing workflow configuration's JSON."""
+    import json
+
+    store = require_experiment(state)
+    configs = store.db.list_workflow_configs()
+
+    if not configs:
+        print_warning("No configs to edit.")
+        return
+
+    labels = [f"{c['workflow_name']}/{c['config_name']}" for c in configs]
+    selected = numbered_select_one(labels, "Select config to edit")
+    cfg = configs[labels.index(selected)]
+
+    try:
+        current = json.loads(cfg["config_json"])
+    except (json.JSONDecodeError, TypeError):
+        current = {}
+
+    console.print(f"\n[bold]Current parameters:[/bold]")
+    for k, v in current.items():
+        console.print(f"  {k} = {v}")
+
+    console.print(
+        "\n[dim]Edit individual values (press Enter to keep current):[/dim]"
+    )
+
+    updated = dict(current)
+    for k, v in current.items():
+        new_val = menu_prompt(f"  {k}", default=str(v))
+        if new_val != str(v):
+            # Try to preserve types
+            if isinstance(v, bool):
+                updated[k] = new_val.lower() in ("true", "1", "yes")
+            elif isinstance(v, int):
+                try:
+                    updated[k] = int(new_val)
+                except ValueError:
+                    updated[k] = new_val
+            elif isinstance(v, float):
+                try:
+                    updated[k] = float(new_val)
+                except ValueError:
+                    updated[k] = new_val
+            elif isinstance(v, list):
+                # Keep as-is if user didn't change
+                updated[k] = v
+            else:
+                updated[k] = new_val
+
+    new_json = json.dumps(updated)
+    try:
+        store.db.update_workflow_config(cfg["id"], new_json)
+        print_success(f"Updated config '{selected}'")
+    except Exception as e:
+        print_error(str(e))
+
+
+def _delete_workflow_config(state: MenuState) -> None:
+    """Delete a workflow configuration."""
+    store = require_experiment(state)
+    configs = store.db.list_workflow_configs()
+
+    if not configs:
+        print_warning("No configs to delete.")
+        return
+
+    labels = [f"{c['workflow_name']}/{c['config_name']}" for c in configs]
+    selected = numbered_select_one(labels, "Select config to delete")
+    cfg = configs[labels.index(selected)]
+
+    confirm = menu_prompt(f"Delete config '{selected}'? (yes/no)", default="no")
+    if confirm.lower() != "yes":
+        console.print("[dim]Cancelled.[/dim]")
+        return
+
+    try:
+        store.db.delete_workflow_config(cfg["id"])
+        print_success(f"Deleted config '{selected}'")
     except Exception as e:
         print_error(str(e))
