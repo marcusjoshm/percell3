@@ -190,6 +190,25 @@ class ExperimentDB:
             "SELECT * FROM conditions WHERE id = ?", (id,)
         ).fetchone()
 
+    def rename_condition(self, id: bytes, new_name: str) -> int:
+        """Rename a condition. Returns rowcount."""
+        cur = self.connection.execute(
+            "UPDATE conditions SET name = ? WHERE id = ?",
+            (new_name, id),
+        )
+        return cur.rowcount
+
+    def delete_condition(self, id: bytes) -> int:
+        """Delete a condition by ID. Returns rowcount.
+
+        Will fail if bio_reps or FOVs reference this condition
+        (FK constraint).
+        """
+        cur = self.connection.execute(
+            "DELETE FROM conditions WHERE id = ?", (id,)
+        )
+        return cur.rowcount
+
     # ------------------------------------------------------------------
     # Bio Reps
     # ------------------------------------------------------------------
@@ -217,6 +236,48 @@ class ExperimentDB:
         return self.connection.execute(
             "SELECT * FROM bio_reps WHERE id = ?", (id,)
         ).fetchone()
+
+    def get_bio_reps_for_condition(self, condition_id: bytes) -> list[Row]:
+        """Return all bio reps for a given condition."""
+        return self.connection.execute(
+            "SELECT * FROM bio_reps WHERE condition_id = ?",
+            (condition_id,),
+        ).fetchall()
+
+    def rename_bio_rep(self, id: bytes, new_name: str) -> int:
+        """Rename a biological replicate. Returns rowcount."""
+        cur = self.connection.execute(
+            "UPDATE bio_reps SET name = ? WHERE id = ?",
+            (new_name, id),
+        )
+        return cur.rowcount
+
+    def delete_bio_rep(self, id: bytes) -> int:
+        """Delete a biological replicate by ID. Returns rowcount.
+
+        Will fail if FOVs reference this bio_rep (FK constraint).
+        """
+        cur = self.connection.execute(
+            "DELETE FROM bio_reps WHERE id = ?", (id,)
+        )
+        return cur.rowcount
+
+    def count_rois_for_fov(self, fov_id: bytes) -> int:
+        """Return count of ROIs for a given FOV."""
+        row = self.connection.execute(
+            "SELECT COUNT(*) FROM rois WHERE fov_id = ?", (fov_id,)
+        ).fetchone()
+        return row[0] if row else 0
+
+    def count_measurements_for_fov(self, fov_id: bytes) -> int:
+        """Return count of measurements for ROIs belonging to a FOV."""
+        row = self.connection.execute(
+            "SELECT COUNT(*) FROM measurements m "
+            "JOIN rois r ON m.roi_id = r.id "
+            "WHERE r.fov_id = ?",
+            (fov_id,),
+        ).fetchone()
+        return row[0] if row else 0
 
     # ------------------------------------------------------------------
     # Channels
