@@ -159,6 +159,79 @@ def menu_prompt(
 # ---------------------------------------------------------------------------
 
 
+def _print_numbered_list(items: list[str], *, page_size: int = 999) -> None:
+    """Print items as a numbered list, paginating if needed."""
+    show = items if len(items) <= page_size else items[:page_size]
+    for i, item in enumerate(show, 1):
+        console.print(f"  \\[{i}] {item}")
+    if len(items) > page_size:
+        console.print(f"  [dim]... and {len(items) - page_size} more[/dim]")
+
+
+def numbered_select_one(
+    items: list[str],
+    prompt: str = "Select",
+) -> str:
+    """Display a numbered list and return the selected item.
+
+    Auto-selects when only one option exists.
+
+    Raises:
+        _MenuHome / _MenuCancel via menu_prompt.
+    """
+    if not items:
+        raise ValueError("numbered_select_one called with empty list")
+
+    if len(items) == 1:
+        console.print(f"  [dim](auto-selected: {items[0]})[/dim]")
+        return items[0]
+
+    _print_numbered_list(items)
+    valid = [str(i) for i in range(1, len(items) + 1)]
+    choice = menu_prompt(prompt, choices=valid)
+    return items[int(choice) - 1]
+
+
+def numbered_select_many(
+    items: list[str],
+    prompt: str = "Select (numbers, 'all', or blank=all)",
+) -> list[str]:
+    """Display a numbered list and return selected items.
+
+    Supports space-separated numbers, 'all', and blank (= all).
+
+    Raises:
+        _MenuHome / _MenuCancel via menu_prompt.
+    """
+    if not items:
+        raise ValueError("numbered_select_many called with empty list")
+
+    _print_numbered_list(items)
+
+    while True:
+        raw = menu_prompt(prompt, default="all")
+
+        if raw.lower() == "all":
+            return list(items)
+
+        parts = raw.split()
+        try:
+            indices = list({int(p) for p in parts})  # deduplicate
+        except ValueError:
+            console.print("[red]Enter numbers separated by spaces, or 'all'.[/red]")
+            continue
+
+        if any(i < 1 or i > len(items) for i in indices):
+            console.print(f"[red]Numbers must be 1-{len(items)}.[/red]")
+            continue
+
+        if not indices:
+            continue
+
+        indices.sort()
+        return [items[i - 1] for i in indices]
+
+
 class Menu:
     """A reusable menu with render-prompt-dispatch loop.
 
@@ -324,8 +397,38 @@ class Menu:
 # ---------------------------------------------------------------------------
 
 
+_BANNER_LINES = [
+    "      \u25ce                                                                        ",
+    "      \u2551      \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2557      \u2588\u2588\u2557          ",
+    "     \u2590\u2588\u258c     \u2588\u2588\u2554\u2550\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u2550\u255d\u2588\u2588\u2554\u2550\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u2550\u255d\u2588\u2588\u2551      \u2588\u2588\u2551          ",
+    "     \u2590\u2588\u258c     \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2551     \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2551      \u2588\u2588\u2551          ",
+    "      \u2588      \u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d \u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d \u2588\u2588\u2554\u2550\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2551     \u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d \u2588\u2588\u2551      \u2588\u2588\u2551          ",
+    "      \u25bd      \u2588\u2588\u2551      \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557    ",
+    "   \u2500\u2500\u2500\u25cf\u2500\u2500\u2500   \u255a\u2550\u255d      \u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\u255a\u2550\u255d   \u255a\u2550\u255d\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u255d\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d    ",
+    "   \u2580\u2588\u2588\u2588\u2588\u2588\u2580                                                                     ",
+]
+
+
+def _colorize_banner_line(line: str) -> str:
+    """Color a banner line: cyan microscope, green PER, magenta CELL."""
+    parts = []
+    for j, char in enumerate(line):
+        if char == " ":
+            parts.append(char)
+        elif j <= 10:
+            parts.append(f"[cyan]{char}[/cyan]")
+        elif j <= 39:
+            parts.append(f"[green]{char}[/green]")
+        else:
+            parts.append(f"[magenta]{char}[/magenta]")
+    return "".join(parts)
+
+
 def _show_header(state: MenuState) -> None:
-    """Display the header with experiment context."""
+    """Display the ASCII art banner, welcome message, and experiment context."""
+    console.print()
+    for line in _BANNER_LINES:
+        console.print(_colorize_banner_line(line))
     console.print()
     console.print(
         "[bold]           PerCell 4.0 -- Single-Cell Microscopy Analysis           [/bold]"

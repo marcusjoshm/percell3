@@ -70,8 +70,14 @@ class FovStatus(StrEnum):
 VALID_TRANSITIONS: dict[FovStatus, set[FovStatus]] = {
     FovStatus.pending: {FovStatus.imported, FovStatus.error},
     FovStatus.imported: {FovStatus.segmented, FovStatus.stale, FovStatus.deleting},
-    FovStatus.segmented: {FovStatus.measured, FovStatus.stale, FovStatus.deleting},
-    FovStatus.measured: {FovStatus.analyzing, FovStatus.stale, FovStatus.deleting},
+    FovStatus.segmented: {
+        FovStatus.measured, FovStatus.imported,  # imported: re-processing
+        FovStatus.stale, FovStatus.deleting,
+    },
+    FovStatus.measured: {
+        FovStatus.analyzing, FovStatus.segmented, FovStatus.imported,  # re-processing
+        FovStatus.stale, FovStatus.deleting,
+    },
     FovStatus.analyzing: {FovStatus.qc_pending, FovStatus.stale, FovStatus.deleting},
     FovStatus.qc_pending: {FovStatus.qc_done, FovStatus.stale, FovStatus.deleting},
     FovStatus.qc_done: {FovStatus.stale, FovStatus.deleting},

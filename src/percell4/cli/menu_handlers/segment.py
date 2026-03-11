@@ -2,38 +2,49 @@
 
 from __future__ import annotations
 
-from percell4.cli.menu_system import MenuState, menu_prompt, require_experiment
+from percell4.cli.menu_system import (
+    MenuState,
+    menu_prompt,
+    numbered_select_many,
+    numbered_select_one,
+    require_experiment,
+)
 from percell4.cli.utils import console, make_progress, print_error, print_success, print_warning
+
+
+def _get_active_fovs(store):
+    """Return all non-deleted FOVs for the current experiment."""
+    exp = store.db.get_experiment()
+    fovs = store.db.get_fovs(exp["id"])
+    return [
+        f for f in fovs
+        if f["status"] not in ("deleted", "deleting", "error")
+    ]
 
 
 def segment_handler(state: MenuState) -> None:
     """FOV selection, channel selection, run SegmentationEngine."""
     store = require_experiment(state)
 
-    from percell4.core.constants import FovStatus
-
-    exp = store.db.get_experiment()
-    fovs = store.db.get_fovs_by_status(exp["id"], FovStatus.imported)
+    fovs = _get_active_fovs(store)
     if not fovs:
-        print_warning("No FOVs in 'imported' status to segment")
+        print_warning("No active FOVs to segment")
         return
 
     console.print(f"\n[bold]Segment Cells[/bold]")
-    console.print(f"  FOVs ready: [cyan]{len(fovs)}[/cyan]\n")
+
+    # FOV selection
+    fov_names = [f["auto_name"] or f"FOV-{i+1}" for i, f in enumerate(fovs)]
+    selected_names = numbered_select_many(fov_names, "FOVs to segment (numbers, 'all', or blank=all)")
+    selected_fovs = [fovs[fov_names.index(n)] for n in selected_names]
+
+    console.print(f"  Selected: [cyan]{len(selected_fovs)}[/cyan] FOVs\n")
 
     # Channel selection
+    exp = store.db.get_experiment()
     channels = store.db.get_channels(exp["id"])
     ch_names = [ch["name"] for ch in channels]
-    for i, name in enumerate(ch_names, 1):
-        console.print(f"  [{i}] {name}")
-
-    valid = [str(i) for i in range(1, len(ch_names) + 1)]
-    if len(ch_names) == 1:
-        console.print(f"  [dim](auto-selected: {ch_names[0]})[/dim]")
-        channel = ch_names[0]
-    else:
-        choice = menu_prompt("Channel to segment on", choices=valid)
-        channel = ch_names[int(choice) - 1]
+    channel = numbered_select_one(ch_names, "Channel to segment on")
 
     model = menu_prompt("Cellpose model", default="cyto3")
     diameter_str = menu_prompt("Cell diameter", default="30")
@@ -48,7 +59,7 @@ def segment_handler(state: MenuState) -> None:
         from percell4.segment._engine import SegmentationEngine
         from percell4.segment.cellpose_adapter import CellposeSegmenter
 
-        fov_ids = [f["id"] for f in fovs]
+        fov_ids = [f["id"] for f in selected_fovs]
         params = {"model_name": model, "diameter": diameter}
         segmenter = CellposeSegmenter(model_name=model, diameter=diameter)
         engine = SegmentationEngine()

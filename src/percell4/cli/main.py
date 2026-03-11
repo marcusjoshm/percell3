@@ -102,6 +102,58 @@ def _save_recent(path: Path) -> None:
     recent_file.write_text(json.dumps(data))
 
 
+def _default_toml_lines(include_comments: bool = False) -> list[str]:
+    """Generate default experiment TOML template lines.
+
+    Args:
+        include_comments: If True, include commented-out optional sections.
+
+    Returns:
+        A list of TOML lines (without trailing newlines).
+    """
+    lines = [
+        '[experiment]',
+        'name = "My Experiment"',
+        'description = ""',
+        '',
+        '[[channels]]',
+        'name = "DAPI"',
+        'role = "nuclear"',
+        'display_order = 0',
+        '',
+        '[[channels]]',
+        'name = "GFP"',
+        'role = "signal"',
+        'display_order = 1',
+        '',
+        '[[roi_types]]',
+        'name = "cell"',
+    ]
+
+    if include_comments:
+        lines.extend([
+            '',
+            '# -- Optional: conditions --',
+            '# [[conditions]]',
+            '# name = "control"',
+            '#',
+            '# [[conditions]]',
+            '# name = "treated"',
+            '',
+            '# -- Optional: sub-cellular ROI type --',
+            '# [[roi_types]]',
+            '# name = "particle"',
+            '# parent_type = "cell"',
+            '',
+            '# -- Optional: segmentation parameters --',
+            '# [op_configs.cellpose]',
+            '# model_name = "cyto3"',
+            '# diameter = 30',
+        ])
+
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # create
 # ---------------------------------------------------------------------------
@@ -147,38 +199,8 @@ def init(path: str, template: bool) -> None:
         print_error(f"File already exists: {out}")
         raise SystemExit(1)
 
-    lines = [
-        '[experiment]',
-        'name = "My Experiment"',
-        'description = ""',
-        '',
-        '[[channels]]',
-        'name = "DAPI"',
-        'role = "nuclear"',
-        'display_order = 0',
-        '',
-        '[[channels]]',
-        'name = "GFP"',
-        'role = "signal"',
-        'display_order = 1',
-        '',
-        '[[roi_types]]',
-        'name = "cell"',
-    ]
+    lines = _default_toml_lines(include_comments=template)
 
-    if template:
-        lines.extend([
-            '',
-            '# -- Optional: sub-cellular ROI type --',
-            '# [[roi_types]]',
-            '# name = "particle"',
-            '# parent_type = "cell"',
-            '',
-            '# -- Optional: segmentation parameters --',
-            '# [op_configs.cellpose]',
-            '# model_name = "cyto3"',
-            '# diameter = 30',
-        ])
 
     out.write_text("\n".join(lines) + "\n")
     print_success(f"Created {out}")
@@ -314,6 +336,7 @@ def import_cmd(ctx: click.Context, source_dir: str, condition: str | None) -> No
 @click.option("--roi-type", "-r", default="cell", help="ROI type to produce")
 @click.option("--model", "-m", default="cyto3", help="Cellpose model name")
 @click.option("--diameter", "-d", type=float, default=30.0, help="Cell diameter")
+@click.option("--all", "process_all", is_flag=True, help="Process all active FOVs without prompting")
 @click.pass_context
 def segment(
     ctx: click.Context,
@@ -321,9 +344,9 @@ def segment(
     roi_type: str,
     model: str,
     diameter: float,
+    process_all: bool,
 ) -> None:
-    """Run segmentation on imported FOVs."""
-    from percell4.core.constants import FovStatus
+    """Run segmentation on active FOVs."""
     from percell4.core.exceptions import ExperimentError
     from percell4.segment._engine import SegmentationEngine
     from percell4.segment.cellpose_adapter import CellposeSegmenter
@@ -336,12 +359,16 @@ def segment(
 
     try:
         exp = store.db.get_experiment()
-        fovs = store.db.get_fovs_by_status(exp["id"], FovStatus.imported)
-        if not fovs:
-            print_warning("No FOVs in 'imported' status to segment")
+        fovs = store.db.get_fovs(exp["id"])
+        active_fovs = [
+            f for f in fovs
+            if f["status"] not in ("deleted", "deleting", "error")
+        ]
+        if not active_fovs:
+            print_warning("No active FOVs to segment")
             return
 
-        fov_ids = [f["id"] for f in fovs]
+        fov_ids = [f["id"] for f in active_fovs]
         params = {"model_name": model, "diameter": diameter}
         segmenter = CellposeSegmenter(model_name=model, diameter=diameter)
         engine = SegmentationEngine()
@@ -371,10 +398,10 @@ def segment(
 
 
 @cli.command()
+@click.option("--all", "process_all", is_flag=True, help="Process all active FOVs without prompting")
 @click.pass_context
-def measure(ctx: click.Context) -> None:
-    """Run measurements on segmented FOVs."""
-    from percell4.core.constants import FovStatus
+def measure(ctx: click.Context, process_all: bool) -> None:
+    """Run measurements on active FOVs."""
     from percell4.core.exceptions import ExperimentError
     from percell4.measure.auto_measure import run_measurements
 
@@ -386,9 +413,13 @@ def measure(ctx: click.Context) -> None:
 
     try:
         exp = store.db.get_experiment()
-        fovs = store.db.get_fovs_by_status(exp["id"], FovStatus.segmented)
-        if not fovs:
-            print_warning("No FOVs in 'segmented' status to measure")
+        fovs = store.db.get_fovs(exp["id"])
+        active_fovs = [
+            f for f in fovs
+            if f["status"] not in ("deleted", "deleting", "error")
+        ]
+        if not active_fovs:
+            print_warning("No active FOVs to measure")
             return
 
         # Build MeasurementNeeded items from active assignments
@@ -398,7 +429,7 @@ def measure(ctx: click.Context) -> None:
         channel_ids = [ch["id"] for ch in channels]
         needed = []
 
-        for fov in fovs:
+        for fov in active_fovs:
             assignments = store.db.get_active_assignments(fov["id"])
             for sa in assignments["segmentation"]:
                 needed.append(
@@ -422,7 +453,7 @@ def measure(ctx: click.Context) -> None:
 
             count = run_measurements(store, needed, on_progress=on_progress)
 
-        print_success(f"Created {count} measurements across {len(fovs)} FOVs")
+        print_success(f"Created {count} measurements across {len(active_fovs)} FOVs")
     except ExperimentError as e:
         print_error(str(e))
         raise SystemExit(1)
