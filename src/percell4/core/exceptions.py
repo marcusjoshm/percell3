@@ -26,3 +26,22 @@ class PathTraversalError(ExperimentError):
 
     def __init__(self, message: str = "Path traversal detected") -> None:
         super().__init__(message)
+
+
+class RoiNotFoundError(ExperimentError):
+    """Raised when referencing a nonexistent ROI."""
+
+    def __init__(self, roi_id: bytes | None = None) -> None:
+        if roi_id is not None:
+            msg = f"ROI not found: {roi_id.hex()}"
+        else:
+            msg = "ROI not found"
+        super().__init__(msg)
+        self.roi_id = roi_id
+
+
+class LineageError(ExperimentError):
+    """Raised when a FOV lineage operation fails (e.g., depth exceeded, cycle detected)."""
+
+    def __init__(self, message: str = "Lineage error") -> None:
+        super().__init__(message)

@@ -241,7 +241,7 @@ class TestSchemaCreation:
         create_schema(conn)  # second call
 
     def test_schema_version_constant(self) -> None:
-        assert SCHEMA_VERSION == "5.1.0"
+        assert SCHEMA_VERSION == "6.0.0"
 
     def test_fovs_has_pixel_size_um_column(self, conn: sqlite3.Connection) -> None:
         """The fovs table includes a pixel_size_um REAL column."""
@@ -822,7 +822,7 @@ class TestDefaults:
         row = conn.execute(
             "SELECT schema_version FROM experiments WHERE id = ?", (eid,)
         ).fetchone()
-        assert row["schema_version"] == "5.1.0"
+        assert row["schema_version"] == "6.0.0"
 
     def test_fov_status_default_pending(
         self, conn: sqlite3.Connection

@@ -41,12 +41,17 @@ class FovInfo:
     bio_rep_id: BioRepId | None = None
     parent_fov_id: FovId | None = None
     derivation_op: str | None = None
+    derivation_params: str | None = None
     status: FovStatus
     auto_name: str | None = None
+    display_name: str | None = None
     zarr_path: str | None = None
     timepoint_id: TimepointId | None = None
     pixel_size_um: float | None = None
-    display_name: str
+    pipeline_run_id: PipelineRunId | None = None
+    lineage_depth: int = 0
+    lineage_path: str | None = None
+    channel_metadata: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -92,13 +97,17 @@ class CellIdentity:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MeasurementRecord:
-    """A single scalar measurement for one ROI x channel x metric x scope."""
+    """A single scalar measurement for one ROI x channel x metric x scope.
+
+    ``value`` is nullable: NaN measurements are stored as NULL in SQLite
+    because SQLite REAL columns do not round-trip IEEE NaN.
+    """
 
     roi_id: RoiId
     channel_id: ChannelId
     metric: str
     scope: str
-    value: float
+    value: float | None
     pipeline_run_id: PipelineRunId
 
 

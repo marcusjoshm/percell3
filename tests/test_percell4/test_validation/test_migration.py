@@ -28,9 +28,9 @@ def db_with_experiment(tmp_path: Path) -> ExperimentDB:
 
 
 def test_get_schema_version(db_with_experiment: ExperimentDB) -> None:
-    """Schema version reads back as 5.1.0 from a freshly created DB."""
+    """Schema version reads back as 6.0.0 from a freshly created DB."""
     version = get_schema_version(db_with_experiment.connection)
-    assert version == "5.1.0"
+    assert version == "6.0.0"
 
 
 def test_get_schema_version_empty_db(tmp_path: Path) -> None:
@@ -56,14 +56,14 @@ def test_run_migrations_empty(db_with_experiment: ExperimentDB) -> None:
 def test_run_migrations_applies(db_with_experiment: ExperimentDB) -> None:
     """A mock migration is discovered and applied correctly."""
     # Temporarily add a mock migration
-    test_key = "5.1.0->5.2.0"
+    test_key = "6.0.0->6.1.0"
     MIGRATIONS[test_key] = [
         "ALTER TABLE experiments ADD COLUMN test_col TEXT",
-        "UPDATE experiments SET schema_version = '5.2.0'",
+        "UPDATE experiments SET schema_version = '6.1.0'",
     ]
     try:
         applied = run_migrations(
-            db_with_experiment.connection, "5.1.0", "5.2.0"
+            db_with_experiment.connection, "6.0.0", "6.1.0"
         )
         assert applied == [test_key]
 
@@ -75,7 +75,7 @@ def test_run_migrations_applies(db_with_experiment: ExperimentDB) -> None:
 
         # Verify version was updated
         version = get_schema_version(db_with_experiment.connection)
-        assert version == "5.2.0"
+        assert version == "6.1.0"
     finally:
         # Clean up the mock migration
         MIGRATIONS.pop(test_key, None)

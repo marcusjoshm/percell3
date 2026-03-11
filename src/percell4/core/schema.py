@@ -15,7 +15,7 @@ import uuid
 # Schema version
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION: str = "5.1.0"
+SCHEMA_VERSION: str = "6.0.0"
 
 # ---------------------------------------------------------------------------
 # Table DDL (topological order — parents before children)
@@ -27,7 +27,7 @@ _TABLE_DDL: tuple[str, ...] = (
     CREATE TABLE IF NOT EXISTS experiments (
         id              BLOB(16) PRIMARY KEY CHECK(length(id) = 16),
         name            TEXT NOT NULL,
-        schema_version  TEXT NOT NULL DEFAULT '5.1.0',
+        schema_version  TEXT NOT NULL DEFAULT '6.0.0',
         config_hash     TEXT,
         created_at      TEXT NOT NULL DEFAULT (datetime('now'))
     )
@@ -133,11 +133,20 @@ _TABLE_DDL: tuple[str, ...] = (
                                 'deleting', 'deleted'
                             )),
         auto_name       TEXT,
+        display_name    TEXT,
         zarr_path       TEXT,
         timepoint_id    BLOB(16) REFERENCES timepoints
                             CHECK(timepoint_id IS NULL
                                   OR length(timepoint_id) = 16),
         pixel_size_um   REAL,
+        pipeline_run_id BLOB(16) REFERENCES pipeline_runs
+                            CHECK(pipeline_run_id IS NULL
+                                  OR length(pipeline_run_id) = 16),
+        lineage_depth   INTEGER NOT NULL DEFAULT 0,
+        lineage_path    TEXT,
+        channel_metadata TEXT
+                            CHECK(channel_metadata IS NULL
+                                  OR json_valid(channel_metadata)),
         created_at      TEXT NOT NULL DEFAULT (datetime('now')),
         CHECK(id != parent_fov_id)
     )
@@ -147,6 +156,7 @@ _TABLE_DDL: tuple[str, ...] = (
     CREATE TABLE IF NOT EXISTS cell_identities (
         id              BLOB(16) PRIMARY KEY CHECK(length(id) = 16),
         origin_fov_id   BLOB(16) NOT NULL REFERENCES fovs
+                            ON DELETE RESTRICT
                             CHECK(length(origin_fov_id) = 16),
         roi_type_id     BLOB(16) NOT NULL REFERENCES roi_type_definitions
                             CHECK(length(roi_type_id) = 16),
@@ -158,6 +168,7 @@ _TABLE_DDL: tuple[str, ...] = (
     CREATE TABLE IF NOT EXISTS rois (
         id                  BLOB(16) PRIMARY KEY CHECK(length(id) = 16),
         fov_id              BLOB(16) NOT NULL REFERENCES fovs
+                                ON DELETE CASCADE
                                 CHECK(length(fov_id) = 16),
         roi_type_id         BLOB(16) NOT NULL REFERENCES roi_type_definitions
                                 CHECK(length(roi_type_id) = 16),
@@ -264,6 +275,7 @@ _TABLE_DDL: tuple[str, ...] = (
     CREATE TABLE IF NOT EXISTS measurements (
         id              BLOB(16) PRIMARY KEY CHECK(length(id) = 16),
         roi_id          BLOB(16) NOT NULL REFERENCES rois
+                            ON DELETE CASCADE
                             CHECK(length(roi_id) = 16),
         channel_id      BLOB(16) NOT NULL REFERENCES channels
                             CHECK(length(channel_id) = 16),
@@ -272,7 +284,7 @@ _TABLE_DDL: tuple[str, ...] = (
                             CHECK(scope IN (
                                 'whole_roi', 'mask_inside', 'mask_outside'
                             )),
-        value           REAL NOT NULL,
+        value           REAL,
         pipeline_run_id BLOB(16) NOT NULL REFERENCES pipeline_runs
                             CHECK(length(pipeline_run_id) = 16)
     )
@@ -312,6 +324,7 @@ _TABLE_DDL: tuple[str, ...] = (
     CREATE TABLE IF NOT EXISTS fov_status_log (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         fov_id      BLOB(16) NOT NULL REFERENCES fovs
+                        ON DELETE CASCADE
                         CHECK(length(fov_id) = 16),
         old_status  TEXT,
         new_status  TEXT NOT NULL,
@@ -375,6 +388,12 @@ _INDEX_DDL: tuple[str, ...] = (
     CREATE INDEX IF NOT EXISTS idx_fovs_status
         ON fovs(status)
     """,
+    # -- fovs: lineage --
+    """
+    CREATE INDEX IF NOT EXISTS idx_fovs_lineage_path
+        ON fovs(lineage_path)
+        WHERE lineage_path IS NOT NULL
+    """,
     # -- rois --
     """
     CREATE INDEX IF NOT EXISTS idx_rois_fov
@@ -411,8 +430,11 @@ _VIEW_DDL: tuple[str, ...] = (
            uuid_str(bio_rep_id)     AS bio_rep_hex,
            uuid_str(parent_fov_id)  AS parent_hex,
            auto_name,
+           display_name,
            status,
            zarr_path,
+           lineage_depth,
+           lineage_path,
            created_at
     FROM fovs
     """,
@@ -499,6 +521,7 @@ def _configure_connection(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA cache_size=-64000")
+    conn.execute("PRAGMA trusted_schema=OFF")
     conn.row_factory = sqlite3.Row
 
     # Debug helper — makes UUIDs readable in manual SQL sessions
@@ -541,10 +564,15 @@ def create_debug_views(conn: sqlite3.Connection) -> None:
     :func:`_configure_connection`.  Call this explicitly when you need
     debug views — they are NOT created by :func:`create_schema`.
 
+    Enables ``trusted_schema`` so that user-defined functions
+    (``uuid_str``) can be used inside view definitions and queries.
+    The setting remains ON after this call because querying the views
+    also requires it.
+
     Args:
         conn: An open SQLite connection with ``uuid_str`` UDF registered.
     """
+    conn.execute("PRAGMA trusted_schema=ON")
     for ddl in _VIEW_DDL:
         conn.execute(ddl)
-
     conn.commit()

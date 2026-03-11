@@ -252,7 +252,7 @@ class TestExperimentCRUD:
         assert row is not None
         assert row["id"] == eid
         assert row["name"] == "my_experiment"
-        assert row["schema_version"] == "5.1.0"
+        assert row["schema_version"] == "6.0.0"
         assert row["config_hash"] == "abc123"
 
     def test_get_experiment_empty_db(self, db: ExperimentDB) -> None:

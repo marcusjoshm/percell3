@@ -98,6 +98,7 @@ MERGE_TABLE_ORDER: tuple[str, ...] = (
     "channels",
     "timepoints",
     "roi_type_definitions",
+    "pipeline_runs",
     "fovs",
     "cell_identities",
     "segmentation_sets",
@@ -105,10 +106,10 @@ MERGE_TABLE_ORDER: tuple[str, ...] = (
     "rois",
     "fov_segmentation_assignments",
     "fov_mask_assignments",
-    "pipeline_runs",
     "measurements",
     "intensity_groups",
     "cell_group_assignments",
+    "fov_status_log",
 )
 
 ENTITY_TABLES: frozenset[str] = frozenset(MERGE_TABLE_ORDER)
