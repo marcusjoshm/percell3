@@ -373,10 +373,75 @@ def split_halo_handler(state: MenuState) -> None:
         print_error(str(e))
 
 
+# ---------------------------------------------------------------------------
+# Threshold Background Subtraction
+# ---------------------------------------------------------------------------
+
+def threshold_bg_subtraction_handler(state: MenuState) -> None:
+    """Prompt for threshold BG subtraction parameters and run plugin."""
+    store = require_experiment(state)
+
+    from percell4.plugins.threshold_bg_subtraction import (
+        ThresholdBGSubtractionPlugin,
+    )
+
+    selected_fovs = _select_fovs(store)
+    if not selected_fovs:
+        return
+
+    ch_names = _get_channel_names(store)
+    if not ch_names:
+        print_warning("No channels in experiment")
+        return
+
+    # Check for intensity groups
+    exp = store.db.get_experiment()
+    groups = store.db.get_intensity_groups(exp["id"])
+    if not groups:
+        print_warning(
+            "No intensity groups found. "
+            "Run 'Grouped intensity thresholding' first."
+        )
+        return
+
+    console.print("\n[bold]Threshold Background Subtraction[/bold]")
+    console.print(
+        "[dim]Per-group BG subtraction with single derived FOV, "
+        "NaN outside ROIs[/dim]\n"
+    )
+
+    # Show available groups
+    group_names = sorted(set(g["name"] for g in groups))
+    console.print(f"[dim]Intensity groups: {', '.join(group_names)}[/dim]")
+
+    channel = numbered_select_one(ch_names, "Channel to subtract background from")
+
+    fov_ids = [f["id"] for f in selected_fovs]
+    plugin = ThresholdBGSubtractionPlugin()
+    try:
+        with make_progress() as progress:
+            task = progress.add_task("Processing...", total=len(fov_ids))
+            result = plugin.run(
+                store, fov_ids,
+                channel=channel,
+                on_progress=_make_progress_callback(progress, task),
+            )
+        print_success(
+            f"Created {result.derived_fovs_created} derived FOVs "
+            f"({result.fovs_processed} FOVs processed)"
+        )
+        if result.errors:
+            for err in result.errors:
+                print_warning(err)
+    except Exception as e:
+        print_error(str(e))
+
+
 # Map plugin names to custom handlers
 PLUGIN_HANDLERS: dict[str, callable] = {
     "image_calculator": image_calculator_handler,
     "condensate_partitioning_ratio": condensate_partitioning_ratio_handler,
     "local_bg_subtraction": local_bg_subtraction_handler,
     "split_halo_condensate_analysis": split_halo_handler,
+    "threshold_bg_subtraction": threshold_bg_subtraction_handler,
 }
