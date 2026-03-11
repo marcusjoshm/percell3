@@ -1,11 +1,12 @@
-"""Tests for NanZeroPlugin — the canary test for the plugin system.
+"""Tests for zero_to_nan functionality (absorbed into ImageCalculatorPlugin).
 
 Creates a real experiment with ExperimentStore.create(), imports a test FOV
-with known image data containing zeros, runs NanZeroPlugin, and verifies:
+with known image data containing zeros, runs ImageCalculatorPlugin in
+zero_to_nan mode, and verifies:
 - Derived FOV created
 - Zero pixels replaced with NaN
 - Non-zero pixels unchanged
-- ROIs duplicated
+- ROIs duplicated with preserved cell_identity_id
 - Assignments copied
 """
 
@@ -19,7 +20,7 @@ import pytest
 from percell4.core.constants import FovStatus
 from percell4.core.db_types import new_uuid, uuid_to_hex
 from percell4.core.experiment_store import ExperimentStore
-from percell4.plugins.nan_zero import NanZeroPlugin
+from percell4.plugins.image_calculator import ImageCalculatorPlugin
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 SAMPLE_TOML = FIXTURES_DIR / "sample_experiment.toml"
@@ -125,14 +126,17 @@ def populated_store(tmp_path: Path):
     store.close()
 
 
-def test_nan_zero_creates_derived_fov(populated_store) -> None:
-    """NanZeroPlugin creates a derived FOV."""
+def test_zero_to_nan_creates_derived_fov(populated_store) -> None:
+    """zero_to_nan mode creates a derived FOV."""
     store, info = populated_store
 
-    plugin = NanZeroPlugin()
+    plugin = ImageCalculatorPlugin()
     result = plugin.run(
         store,
         fov_ids=[info["fov_id"]],
+        mode="zero_to_nan",
+        operation="zero_to_nan",
+        channel_a="DAPI",
         channels=["DAPI"],
     )
 
@@ -141,14 +145,17 @@ def test_nan_zero_creates_derived_fov(populated_store) -> None:
     assert not result.errors
 
 
-def test_nan_zero_replaces_zeros_with_nan(populated_store) -> None:
+def test_zero_to_nan_replaces_zeros_with_nan(populated_store) -> None:
     """Zero pixels in the target channel become NaN."""
     store, info = populated_store
 
-    plugin = NanZeroPlugin()
+    plugin = ImageCalculatorPlugin()
     plugin.run(
         store,
         fov_ids=[info["fov_id"]],
+        mode="zero_to_nan",
+        operation="zero_to_nan",
+        channel_a="DAPI",
         channels=["DAPI"],
     )
 
@@ -171,14 +178,17 @@ def test_nan_zero_replaces_zeros_with_nan(populated_store) -> None:
     assert ch0[30, 30] == pytest.approx(100.0)
 
 
-def test_nan_zero_preserves_non_target_channels(populated_store) -> None:
+def test_zero_to_nan_preserves_non_target_channels(populated_store) -> None:
     """Non-target channels are copied unchanged (still float32)."""
     store, info = populated_store
 
-    plugin = NanZeroPlugin()
+    plugin = ImageCalculatorPlugin()
     plugin.run(
         store,
         fov_ids=[info["fov_id"]],
+        mode="zero_to_nan",
+        operation="zero_to_nan",
+        channel_a="DAPI",
         channels=["DAPI"],
     )
 
@@ -193,14 +203,17 @@ def test_nan_zero_preserves_non_target_channels(populated_store) -> None:
     assert not np.any(np.isnan(ch1))
 
 
-def test_nan_zero_duplicates_rois(populated_store) -> None:
+def test_zero_to_nan_duplicates_rois(populated_store) -> None:
     """ROIs from source FOV are duplicated to derived FOV."""
     store, info = populated_store
 
-    plugin = NanZeroPlugin()
+    plugin = ImageCalculatorPlugin()
     plugin.run(
         store,
         fov_ids=[info["fov_id"]],
+        mode="zero_to_nan",
+        operation="zero_to_nan",
+        channel_a="DAPI",
         channels=["DAPI"],
     )
 
@@ -223,14 +236,17 @@ def test_nan_zero_duplicates_rois(populated_store) -> None:
     assert info["ci_2"] in derived_identities
 
 
-def test_nan_zero_copies_assignments(populated_store) -> None:
+def test_zero_to_nan_copies_assignments(populated_store) -> None:
     """Active assignments are copied from source to derived FOV."""
     store, info = populated_store
 
-    plugin = NanZeroPlugin()
+    plugin = ImageCalculatorPlugin()
     plugin.run(
         store,
         fov_ids=[info["fov_id"]],
+        mode="zero_to_nan",
+        operation="zero_to_nan",
+        channel_a="DAPI",
         channels=["DAPI"],
     )
 
@@ -245,21 +261,17 @@ def test_nan_zero_copies_assignments(populated_store) -> None:
     assert seg["segmentation_set_id"] == info["seg_set_id"]
 
 
-def test_nan_zero_requires_channels_param() -> None:
-    """Raises when channels parameter is missing."""
-    plugin = NanZeroPlugin()
-    with pytest.raises(RuntimeError, match="channels"):
-        plugin.run(None, fov_ids=[b"\x00" * 16])  # type: ignore[arg-type]
-
-
-def test_nan_zero_derived_fov_status(populated_store) -> None:
+def test_zero_to_nan_derived_fov_status(populated_store) -> None:
     """Derived FOV status is 'imported'."""
     store, info = populated_store
 
-    plugin = NanZeroPlugin()
+    plugin = ImageCalculatorPlugin()
     plugin.run(
         store,
         fov_ids=[info["fov_id"]],
+        mode="zero_to_nan",
+        operation="zero_to_nan",
+        channel_a="DAPI",
         channels=["DAPI"],
     )
 

@@ -15,6 +15,7 @@ OPERATIONS = (
     "add", "subtract", "multiply", "divide",
     "and", "or", "xor",
     "min", "max", "abs_diff",
+    "zero_to_nan",
 )
 
 
@@ -71,6 +72,11 @@ def _apply_op(a: np.ndarray, b: np.ndarray | float, operation: str) -> np.ndarra
         np.abs(af, out=af)
         return af
 
+    if operation == "zero_to_nan":
+        result = af.copy()
+        result[af == 0] = np.nan
+        return result
+
     raise ValueError(f"Unknown operation: {operation!r}. Must be one of {OPERATIONS}")
 
 
@@ -99,6 +105,9 @@ def apply_single_channel(
         2D numpy array with the same dtype as *image*.
     """
     result = _apply_op(image, constant, operation)
+    # zero_to_nan produces float with NaN values — do not clip/cast back
+    if operation == "zero_to_nan":
+        return result.astype(np.float32)
     return _clip_and_cast(result, image.dtype)
 
 

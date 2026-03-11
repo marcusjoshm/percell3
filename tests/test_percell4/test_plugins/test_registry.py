@@ -13,7 +13,6 @@ def test_discover_finds_plugins() -> None:
     plugins = registry.list_plugins()
     names = {p["name"] for p in plugins}
     # At minimum, these should be discovered
-    assert "nan_zero" in names
     assert "image_calculator" in names
     assert "surface_plot_3d" in names
 
@@ -21,8 +20,8 @@ def test_discover_finds_plugins() -> None:
 def test_get_plugin_by_name() -> None:
     """Can retrieve a known plugin by name."""
     registry = PluginRegistry()
-    plugin = registry.get_plugin("nan_zero")
-    assert plugin.name == "nan_zero"
+    plugin = registry.get_plugin("image_calculator")
+    assert plugin.name == "image_calculator"
 
 
 def test_list_plugins_returns_info() -> None:
@@ -59,7 +58,6 @@ def test_all_expected_plugins_present() -> None:
     names = {p["name"] for p in plugins}
 
     expected = {
-        "nan_zero",
         "image_calculator",
         "threshold_bg_subtraction",
         "local_bg_subtraction",

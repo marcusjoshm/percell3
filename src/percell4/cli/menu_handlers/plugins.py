@@ -7,10 +7,9 @@ from percell4.cli.menu_system import (
     MenuItem,
     MenuState,
     _MenuCancel,
-    menu_prompt,
     require_experiment,
 )
-from percell4.cli.utils import console, make_progress, print_error, print_success, print_warning
+from percell4.cli.utils import console, print_error, print_success, print_warning
 
 
 def plugin_menu_handler(state: MenuState) -> None:
@@ -41,8 +40,14 @@ def plugin_menu_handler(state: MenuState) -> None:
 def _make_plugin_runner(registry, plugin_name: str):
     """Create a handler function for a specific plugin.
 
-    Returns a closure that runs the named plugin with progress reporting.
+    If a custom handler exists for this plugin (with parameter prompting),
+    use that. Otherwise fall back to the generic runner.
     """
+    from percell4.cli.menu_handlers.plugin_handlers import PLUGIN_HANDLERS
+
+    custom_handler = PLUGIN_HANDLERS.get(plugin_name)
+    if custom_handler is not None:
+        return custom_handler
 
     def handler(state: MenuState) -> None:
         store = require_experiment(state)

@@ -244,21 +244,32 @@ def _step_nan_zero(
     store: ExperimentStore,
     context: dict[str, Any],
 ) -> dict[str, Any]:
-    """Apply NaN-zero plugin to replace zero pixels with NaN."""
+    """Apply zero-to-NaN via image_calculator plugin."""
     from percell4.plugins.registry import PluginRegistry
 
     fov_ids = context.get("fov_ids", [])
     if not fov_ids:
         return {"fovs_processed": 0}
 
+    # Get all channel names for zero_to_nan
+    exp = store.db.get_experiment()
+    channels = store.db.get_channels(exp["id"])
+    channel_names = [ch["name"] for ch in channels]
+
     registry = PluginRegistry()
     try:
-        plugin = registry.get_plugin("nan_zero")
+        plugin = registry.get_plugin("image_calculator")
     except Exception:
-        logger.warning("nan_zero plugin not available")
+        logger.warning("image_calculator plugin not available")
         return {"fovs_processed": 0, "error": "plugin not available"}
 
-    result = plugin.run(store, fov_ids=fov_ids)
+    result = plugin.run(
+        store, fov_ids=fov_ids,
+        mode="zero_to_nan",
+        operation="zero_to_nan",
+        channel_a=channel_names[0] if channel_names else "",
+        channels=channel_names,
+    )
     return {
         "fovs_processed": result.fovs_processed,
         "derived_fovs_created": result.derived_fovs_created,

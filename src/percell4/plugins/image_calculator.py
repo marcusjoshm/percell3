@@ -73,12 +73,33 @@ class ImageCalculatorPlugin(AnalysisPlugin):
                 f"Unknown operation: {operation!r}. Must be one of {OPERATIONS}"
             )
 
-        if constant is not None and not np.isfinite(constant):
-            raise RuntimeError(f"'constant' must be a finite number, got {constant!r}")
+        # zero_to_nan mode: special shorthand that replaces zeros with NaN
+        if mode == "zero_to_nan":
+            operation = "zero_to_nan"
+            # channel_a may be a single channel or we process all listed channels
+            channels_list: list[str] = kwargs.get("channels", [])
+            if channels_list:
+                exp = store.db.get_experiment()
+                all_channels = store.db.get_channels(exp["id"])
+                ch_idx_map = {
+                    ch["name"]: idx for idx, ch in enumerate(all_channels)
+                }
+                return self._run_zero_to_nan(
+                    store, fov_ids, channels_list, ch_idx_map,
+                    on_progress,
+                )
+            # Fall through to single_channel path with zero_to_nan op
+            constant = 0.0  # unused but satisfies validation
 
-        if mode == "single_channel":
-            if constant is None:
+        if constant is not None and not np.isfinite(constant):
+            if operation != "zero_to_nan":
+                raise RuntimeError(f"'constant' must be a finite number, got {constant!r}")
+
+        if mode == "single_channel" or mode == "zero_to_nan":
+            if constant is None and operation != "zero_to_nan":
                 raise RuntimeError("'constant' is required for single_channel mode.")
+            if constant is None:
+                constant = 0.0  # placeholder for zero_to_nan
         elif mode == "two_channel":
             if channel_b is None:
                 raise RuntimeError("'channel_b' is required for two_channel mode.")
@@ -149,6 +170,63 @@ class ImageCalculatorPlugin(AnalysisPlugin):
                         "channel_b": channel_b,
                         "constant": constant,
                     },
+                    transform_fn=transform_fn,
+                )
+                derived_count += 1
+            except Exception as exc:
+                errors.append(f"FOV {fov_id!r}: {exc}")
+
+        if on_progress:
+            on_progress(len(fov_ids), len(fov_ids), "Done")
+
+        return PluginResult(
+            fovs_processed=len(fov_ids),
+            derived_fovs_created=derived_count,
+            errors=errors,
+        )
+
+    def _run_zero_to_nan(
+        self,
+        store: ExperimentStore,
+        fov_ids: list[bytes],
+        channels: list[str],
+        channel_index_by_name: dict[str, int],
+        on_progress: Callable[[int, int, str], None] | None = None,
+    ) -> PluginResult:
+        """Replace zero pixels with NaN in selected channels (absorbed nan_zero).
+
+        For each source FOV a derived FOV is created. Selected channels are cast
+        to float32 and every zero pixel is set to NaN. Unselected channels are
+        copied unchanged.
+        """
+        target_indices = {channel_index_by_name[name] for name in channels}
+
+        derived_count = 0
+        errors: list[str] = []
+
+        for idx, fov_id in enumerate(fov_ids):
+            if on_progress:
+                fov = store.db.get_fov(fov_id)
+                name = fov["auto_name"] if fov else "unknown"
+                on_progress(idx, len(fov_ids), name)
+
+            def transform_fn(
+                arrays: dict[int, np.ndarray],
+                _targets: set[int] = target_indices,
+            ) -> dict[int, np.ndarray]:
+                result: dict[int, np.ndarray] = {}
+                for ch_idx, image in arrays.items():
+                    image = image.astype(np.float32)
+                    if ch_idx in _targets:
+                        image[image == 0] = np.nan
+                    result[ch_idx] = image
+                return result
+
+            try:
+                store.create_derived_fov(
+                    source_fov_id=fov_id,
+                    derivation_op="zero_to_nan",
+                    params={"channels": channels},
                     transform_fn=transform_fn,
                 )
                 derived_count += 1
